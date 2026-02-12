@@ -1,4 +1,5 @@
 import argparse
+import configparser
 import itertools
 import os
 import sys
@@ -9,7 +10,91 @@ import numpy as np
 from matplotlib import gridspec
 from thunderlab.powerspectrum import decibel
 
-illustrate_cleanup = True
+illustrate_cleanup = False
+show_results = True
+
+
+def load_config(config_path=None, folder=None):
+    """
+    Load cleanup configuration from .cfg file.
+    
+    Search order:
+    1. Explicit config_path if provided
+    2. cleanup_config.cfg in data folder
+    3. cleanup_config_default.cfg in script directory
+    4. Hardcoded defaults
+    
+    Parameters
+    ----------
+    config_path : str or Path, optional
+        Explicit path to config file
+    folder : str or Path, optional
+        Data folder to search for cleanup_config.cfg
+        
+    Returns
+    -------
+    dict
+        Configuration parameters
+    """
+    # Default values
+    defaults = {
+        'stride_minutes': 10,
+        'overlap_frac': 0.2,
+        'freq_tolerance': 2.5,
+        'time_tolerance_minutes': 5,
+        'density_threshold': 0.1,
+        'n_fish': 2
+    }
+    
+    # Try to find config file
+    config_file = None
+    
+    if config_path:
+        config_file = Path(config_path)
+        if not config_file.exists():
+            print(f"Warning: Specified config file not found: {config_path}")
+            config_file = None
+    
+    if not config_file and folder:
+        # Look in data folder
+        candidate = Path(folder) / 'cleanup_config.cfg'
+        if candidate.exists():
+            config_file = candidate
+    
+    if not config_file:
+        # Look in script directory
+        script_dir = Path(__file__).parent.parent
+        candidate = script_dir / 'cleanup_config_default.cfg'
+        if candidate.exists():
+            config_file = candidate
+    
+    if not config_file:
+        print("No config file found, using hardcoded defaults")
+        return defaults
+    
+    # Load config
+    print(f"Loading config from: {config_file}")
+    config = configparser.ConfigParser()
+    config.read(config_file)
+    
+    if 'parameters' not in config:
+        print("Warning: [parameters] section not found in config, using defaults")
+        return defaults
+    
+    # Parse parameters
+    params = {}
+    for key in defaults.keys():
+        if key in config['parameters']:
+            value = config['parameters'][key]
+            # Convert to appropriate type
+            if key == 'n_fish':
+                params[key] = int(value)
+            else:
+                params[key] = float(value)
+        else:
+            params[key] = defaults[key]
+    
+    return params
 
 
 def gauss(t, shift, sigma, size, norm=False):
@@ -233,9 +318,7 @@ def connect_by_similarity(
     return previous_valid_ids, ident_v
 
 
-def connect_with_overlap(fund_v, ident_v, valid_v, idx_v, times):
-    time_tol = 5 * 60
-    freq_tol = 2.5
+def connect_with_overlap(fund_v, ident_v, valid_v, idx_v, times, time_tol=5*60, freq_tol=2.5):
 
     # old_ident_v = np.copy(ident_v)
 
@@ -547,7 +630,7 @@ def connect_with_overlap(fund_v, ident_v, valid_v, idx_v, times):
     return ident_v
 
 
-def power_density_filter(valid_v, sign_v, ident_v, idx_v, fund_v, times):
+def power_density_filter(valid_v, sign_v, ident_v, idx_v, fund_v, times, density_th=0.1):
     ##############################################################
     dps = 1 / (times[1] - times[0])
 
@@ -663,7 +746,7 @@ def power_density_filter(valid_v, sign_v, ident_v, idx_v, fund_v, times):
             mean_p.append(p)
         ax.plot(mean_p, mean_d, "k.", alpha=0.8)
 
-    density_th = 0.1
+    # density_th passed as parameter now
     # dB_th = 2*most_common_valid_power - pct99_power
     # dB_th = dB_th if dB_th > -100 else -100
     dB_th = -100
@@ -733,7 +816,68 @@ def power_density_filter(valid_v, sign_v, ident_v, idx_v, fund_v, times):
     return valid_v
 
 
-def main(folder, n_fish=2):
+def main(folder, n_fish=None, stride_minutes=None, overlap_frac=None, 
+         freq_tolerance=None, time_tolerance_minutes=None, density_threshold=None,
+         config_path=None):
+    """
+    Run cleanup on wavetracker output.
+    
+    Parameters
+    ----------
+    folder : str or Path
+        Path to folder containing wavetracker output files
+    n_fish : int, optional
+        Number of fish to track (overrides config)
+    stride_minutes : float, optional
+        Sliding window size in minutes (overrides config)
+    overlap_frac : float, optional
+        Window overlap fraction (overrides config)
+    freq_tolerance : float, optional
+        Frequency tolerance in Hz (overrides config)
+    time_tolerance_minutes : float, optional
+        Time gap tolerance in minutes (overrides config)
+    density_threshold : float, optional
+        Minimum detection density (overrides config)
+    config_path : str or Path, optional
+        Path to config file
+    """
+    # Load configuration
+    config = load_config(config_path, folder)
+    
+    # Override with command-line arguments if provided
+    if n_fish is not None:
+        config['n_fish'] = n_fish
+    if stride_minutes is not None:
+        config['stride_minutes'] = stride_minutes
+    if overlap_frac is not None:
+        config['overlap_frac'] = overlap_frac
+    if freq_tolerance is not None:
+        config['freq_tolerance'] = freq_tolerance
+    if time_tolerance_minutes is not None:
+        config['time_tolerance_minutes'] = time_tolerance_minutes
+    if density_threshold is not None:
+        config['density_threshold'] = density_threshold
+    
+    # Extract config values
+    n_fish = config['n_fish']
+    stride_minutes = config['stride_minutes']
+    overlap_frac = config['overlap_frac']
+    freq_tolerance = config['freq_tolerance']
+    time_tolerance_minutes = config['time_tolerance_minutes']
+    density_threshold = config['density_threshold']
+    
+    print("\n" + "="*60)
+    print("CLEANUP PARAMETERS")
+    print("="*60)
+    print(f"  Stride: {stride_minutes} min ({stride_minutes*60} s)")
+    print(f"  Overlap: {overlap_frac:.0%}")
+    print(f"  Frequency tolerance: {freq_tolerance} Hz")
+    print(f"  Time gap tolerance: {time_tolerance_minutes} min")
+    print(f"  Density threshold: {density_threshold:.2%}")
+    print(f"  Target fish count: {n_fish}")
+    print("="*60 + "\n")
+    
+    # Load data
     fund_v = np.load(os.path.join(folder, "fund_v.npy"))
     idx_v = np.load(os.path.join(folder, "idx_v.npy"))
     ident_v = np.load(os.path.join(folder, "ident_v.npy"))
@@ -745,9 +889,9 @@ def main(folder, n_fish=2):
 
     # parameters
     valid_v = np.zeros_like(ident_v)
-    stride = 10 * 60
-    overlap = 0.2
-    f_th = 2.5
+    stride = stride_minutes * 60
+    overlap = overlap_frac
+    f_th = freq_tolerance
     kde_th = None
     previous_valid_ids = np.array([])
     
@@ -780,7 +924,7 @@ def main(folder, n_fish=2):
         )
 
     ################### illustation ###################
-    if illustrate_cleanup:
+    if show_results:
         fig = plt.figure(figsize=(30 / 2.54, 18 / 2.54))
         gs = gridspec.GridSpec(
             1, 1, left=0.1, bottom=0.1, right=0.95, top=0.95
@@ -802,7 +946,8 @@ def main(folder, n_fish=2):
     ###################################################
 
     valid_v = power_density_filter(
-        valid_v, sign_v, ident_v, idx_v, fund_v, times
+        valid_v, sign_v, ident_v, idx_v, fund_v, times,
+        density_th=density_threshold
     )
 
     ################### illustation ###################
@@ -827,7 +972,9 @@ def main(folder, n_fish=2):
         # plt.show()
     ###################################################
 
-    ident_v = connect_with_overlap(fund_v, ident_v, valid_v, idx_v, times)
+    ident_v = connect_with_overlap(fund_v, ident_v, valid_v, idx_v, times,
+                                    time_tol=time_tolerance_minutes*60,
+                                    freq_tol=freq_tolerance)
 
     # Take only the best n_fish
 
@@ -854,7 +1001,7 @@ def main(folder, n_fish=2):
     ident_v[~np.isin(ident_v, valid_idents)] = np.nan
 
     ################### illustation ###################
-    if illustrate_cleanup:
+    if show_results:
         fig = plt.figure(figsize=(30 / 2.54, 18 / 2.54))
         gs = gridspec.GridSpec(
             1, 1, left=0.1, bottom=0.1, right=0.95, top=0.95
@@ -900,27 +1047,81 @@ def main(folder, n_fish=2):
     ###################################################
 
     # save data
-    #np.save(os.path.join(folder, "ident_v.npy"), ident_v)
-    #np.save(os.path.join(folder, "idx_v.npy"), idx_v)
-    #np.save(os.path.join(folder, "fund_v.npy"), fund_v)
+    np.save(os.path.join(folder, f"ident_v_cleaned_n{n_fish}.npy"), ident_v)
+    np.save(os.path.join(folder, f"idx_v_cleaned_n{n_fish}.npy"), idx_v)
+    np.save(os.path.join(folder, f"fund_v_cleaned_n{n_fish}.npy"), fund_v)
 
 
 def cli():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="Cleanup and refine wavetracker fish tracking results.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Configuration:
+  Parameters are loaded from .cfg file in this order:
+    1. --config file if specified
+    2. cleanup_config.cfg in data folder
+    3. cleanup_config_default.cfg in script directory
+    4. Hardcoded defaults
+  
+  Command-line arguments override config file values.
+
+Parameter Presets (edit cleanup_config.cfg):
+  High-resolution:  stride=10  overlap=0.2 freq_tol=2.5  time_tol=5   density=0.1
+  Long-term:        stride=60  overlap=0.5 freq_tol=10   time_tol=60  density=0.02
+  Ultra-robust:     stride=360 overlap=0.5 freq_tol=15   time_tol=180 density=0.01
+        """
+    )
     parser.add_argument(
         "path",
-        nargs="?",
         type=Path,
-        help="Path to directory of recording or to file to be analyzed",
+        help="Path to folder containing wavetracker output files"
     )
     parser.add_argument(
         "-n", "--n-fish",
         type=int,
-        default=2,
-        help="Number of fish to track (default: 2)"
+        help="Number of fish to track (overrides config)"
     )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        help="Path to .cfg configuration file"
+    )
+    parser.add_argument(
+        "--stride",
+        type=float,
+        help="Sliding window size in minutes (overrides config)"
+    )
+    parser.add_argument(
+        "--overlap",
+        type=float,
+        help="Window overlap fraction 0-1 (overrides config)"
+    )
+    parser.add_argument(
+        "--freq-tol",
+        type=float,
+        help="Frequency tolerance in Hz (overrides config)"
+    )
+    parser.add_argument(
+        "--time-tol",
+        type=float,
+        help="Time gap tolerance in minutes (overrides config)"
+    )
+    parser.add_argument(
+        "--density",
+        type=float,
+        help="Minimum detection density 0-1 (overrides config)"
+    )
+    
     args = parser.parse_args()
-    main(args.path, args.n_fish)
+    main(args.path, 
+         n_fish=args.n_fish,
+         stride_minutes=args.stride,
+         overlap_frac=args.overlap,
+         freq_tolerance=args.freq_tol,
+         time_tolerance_minutes=args.time_tol,
+         density_threshold=args.density,
+         config_path=args.config)
 
 
 if __name__ == "__main__":
