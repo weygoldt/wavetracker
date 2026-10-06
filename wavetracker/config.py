@@ -206,6 +206,115 @@ class OutputConfig:
 
 
 @dataclass
+class PositionMergingConfig:
+    """Grouping of track segments into fish by frequency and source position
+    for moving electrodes (see wavetracker.position). Only used by
+    ``wavetracker merge-by-position``; it does not affect ``run``."""
+
+    # --- electrodes ---
+    reference: int | None = None
+    """Reference electrode: channel i measures electrode i (skipping the
+    reference) minus the reference electrode. None: see channel_pairs."""
+    channel_pairs: list[list[int]] | None = None
+    """Explicit [plus, minus] electrode indices per channel (minus -1: distant
+    ground). None and no reference: channel i = electrode i vs. ground."""
+    t_start: float | None = None
+    """Start of the survey [s, recording time]; None: start of the electrode
+    track."""
+    t_end: float | None = None
+    """End of the survey [s]; None: end of the electrode track."""
+
+    # --- segments and frequency grouping ---
+    split_gap: float = 3.0
+    """Identities are split into segments at gaps longer than this [s]."""
+    min_segment_duration: float = 3.0
+    """Shorter segments are clutter [s]."""
+    min_segment_detections: int = 15
+    """Segments with fewer detections are clutter."""
+    freq_tolerance: float = 1.0
+    """Segments join a candidate if their median frequency is this close [Hz]."""
+    max_overlap: float = 1.0
+    """Segments of one fish may overlap in time by at most this [s]."""
+    resid_abs: float = 1.0
+    """Position check: a segment is split off a candidate if its mean |log
+    amplitude residual| exceeds max(resid_abs, resid_rel * median) ..."""
+    resid_rel: float = 2.0
+    """... (see resid_abs)."""
+    merge_freq_tolerance: float = 1.5
+    """Candidates are merged if the median frequencies of a segment of each are
+    this close [Hz] (fish drift slowly) ..."""
+    merge_se_factor: float = 2.0
+    """... and their positions differ by less than this many combined
+    standard errors ..."""
+    merge_min_se: float = 0.1
+    """... with each standard error at least this [m]."""
+
+    # --- source model (wavetracker.position.efield) ---
+    model: str = "monopoles"
+    """"monopoles" (line of monopoles) or "dipole" (point dipole)."""
+    body_length: float = 0.2
+    """Length of the monopole line [m]."""
+    n_poles: int = 10
+    """Number of monopoles."""
+    water_depth: float | None = None
+    """Depth of the insulating bottom [m]; None: half-space."""
+    n_images: int = 2
+    """Truncation of the image series."""
+    min_depth: float = 0.02
+    """Minimum fish depth [m]."""
+    max_depth: float | None = None
+    """Maximum fish depth [m]; None: water_depth - 0.05 (or detection_range
+    without a bottom)."""
+
+    # --- observation model ---
+    noise_quantile: float = 10.0
+    """Percentile over frames of the per-channel spectrum giving the noise
+    floor (from the recording), or of the detection powers near the fish's
+    frequency (fallback without recording) [%]."""
+    sign_weight: float = 1.0
+    """Weight of the relative-sign residual."""
+    strong_snr: float = 3.0
+    """Channels this many times above the noise floor (amplitude) enter the
+    relative-sign term."""
+    censor_weight: float = 0.5
+    """Weight of the censored-frame residual."""
+    censor_freq_tolerance: float = 1.5
+    """A survey frame is censored if no detection (of any identity) is within
+    this of the fish's frequency [Hz]."""
+    censor_stride: int = 2
+    """Use every n-th censored frame."""
+    censor_range_factor: float = 3.0
+    """Censored frames farther than this times detection_range from all of a
+    fish's detections are ignored (they cannot constrain it)."""
+    detection_range: float = 2.5
+    """Maximum 3-D distance of a detected fish to the nearest midpoint of an
+    electrode pair at its detections [m]."""
+    bound_weight: float = 300.0
+    """Weight of the detection-range penalty."""
+
+    # --- fit ---
+    start_half_width: float = 1.5
+    """Multi-start grid: half width around the strongest detections [m] ..."""
+    start_grid: int = 7
+    """... with this many points per axis ..."""
+    start_headings: int = 8
+    """... this many headings ..."""
+    start_depths: list[float] = field(default_factory=lambda: [0.3, 0.8])
+    """... and these depths [m]."""
+    stage1_stride: int = 4
+    """The multi-start runs on every n-th detection and censored frame ..."""
+    n_refine: int = 6
+    """... and the best n distinct basins are refined on all data."""
+    alt_min_distance: float = 0.5
+    """A competing basin must be this far from the best fit [m] ..."""
+    ambiguity_dcost: float = 25.0
+    """... and a fit is ambiguous if its cost is within this of the best."""
+    jackknife_blocks: int = 8
+    """Delete-a-block jackknife over this many blocks of a fish's detection
+    times."""
+
+
+@dataclass
 class Config:
     spectrogram: SpectrogramConfig = field(default_factory=SpectrogramConfig)
     interference: InterferenceConfig = field(default_factory=InterferenceConfig)
@@ -213,6 +322,9 @@ class Config:
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
     stitching: StitchingConfig = field(default_factory=StitchingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    position_merging: PositionMergingConfig = field(
+        default_factory=PositionMergingConfig
+    )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

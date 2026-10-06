@@ -46,6 +46,23 @@ def test_matches_numpy_reference(points, kind, water_depth):
     )
 
 
+@pytest.mark.parametrize("kind", ["monopoles", "dipole"])
+@pytest.mark.parametrize("water_depth", [None, 1.2])
+def test_gradient_matches_finite_differences(points, kind, water_depth):
+    m = SourceModel(kind=kind, water_depth=water_depth)
+    q = np.array([0.3, -0.2, 0.4, 0.7])
+    v, g = m.potential_and_gradient(points, *q)
+    np.testing.assert_allclose(v, m.potential(points, *q), rtol=1e-12)
+    eps = 1e-6
+    for k in range(4):
+        dq = np.zeros(4)
+        dq[k] = eps
+        fd = (m.potential(points, *(q + dq)) - m.potential(points, *(q - dq))) / (
+            2 * eps
+        )
+        np.testing.assert_allclose(g[:, k], fd, rtol=1e-4, atol=1e-6 * np.abs(fd).max())
+
+
 def test_far_field_of_monopole_line_is_dipole():
     m = SourceModel(water_depth=None)
     d = SourceModel(kind="dipole", water_depth=None)
