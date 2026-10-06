@@ -43,7 +43,8 @@ def load_config(config_path=None, folder=None):
         'freq_tolerance': 2.5,
         'time_tolerance_minutes': 5,
         'density_threshold': 0.1,
-        'n_fish': 2
+        'n_fish': 2,
+        'assign_leftovers': 1,
     }
     
     # Try to find config file
@@ -87,7 +88,7 @@ def load_config(config_path=None, folder=None):
         if key in config['parameters']:
             value = config['parameters'][key]
             # Convert to appropriate type
-            if key == 'n_fish':
+            if key in ('n_fish', 'assign_leftovers'):
                 params[key] = int(value)
             else:
                 params[key] = float(value)
@@ -816,6 +817,70 @@ def power_density_filter(valid_v, sign_v, ident_v, idx_v, fund_v, times, density
     return valid_v
 
 
+def assign_leftovers(fund_v, idx_v, ident_v, times, kept_ids, freq_tol=2.5,
+                     min_minutes=1.0, drift_per_minute=0.2, max_gap_minutes=30.0,
+                     max_conflict=0.05, baseline_window=60.0):
+    """Assign identities outside the `kept_ids` to one of the kept fish.
+
+    A leftover identity (with at least `min_minutes` of detections, largest
+    first) joins kept fish k if it shares at most `max_conflict` of its frames
+    with k and its baseline frequency (10th percentile; rises only go up)
+    continues k's baseline before and/or after it within
+    ``freq_tol + drift_per_minute * gap``. If several fish fit about equally
+    well (cost ratio < 2) the leftover stays unassigned.
+
+    Returns a copy of `ident_v` with assigned leftovers relabelled.
+    """
+    ident_v = ident_v.copy()
+    t_det = times[idx_v]
+    dt = times[1] - times[0]
+    ids, counts = np.unique(ident_v[~np.isnan(ident_v)], return_counts=True)
+    leftovers = [i for i in ids[np.argsort(counts)[::-1]] if i not in kept_ids]
+    min_count = min_minutes * 60 / dt
+
+    def baseline(f):
+        return np.quantile(f, 0.1)
+
+    for lid in leftovers:
+        lm = ident_v == lid
+        if lm.sum() < min_count:
+            continue
+        lt, lf = t_det[lm], fund_v[lm]
+        l_frames = idx_v[lm]
+        costs = {}
+        for k in kept_ids:
+            km = ident_v == k
+            if np.isin(l_frames, idx_v[km]).mean() > max_conflict:
+                continue
+            kt, kf = t_det[km], fund_v[km]
+            sides = []
+            before = kt < lt[0]
+            if before.any():
+                tb = kt[before][-1]
+                gap = lt[0] - tb
+                if gap <= max_gap_minutes * 60:
+                    ref = baseline(kf[before & (kt >= tb - baseline_window)])
+                    own = baseline(lf[lt <= lt[0] + 2 * baseline_window])
+                    sides.append(abs(own - ref) / (freq_tol + drift_per_minute * gap / 60))
+            after = kt > lt[-1]
+            if after.any():
+                ta = kt[after][0]
+                gap = ta - lt[-1]
+                if gap <= max_gap_minutes * 60:
+                    ref = baseline(kf[after & (kt <= ta + 2 * baseline_window)])
+                    own = baseline(lf[lt >= lt[-1] - baseline_window])
+                    sides.append(abs(own - ref) / (freq_tol + drift_per_minute * gap / 60))
+            if sides and max(sides) <= 1.0:
+                costs[k] = max(sides)
+        if not costs:
+            continue
+        ranked = sorted(costs.items(), key=lambda kv: kv[1])
+        if len(ranked) > 1 and ranked[1][1] < 2 * ranked[0][1]:
+            continue  # ambiguous
+        ident_v[lm] = ranked[0][0]
+    return ident_v
+
+
 def main(folder, n_fish=None, stride_minutes=None, overlap_frac=None, 
          freq_tolerance=None, time_tolerance_minutes=None, density_threshold=None,
          config_path=None):
@@ -865,6 +930,7 @@ def main(folder, n_fish=None, stride_minutes=None, overlap_frac=None,
     freq_tolerance = config['freq_tolerance']
     time_tolerance_minutes = config['time_tolerance_minutes']
     density_threshold = config['density_threshold']
+    assign_leftover_tracks = bool(config['assign_leftovers'])
     
     print("\n" + "="*60)
     print("CLEANUP PARAMETERS")
@@ -875,6 +941,7 @@ def main(folder, n_fish=None, stride_minutes=None, overlap_frac=None,
     print(f"  Time gap tolerance: {time_tolerance_minutes} min")
     print(f"  Density threshold: {density_threshold:.2%}")
     print(f"  Target fish count: {n_fish}")
+    print(f"  Assign leftover tracks: {assign_leftover_tracks}")
     print("="*60 + "\n")
     
     # Load data
@@ -989,7 +1056,12 @@ def main(folder, n_fish=None, stride_minutes=None, overlap_frac=None,
 
     # print(counts)
     # print(idents)
-    valid_idents = idents[-n_fish:] 
+    valid_idents = idents[-n_fish:]
+    # Leftover tracks that continue one of the kept fish are assigned to it
+    # instead of being discarded (e.g. a fish split into two large tracks).
+    if assign_leftover_tracks:
+        ident_v = assign_leftovers(fund_v, idx_v, ident_v, times, valid_idents,
+                                   freq_tol=freq_tolerance)
     # print(valid_idents)
     # print(np.unique(valid_v))
 

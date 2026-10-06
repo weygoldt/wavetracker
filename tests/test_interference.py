@@ -79,3 +79,30 @@ def test_hum_removed_resting_fish_on_single_electrode_kept(tmp_path):
     assert score.fish[0].recall > 0.98  # resting single-electrode fish
     assert score.fish[1].recall > 0.98
     assert results[True].meta["interference_combs"]
+
+
+def test_merge_tooth_neighbours():
+    from wavetracker.interference import merge_tooth_neighbours
+
+    teeth = np.array([763.9, 859.4])
+    frame = np.array([0, 0, 1, 1, 2, 3, 3])
+    freq = np.array([762.2, 764.6, 763.9, 761.5, 763.95, 700.0, 702.0])
+    power = np.array([-60.0, -70.0, -80.0, -60.0, -65.0, -60.0, -61.0])
+    keep = merge_tooth_neighbours(frame, freq, power, teeth, 4.0, 0.4)
+    # frame 0: split around the tooth -> keep stronger; frame 1: tooth next to
+    # fish -> drop the tooth; frame 2: lone detection on a tooth -> kept;
+    # frame 3: two fish without a tooth between them -> both kept
+    assert keep.tolist() == [True, False, False, True, True, True, True]
+
+
+def test_tooth_lifted_by_nearby_fish_is_dropped():
+    from wavetracker.interference import merge_tooth_neighbours
+
+    teeth = np.array([668.4])
+    frame = np.array([0, 0, 1, 1])
+    freq = np.array([662.5, 668.4, 662.5, 668.4])
+    power = np.array([-50.0, -80.0, -90.0, -80.0])
+    keep = merge_tooth_neighbours(frame, freq, power, teeth, 4.0, 0.4, tooth_sep=8.0)
+    # frame 0: strong fish 6 Hz away -> tooth dropped; frame 1: the
+    # non-tooth detection is weaker -> both kept
+    assert keep.tolist() == [True, False, True, True]

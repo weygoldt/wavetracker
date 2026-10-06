@@ -14,8 +14,8 @@ import torch
 
 from . import __version__
 from .config import Config
-from .harmonics import detect_harmonic_groups
-from .interference import CombCanceller
+from .harmonics import Detections, detect_harmonic_groups
+from .interference import CombCanceller, merge_tooth_neighbours
 from .io import FrameLayout, iter_blocks, open_recording, resolve_input
 from .results import Results
 from .spectrogram import (
@@ -26,6 +26,7 @@ from .spectrogram import (
     get_device,
     step_size,
 )
+from .stitching import stitch
 from .tracking import track
 
 log = logging.getLogger(__name__)
@@ -200,6 +201,17 @@ def detect(
             timings.spectrogram += t1 - t0
 
             det = detect_harmonic_groups(log_np, freqs, hc, low_th, high_th)
+            if canceller is not None and len(det.frame):
+                keep = merge_tooth_neighbours(
+                    det.frame,
+                    det.freq,
+                    log_np[det.frame, det.bin],
+                    canceller.tooth_frequencies(),
+                    cfg.interference.neighbour_distance,
+                    cfg.interference.neighbour_tolerance,
+                    cfg.interference.tooth_neighbour_distance,
+                )
+                det = Detections(det.frame[keep], det.bin[keep], det.freq[keep])
             if len(det.frame):
                 sel = power[
                     :,
@@ -273,7 +285,16 @@ def track_results(results: Results, cfg: Config) -> float:
         min_freq=cfg.harmonic_groups.min_freq,
         max_freq=cfg.harmonic_groups.max_freq,
     )
+    results.ident_v = stitch(
+        results.fund_v,
+        results.idx_v,
+        results.sign_v,
+        results.ident_v,
+        results.times,
+        cfg.stitching,
+    )
     dt = time.perf_counter() - t0
     results.meta.setdefault("timings", {})["tracking"] = dt
     results.meta["tracking_config"] = vars(cfg.tracking)
+    results.meta["stitching_config"] = vars(cfg.stitching)
     return dt

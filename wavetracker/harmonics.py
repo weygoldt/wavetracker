@@ -89,7 +89,9 @@ def _detect_peaks(
             f = freqs[last_max_idx]
             if f < min_freq or f > max_freq:
                 continue
-            if f % mains < mains_tol or abs(f % mains - mains) < mains_tol:
+            if mains > 0 and (
+                f % mains < mains_tol or abs(f % mains - mains) < mains_tol
+            ):
                 continue
             if data[last_max_idx] < min_good:
                 continue
@@ -125,7 +127,9 @@ def _get_group(
         if out[i] != 0:
             nn += 1
             f = freqs[out[i]]
-            if f % mains < mains_tol or abs(f % mains - mains) < mains_tol:
+            if mains > 0 and (
+                f % mains < mains_tol or abs(f % mains - mains) < mains_tol
+            ):
                 continue
             n += 1
             peak_sum += log_row[out[i]]

@@ -15,9 +15,12 @@ Per block and electrode the canceller
 2. finds persistent lines that stand out from the baseline,
 3. searches them for combs: a spacing below ``max_spacing`` with at least
    ``min_run`` consecutive teeth,
-4. subtracts a high level of the teeth (``subtract_quantile`` over time plus
-   ``subtract_margin``), so frames with only interference drop to the noise
-   floor while a fish stronger than the interference remains visible.
+4. remembers the teeth found on each electrode for ``tooth_memory_blocks``
+   blocks (single teeth intermittently miss the line test), and
+5. gates the remembered teeth: in every frame, a tooth bin whose power is
+   below a high level of the tooth (``subtract_quantile`` over time plus
+   ``subtract_margin``) holds only interference and is set to the noise
+   floor; a bin above it holds a fish and is left untouched.
 
 What is *not* removed: a resting fish, even if it is stable for hours and
 seen on a single electrode, because its harmonics are spaced by its own
@@ -104,6 +107,52 @@ def find_combs(
     return combs
 
 
+def merge_tooth_neighbours(
+    frame, freq, power, teeth, max_sep, tol, tooth_sep=None
+) -> np.ndarray:
+    """Mask of detections to keep.
+
+    Where a fish overlaps an interference tooth (within the ~2 Hz main lobe),
+    removing the tooth can split the fish's peak into two detections on
+    either side of it: two detections of a frame closer than `max_sep` with
+    a tooth between them count as one, the stronger is kept. Near a strong
+    fish its spectral leakage can also lift a tooth above the gate: a
+    detection on a tooth (within `tol`) with a stronger non-tooth detection
+    within `tooth_sep` is dropped. A lone detection on a tooth is kept (a
+    fish may rest there).
+    """
+    keep = np.ones(len(freq), dtype=bool)
+    if len(teeth) == 0 or len(freq) < 2:
+        return keep
+    tooth_sep = max_sep if tooth_sep is None else tooth_sep
+    teeth = np.sort(teeth)
+    order = np.lexsort((freq, frame))
+    fr, fq, pw = frame[order], freq[order], power[order]
+    pos = np.clip(np.searchsorted(teeth, fq), 1, len(teeth) - 1)
+    on_tooth = np.minimum(np.abs(fq - teeth[pos - 1]), np.abs(fq - teeth[pos])) <= tol
+    n = len(fr)
+    for j in range(n):
+        # split peak: adjacent detection with a tooth between them
+        k = j + 1
+        if k < n and fr[k] == fr[j] and fq[k] - fq[j] <= max_sep:
+            lo = np.searchsorted(teeth, fq[j] - tol)
+            if lo < len(teeth) and teeth[lo] <= fq[k] + tol:
+                keep[order[j if pw[j] < pw[k] else k]] = False
+        # tooth lifted by a nearby stronger fish
+        if on_tooth[j]:
+            for k in range(j - 1, -1, -1):
+                if fr[k] != fr[j] or fq[j] - fq[k] > tooth_sep:
+                    break
+                if not on_tooth[k] and pw[k] > pw[j]:
+                    keep[order[j]] = False
+            for k in range(j + 1, n):
+                if fr[k] != fr[j] or fq[k] - fq[j] > tooth_sep:
+                    break
+                if not on_tooth[k] and pw[k] > pw[j]:
+                    keep[order[j]] = False
+    return keep
+
+
 def _extend_comb(
     freqs: np.ndarray, spacing: float, tol: float, start: float, free: np.ndarray
 ) -> tuple[float, np.ndarray]:
@@ -151,15 +200,25 @@ class CombCanceller:
         self.floor: torch.Tensor | None = None
         self.combs: list[Comb] = []
         self.history: deque[torch.Tensor] = deque(maxlen=cfg.history_blocks)
+        self.n_blocks = 0
+        self.last_seen: np.ndarray | None = None
+        self.tooth_freq: dict[int, float] = {}
+        """Frequency (k * spacing) of every bin that was ever a tooth."""
+        """Block count at which each (channel, bin) was last a comb tooth."""
 
     def __call__(self, power: torch.Tensor) -> torch.Tensor:
         """Return `power` (channels, freqs, frames) with comb teeth removed."""
         if power.shape[-1] >= self.cfg.min_frames:
             self._update(power)
         if self.subtract is not None:
-            sub = self.subtract[..., None]
-            cleaned = torch.maximum(power - sub, self.floor[..., None])
-            power = torch.where(sub > 0, cleaned, power)
+            # Gate, don't subtract: a bin at or below the tooth's level holds
+            # only interference and drops to the noise floor; a bin above it
+            # holds something else (a fish) and is left untouched. Subtracting
+            # would carve notches into fish peaks that overlap a tooth and
+            # split them into two detections.
+            level = self.subtract[..., None]
+            hum_only = (level > 0) & (power <= level)
+            power = torch.where(hum_only, self.floor[..., None], power)
         return power
 
     def _update(self, power: torch.Tensor) -> None:
@@ -180,14 +239,17 @@ class CombCanceller:
         # history, and a fish resting on a tooth for part of it does not raise
         # the subtracted level (interference drifts of < subtract_margin are ok)
         persistent = torch.stack([h[0] for h in self.history]).amin(0)
-        level = torch.stack([h[1] for h in self.history]).amin(0)
+        recent = list(self.history)[-cfg.level_history_blocks :]
+        level = torch.stack([h[1] for h in recent]).amin(0)
         level = level * 10 ** (cfg.subtract_margin / 10)
         pers_db = 10 * torch.log10(persistent.clamp_min(1e-30))
         base_db = _running_median(pers_db, cfg.baseline_width)
         excess = (pers_db - base_db).cpu().numpy()
         pers_np = pers_db.cpu().numpy()
 
-        subtract = torch.zeros_like(persistent)
+        self.n_blocks += 1
+        if self.last_seen is None:
+            self.last_seen = np.full(persistent.shape, -(10**9), dtype=np.int64)
         combs = []
         fmax_bin = min(len(self.freqs) - 2, int(cfg.max_line_freq / self.df))
         for c in range(power.shape[0]):
@@ -215,17 +277,32 @@ class CombCanceller:
                 used[idx] = True
                 teeth = np.round(line_f[idx] / spacing).astype(int)
                 combs.append(Comb(c, spacing, teeth, run))
-                tooth_bins = bins[idx]
-                lobe = np.unique(
-                    (tooth_bins[:, None] + np.arange(-2, 3)[None, :]).ravel()
-                )
-                lobe = lobe[(lobe > 0) & (lobe < len(self.freqs))]
-                lobe_t = torch.from_numpy(lobe).to(power.device)
-                is_line = persistent[c, lobe_t] > 10 ** (base_db[c, lobe_t] / 10)
-                subtract[c, lobe_t] = torch.where(is_line, level[c, lobe_t], 0.0)
+                self.last_seen[c, bins[idx]] = self.n_blocks
+                for b_, k_ in zip(bins[idx], teeth, strict=True):
+                    self.tooth_freq[int(b_)] = float(k_ * spacing)
         self.combs = combs
-        self.subtract = subtract if combs else None
+
+        # Subtract every tooth seen on a channel within the tooth memory, so a
+        # tooth that misses the line test in one block is still removed.
+        remembered = self.n_blocks - self.last_seen <= cfg.tooth_memory_blocks
         self.floor = 10 ** (base_db / 10)
+        if not remembered.any():
+            self.subtract = None
+            return
+        centers = torch.from_numpy(remembered).to(power.device, torch.float32)
+        lobe = torch.nn.functional.max_pool1d(centers[:, None], 5, 1, 2)[:, 0] > 0
+        is_line = persistent > self.floor
+        self.subtract = torch.where(lobe & is_line, level, 0.0)
+
+    def tooth_frequencies(self) -> np.ndarray:
+        """Frequencies of all teeth currently remembered on any electrode."""
+        if self.last_seen is None:
+            return np.empty(0)
+        recent = self.n_blocks - self.last_seen <= self.cfg.tooth_memory_blocks
+        bins = np.unique(np.nonzero(recent)[1])
+        return np.array(
+            [self.tooth_freq[int(b)] for b in bins if int(b) in self.tooth_freq]
+        )
 
     def _refine(self, row: np.ndarray, bins: np.ndarray) -> np.ndarray:
         a, m, c = row[bins - 1], row[bins], row[bins + 1]

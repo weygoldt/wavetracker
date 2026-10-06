@@ -15,6 +15,8 @@ The pipeline:
 3. **Tracking** – detections are linked into identities using their
    frequency and their amplitude pattern across electrodes
    ([Raab et al. 2022](https://doi.org/10.3389/fnint.2022.965211)).
+4. **Stitching** – track fragments are joined across rises, dropouts and
+   short double detections.
 
 It runs at several hundred times realtime on an 11-channel, 20 kHz recording
 (a 4 h recording takes about a minute on an RTX 4080, mostly disk IO).
@@ -169,13 +171,30 @@ summed. For every electrode and 60 s block it:
 2. finds lines ≥10 dB above a running-median noise baseline;
 3. searches them for combs: spacing 20–300 Hz, at least 4 *consecutive* teeth
    within 0.3 Hz;
-4. subtracts a high level of each tooth (90th percentile + 3 dB, minimum over
-   the history) on that electrode.
+4. remembers every tooth found on an electrode for 30 minutes (single teeth
+   intermittently fail the line test, which made the hum leak back), and
+5. gates the remembered teeth: in each frame a tooth bin at or below the
+   tooth's level (90th percentile + 3 dB, minimum over the history) is set to
+   the noise floor; a bin above it contains a fish and is left untouched.
+
+Where a fish overlaps a tooth (within the ~2 Hz main lobe), the gating can
+split the fish's peak in two; two detections in one frame within 4 Hz with a
+tooth between them are therefore merged into the stronger one. A strong fish
+up to ~8 Hz away can also lift a tooth above the gate through its spectral
+leakage, and the tracker then hands the fish's identity to the constant
+tooth; a detection on a tooth with a stronger non-tooth detection within
+8 Hz is therefore dropped.
+
+The gate level is the minimum over the last 5 blocks. That protects fish
+resting near a tooth but lags when the interference gets stronger, so some
+hum still leaks as separate constant-frequency tracks (e.g. in the first hour
+of 2022-06-02); `cleanup` discards them. `level_history_blocks: 2` follows the
+interference faster at the cost of fish detections near teeth.
 
 A fish is never a comb: its harmonics are spaced by its own fundamental
 (≥ `min_freq`), and sub-multiples of it match only every 2nd/3rd tooth. So a
 resting fish that is stable for hours and seen on a single electrode is kept
-(tested with synthetic data). Subtracting rather than notching keeps a fish
+(tested with synthetic data). Gating rather than notching keeps a fish
 visible while it passes a tooth, as long as it is stronger than the tooth.
 The remaining blind spot is a fish that is **weaker than a tooth and stays
 within ~1 Hz of it for 5+ minutes** on the same electrodes. At 0.6 Hz
@@ -187,10 +206,27 @@ losing fish detections, and `cleanup -n 2` then recovers both fish with 96 %
 and 93 % coverage. The detected combs are listed in `wavetracker.json`
 (`interference_combs`). It costs ~40 ms per 60 s block.
 
+## Stitching
+
+The tracker breaks a track at every rise: the onset jump exceeds
+`freq_tolerance` and, by the time the frequency has decayed back, the gap
+exceeds `max_dt`. `wavetracker.stitching` joins fragment A to a later
+fragment B when their *baselines* (10th percentile of the frequency, which
+ignores the upward rises) agree:
+
+| situation | condition |
+|---|---|
+| gap ≤ 30 s | baselines within 3 Hz; a clear rise onset (gap ≤ 2 s, jump ≥ +3 Hz) may differ by 6 Hz |
+| dropout ≤ 15 min | baselines within 1.5 Hz and no other track at that frequency during the gap |
+| overlap ≤ 30 s (double detection) | same median frequency during the overlap (2.5 Hz) |
+
+Joins are made greedily, best first; frames that end up with two detections
+of one identity keep the one closer to the track. An electrode amplitude
+pattern check is available (`max_pattern_distance`) but off by default: in
+the tube recordings it did not separate the two fish.
+
 ## Known limitations / next steps
 
-* Tracking fragments a fish during fast frequency excursions (rises) whose
-  jump exceeds `freq_tolerance`; `cleanup` is currently needed to rejoin them.
 * The amplitude-error distribution used for tracking is estimated once from
   the first `3 * max_dt` seconds only.
 * Detection thresholds are estimated once from the first block and frozen
@@ -199,9 +235,11 @@ and 93 % coverage. The detected combs are listed in `wavetracker.json`
 * Interference that is a single stationary harmonic series with a
   fundamental in the fish range (not a comb) is indistinguishable from a
   resting fish and is not removed.
-* Subtracted comb teeth are floored at the persistent noise baseline, which
-  is a few dB below the median noise; they show as faint white lines in
-  spectrogram plots.
+* Gated comb teeth are set to the persistent noise baseline, which is a few
+  dB below the median noise; they show as faint white lines in spectrogram
+  plots.
+* While a fish crosses a comb tooth its frequency estimate can be off by up
+  to ~1 Hz (the merged detection is the stronger of two split peaks).
 * Tracking runs on the CPU; for weeks of data with many fish it should be
   chunked/parallelized.
 
@@ -212,6 +250,12 @@ recordings (two fish per trial, no ground truth traces). It builds a
 pseudo ground truth from the detections, independent of tracking, and reports
 purity, fragmentation and coverage for the raw tracks and for `cleanup -n 2`
 (see the module docstring for usage).
+
+`cleanup` keeps the `n_fish` identities with the most detections. Leftover
+identities of at least a minute are no longer discarded outright: each is
+assigned to the kept fish whose baseline frequency it continues (no shared
+frames; tolerance grows by 0.2 Hz per minute of gap), unless two fish fit
+about equally well (`assign_leftovers` in the cleanup config).
 
 ## Development
 

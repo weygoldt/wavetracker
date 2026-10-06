@@ -43,7 +43,8 @@ class HarmonicGroupsConfig:
     max_freq_tol: float = 1.0
     """Tolerance when matching a peak to a harmonic, in fundamental units [Hz]."""
     mains_freq: float = 50.0
-    """Mains frequency; its harmonics are excluded [Hz]."""
+    """Mains frequency; its harmonics are excluded [Hz]. 0 disables this
+    (battery-powered field recordings)."""
     mains_freq_tol: float = 1.0
     """Tolerance around mains harmonics [Hz]."""
     max_divisor: int = 3
@@ -73,12 +74,29 @@ class InterferenceConfig:
     """Quantile over time defining the persistent spectrum (0.2: a line must
     be present in >80% of a block's frames)."""
     subtract_quantile: float = 0.9
-    """Quantile over time of a tooth's power that is subtracted."""
+    """Quantile over a block's frames defining a tooth's gate level."""
     subtract_margin: float = 3.0
-    """Extra level added to the subtracted power [dB]."""
+    """Margin added to the gate level [dB]."""
+    level_history_blocks: int = 5
+    """Gate level: minimum over this many recent blocks. Long protects fish
+    resting near a tooth (they cannot raise the level); short follows
+    changes of the interference level faster (fewer leaks). 2 instead of 5
+    halved hum leaks in 2022-06-02 but cost 3% of a fish's detections near a
+    tooth in 2022-06-14."""
     history_blocks: int = 5
     """A line must be persistent at the same bin in this many consecutive
     blocks (protects resting fish that slowly drift past a tooth)."""
+    neighbour_distance: float = 4.0
+    """Two detections of a frame this close [Hz] with a tooth between them
+    (or within `neighbour_tolerance` of one) are one fish split by the
+    tooth; the weaker is dropped."""
+    neighbour_tolerance: float = 0.4
+    """Distance to a tooth counting as 'on the tooth' [Hz]."""
+    tooth_neighbour_distance: float = 8.0
+    """A detection on a tooth with a stronger non-tooth detection this close
+    [Hz] is interference lifted by the fish's spectral leakage; dropped."""
+    tooth_memory_blocks: int = 30
+    """A tooth found on an electrode keeps being removed for this many blocks."""
     baseline_width: int = 301
     """Width of the running median giving the noise baseline [bins]."""
     min_spacing: float = 20.0
@@ -110,6 +128,49 @@ class TrackingConfig:
 
 
 @dataclass
+class StitchingConfig:
+    """Joining track fragments across rises (see wavetracker.stitching)."""
+
+    enabled: bool = True
+    max_gap: float = 30.0
+    """Maximum time between the end of one fragment and the next [s]."""
+    max_overlap: float = 30.0
+    """Maximum temporal overlap of joined fragments [s]."""
+    overlap_tolerance: float = 2.5
+    """Overlapping fragments must have the same median frequency within this
+    [Hz] (as for linking detections in tracking.freq_tolerance)."""
+    max_rise: float = 100.0
+    """Largest upward frequency jump at a join (a rise onset) [Hz]."""
+    max_drop: float = 2.5
+    """Largest downward frequency jump at a join [Hz]."""
+    baseline_window: float = 60.0
+    """Window for the baseline frequency at a fragment's end [s]; twice as
+    long at its start, where a rise may still decay."""
+    baseline_quantile: float = 0.1
+    """Quantile defining the baseline (low: ignores upward rises)."""
+    baseline_tolerance: float = 3.0
+    """Maximum baseline difference of joined fragments [Hz]."""
+    rise_max_gap: float = 2.0
+    """A join with a gap up to this [s] ..."""
+    rise_min_jump: float = 3.0
+    """... and an upward jump of at least this [Hz] is a rise onset ..."""
+    rise_baseline_tolerance: float = 6.0
+    """... and may differ in baseline by up to this [Hz]."""
+    max_dropout: float = 900.0
+    """Longest gap bridged when nothing else is at that frequency [s]."""
+    dropout_tolerance: float = 1.5
+    """Maximum baseline difference across a dropout [Hz]."""
+    pattern_window: float = 30.0
+    """Window for the electrode amplitude pattern at fragment edges [s]."""
+    max_pattern_distance: float | None = None
+    """Maximum RMS difference of the max-normalized electrode amplitude
+    patterns (None: not checked). In the 2022 tube recordings it did not
+    separate the two fish, so it is off by default."""
+    min_detections: int = 10
+    """Fragments with fewer detections are not joined."""
+
+
+@dataclass
 class OutputConfig:
     save_fine_spec: bool = False
     """Store the full-resolution summed spectrogram (large!)."""
@@ -129,6 +190,7 @@ class Config:
     interference: InterferenceConfig = field(default_factory=InterferenceConfig)
     harmonic_groups: HarmonicGroupsConfig = field(default_factory=HarmonicGroupsConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
+    stitching: StitchingConfig = field(default_factory=StitchingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
 
     def to_dict(self) -> dict[str, Any]:
