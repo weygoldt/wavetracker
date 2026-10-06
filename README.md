@@ -78,11 +78,17 @@ The most relevant parameters:
 | `spectrogram.overlap_frac` | 0.9 | window overlap (0.16 s frame step) |
 | `spectrogram.exclude_channels` | `[]` | broken/noisy electrodes to ignore (`run -x 8`) |
 | `interference.enabled` | true | remove interference combs (`run --no-interference`) |
+| `interference.level_history_blocks` | 5 | gate-level memory; 2 follows changing hum faster, costs fish detections near teeth |
 | `harmonic_groups.min_freq` / `max_freq` | 400 / 1200 | fundamental frequency range [Hz] |
 | `harmonic_groups.low_thresh_factor` / `high_thresh_factor` | 6 / 10 | peak thresholds in units of the noise std |
+| `harmonic_groups.min_group_size` | 3 | harmonics 1..n that must all be present |
+| `harmonic_groups.max_harmonics` | none | cap on harmonics per group (needed for wide frequency ranges) |
+| `harmonic_groups.mains_freq` | 50 | mains harmonics are excluded; 0 disables (battery-powered recordings) |
 | `harmonic_groups.exclusive_harmonics` | `core` | `all` reproduces the original grouping (see below) |
 | `tracking.freq_tolerance` | 2.5 | max. frequency jump between linked detections [Hz] |
 | `tracking.max_dt` | 10 | max. gap between linked detections [s] |
+| `stitching.enabled` | true | join fragments across rises, dropouts and double detections |
+| `stitching.max_dropout` | 900 | longest gap bridged when nothing else is at that frequency [s] |
 | `output.save_fine_spec` | false | also store the full-resolution spectrogram |
 
 ### Output
@@ -200,11 +206,15 @@ The remaining blind spot is a fish that is **weaker than a tooth and stays
 within ~1 Hz of it for 5+ minutes** on the same electrodes. At 0.6 Hz
 resolution the two cannot be separated.
 
-On the 4 h recording 2022-06-14 (no channel excluded) it removes all
+On the 4 h recording 2022-06-14 (no channel excluded) it removes the
 interference detections (4.1 → 2.0 detections per frame for two fish) without
-losing fish detections, and `cleanup -n 2` then recovers both fish with 96 %
-and 93 % coverage. The detected combs are listed in `wavetracker.json`
+losing fish detections. The detected combs are listed in `wavetracker.json`
 (`interference_combs`). It costs ~40 ms per 60 s block.
+
+Because a stationary fish's harmonic series is itself a comb with spacing
+equal to its fundamental, combs are only searched below
+`interference.max_spacing` (300 Hz). When tracking fish below ~300 Hz, switch
+the filter off (`interference.enabled: false` or `run --no-interference`).
 
 ## Stitching
 
@@ -223,7 +233,59 @@ ignores the upward rises) agree:
 Joins are made greedily, best first; frames that end up with two detections
 of one identity keep the one closer to the track. An electrode amplitude
 pattern check is available (`max_pattern_distance`) but off by default: in
-the tube recordings it did not separate the two fish.
+the tube recordings it did not separate the two fish. With many fish close in
+frequency (field recordings) lower `max_dropout`, e.g. to 60 s.
+
+## Post-processing: cleanup
+
+`cleanup -n N` keeps the N identities with the most detections. Leftover
+identities of at least a minute are not discarded outright: each is assigned
+to the kept fish whose baseline frequency it continues (no shared frames;
+tolerance grows by 0.2 Hz per minute of gap), unless two fish fit about
+equally well (`assign_leftovers` in the cleanup config). Parameters are read
+from `cleanup_config.cfg` in the results directory or the packaged default.
+
+## Field recordings and dense populations
+
+The defaults are tuned for long grid recordings with few fish. For short
+field recordings with many fish (e.g. a moving electrode pair, ~40 fish in a
+chorus, battery powered) a reasonable starting point is:
+
+```yaml
+spectrogram:
+  nfft: 65536            # 0.73 Hz at 48 kHz: resolves fish a few Hz apart
+  overlap_frac: 0.9
+interference:
+  enabled: false         # required when tracking fish below ~300 Hz
+harmonic_groups:
+  min_freq: 20.0
+  max_freq: 2000.0
+  mains_freq: 0.0        # no mains in battery-powered recordings
+  low_thresh_factor: 3.0 # the chorus fills the troughs between fish peaks;
+  high_thresh_factor: 5.0  # the defaults (6/10) miss most fish
+  min_group_size: 2      # fish often show only two harmonics
+  max_harmonics: 10      # otherwise ~200 harmonics per candidate
+stitching:
+  max_dropout: 60.0
+output:
+  save_fine_spec: true
+  fine_spec_max_freq: 2050.0
+```
+
+Observations on a 16 min, 2-channel, ~40-fish recording (Iriri 2026):
+
+* Detections follow the visible fish lines from 350 Hz to 2 kHz; harmonics
+  of lower fish rarely appear as extra fish (≤ 4 % of detections above
+  1 kHz in excess of chance).
+* Many fish with fundamentals below ~350 Hz are missed: their 2nd harmonic
+  is often absent while the 3rd is present (odd-harmonic waveforms), and the
+  detector requires harmonics 1..`min_group_size` to all be present.
+* Broadband noise (boat motor, contact) produces short clutter tracks.
+* With moving electrodes each fish is in range for seconds to minutes, so
+  many short tracks are expected; identity counts are not fish counts.
+* Recorders that split a take into several files may write the take's start
+  time into every file; thunderlab then refuses to read them as one
+  recording. Concatenate them first (e.g. with `audioio`).
 
 ## Known limitations / next steps
 
@@ -231,7 +293,14 @@ the tube recordings it did not separate the two fish.
   the first `3 * max_dt` seconds only.
 * Detection thresholds are estimated once from the first block and frozen
   (as in the original), so slow changes in noise over days are not followed.
-* Fish within ±1 Hz of a mains harmonic (multiples of 50 Hz) are not detected.
+* Fish within ±1 Hz of a mains harmonic (multiples of 50 Hz) are not detected
+  (set `mains_freq: 0` if there is no mains).
+* A fish needs harmonics 1..`min_group_size`; fish with a missing 2nd
+  harmonic (odd-harmonic waveforms, common below ~350 Hz in the field) are
+  missed. Accepting "2 of the first 3 harmonics" would fix this.
+* Detection thresholds are relative to the global noise floor; in a dense
+  chorus the troughs between fish are far above it, so thresholds have to be
+  lowered by hand (see field recordings).
 * Interference that is a single stationary harmonic series with a
   fundamental in the fish range (not a comb) is indistinguishable from a
   resting fish and is not removed.
@@ -251,11 +320,20 @@ pseudo ground truth from the detections, independent of tracking, and reports
 purity, fragmentation and coverage for the raw tracks and for `cleanup -n 2`
 (see the module docstring for usage).
 
-`cleanup` keeps the `n_fish` identities with the most detections. Leftover
-identities of at least a minute are no longer discarded outright: each is
-assigned to the kept fish whose baseline frequency it continues (no shared
-frames; tolerance grows by 0.2 Hz per minute of gap), unless two fish fit
-about equally well (`assign_leftovers` in the cleanup config).
+Results on 10 full 4 h trials (all six pairings), means over trials:
+
+| | first rewrite | current |
+|---|---|---|
+| identities with ≥ 300 detections (truth: 2) | 32.2 | 9.9 |
+| identities covering 90 % of the loser | 13.0 | 3.0 |
+| largest track, winner / loser [% of frames] | 50 / 34 | 64 / 57 |
+| after `cleanup -n 2`, winner / loser [% of frames] | 91 / 84 | 95 / 92 |
+| purity (detections assigned to the right fish) | 1.000 | 1.000 |
+
+Detection itself covers 95 % (winner) and 92 % (loser) of the frames; the rest is
+mostly rises, which leave the pseudo-ground-truth band. Remaining
+fragmentation is concentrated in losers with many rises (pairing 4a: 79 %
+after cleanup).
 
 ## Development
 
