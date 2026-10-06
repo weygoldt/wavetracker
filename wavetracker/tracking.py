@@ -10,8 +10,13 @@ within a window, temporary identities are formed by greedily linking the
 lowest-error pairs; the central third of each window is then attached to the
 identities established so far.
 
-Known quirks of the original that are deliberately preserved (so results stay
-comparable to published analyses) are marked with ``QUIRK``.
+One bug of the original is fixed: when attaching temporary identities, it
+skipped link targets whose *detection offset* within the window was smaller
+than the window's frame count, so the skipped time span shrank with the
+number of fish. Targets are now skipped if their *frame* lies before the
+central third of the window. ``track(..., v6_compat=True)`` restores the old
+behaviour; it exists so the tests can verify the rest of the port against
+the original implementation.
 """
 
 from __future__ import annotations
@@ -168,7 +173,19 @@ def _tmp_identities(idx, fund, ca, cb, lo, hi, n_window_frames, f_lo):
 
 @njit(cache=True)
 def _assign(
-    ident, idx, tmp, ca, cb, lo, hi, s, comp_range, next_identity, n_window_frames, f_lo
+    ident,
+    idx,
+    tmp,
+    ca,
+    cb,
+    lo,
+    hi,
+    s,
+    comp_range,
+    next_identity,
+    n_window_frames,
+    f_lo,
+    v6_compat,
 ):
     """Attach the central part of the window's temporary identities to the
     established identities (`ident`, modified in place)."""
@@ -194,7 +211,10 @@ def _assign(
         b = cb[k] - lo
         if ident[lo + b] >= 0 or tmp[b] < 0:
             continue
-        if b < comp_range:  # QUIRK: compares a detection offset to a frame count
+        if v6_compat:
+            if b < comp_range:  # original bug: detection offset vs. frame count
+                continue
+        elif idx[lo + b] <= c0:  # target before the central third
             continue
         ia = ident[lo + a]
         if ia < 0:
@@ -245,7 +265,7 @@ def _assign(
 
 
 @njit(cache=True)
-def _track(fund, idx, nsign, comp_range, freq_tol):
+def _track(fund, idx, nsign, comp_range, freq_tol, v6_compat):
     n_frames = idx[-1] + 4 * comp_range + 2
     frame_start = np.searchsorted(idx, np.arange(n_frames + 1))
     start = idx[0]
@@ -304,6 +324,7 @@ def _track(fund, idx, nsign, comp_range, freq_tol):
             next_identity,
             n_window_frames,
             s,
+            v6_compat,
         )
     return ident
 
@@ -324,6 +345,8 @@ def track(
     cfg: TrackingConfig,
     min_freq: float = -np.inf,
     max_freq: float = np.inf,
+    *,
+    v6_compat: bool = False,
 ) -> np.ndarray:
     """Assign identities to detections.
 
@@ -336,6 +359,9 @@ def track(
         Time of each frame [s].
     min_freq, max_freq
         Detections outside this range are not tracked.
+    v6_compat
+        Reproduce the original ``freq_tracking_v6`` exactly, including its
+        window-check bug (for verification only).
 
     Returns
     -------
@@ -357,6 +383,7 @@ def track(
         np.ascontiguousarray(normalize_signatures(sign_v[valid]), dtype=np.float64),
         comp_range,
         float(cfg.freq_tolerance),
+        v6_compat,
     )
     ident_v[valid] = np.where(ident >= 0, ident, np.nan)
     return ident_v

@@ -126,7 +126,7 @@ traces and `wavetracker.evaluation.evaluate` scores results against them
 
 The detection and tracking algorithms follow Raab et al. (2022). The tracker
 is a numba port that reproduces the original `freq_tracking_v6` assignments
-exactly (verified in the test-suite), while being roughly 25× faster and
+exactly in compatibility mode (verified in the test-suite), while being roughly 25× faster and
 linear in recording length. Deliberate changes:
 
 * **Harmonic exclusivity** – the original rejects a fish if *any* of its up to
@@ -136,6 +136,12 @@ linear in recording length. Deliberate changes:
   disappear. By default only the `min_group_size` lowest harmonics are now
   exclusive (this still rejects in-range harmonics of other fish as ghosts).
   `exclusive_harmonics: all` restores the original behaviour.
+* **Window-check bug** – when attaching a window's links to established
+  identities, the original compared a detection's *position in the window*
+  with the window's *frame count*, so the skipped span depended on the
+  number of fish. It now checks the target's frame. In practice this rarely
+  matters (on a 4 h recording it assigns ~100 more detections and changes no
+  existing assignment); `track(..., v6_compat=True)` reproduces the original.
 * **Sub-bin frequencies** – fundamentals are refined by parabolic
   interpolation (`refine_frequency`), giving ~0.01 Hz precision instead of the
   0.61 Hz bin spacing.
@@ -159,8 +165,6 @@ linear in recording length. Deliberate changes:
   95.4 Hz comb (lines at 477, 573, 669, 764, 859 Hz); exclude it with `-x 8`.
   An automatic filter (zero frequency variance, single-electrode spatial
   pattern) would be a good addition.
-* `tracking._assign` keeps a quirk of the original that compares a detection
-  offset with a frame count (marked `QUIRK`); fixing it changes results.
 * Tracking runs on the CPU; for weeks of data with many fish it should be
   chunked/parallelized.
 

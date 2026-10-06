@@ -22,7 +22,7 @@ def _same(a, b):
 def test_matches_original_implementation(detections):
     r = detections
     cfg = TrackingConfig()
-    new = track(r.fund_v, r.idx_v, r.sign_v, r.times, cfg, 400, 1200)
+    new = track(r.fund_v, r.idx_v, r.sign_v, r.times, cfg, 400, 1200, v6_compat=True)
     old = freq_tracking_v6(
         r.fund_v,
         r.idx_v,
@@ -50,7 +50,7 @@ def test_matches_original_with_noise_detections(detections):
     order = np.argsort(idx, kind="stable")
     idx, fund, sign = idx[order], fund[order], sign[order].astype(float)
     cfg = TrackingConfig()
-    new = track(fund, idx, sign, r.times, cfg, 400, 1200)
+    new = track(fund, idx, sign, r.times, cfg, 400, 1200, v6_compat=True)
     old = freq_tracking_v6(
         fund,
         idx,
