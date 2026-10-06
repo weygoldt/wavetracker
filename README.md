@@ -205,6 +205,14 @@ and 93 % coverage. The detected combs are listed in `wavetracker.json`
 * Tracking runs on the CPU; for weeks of data with many fish it should be
   chunked/parallelized.
 
+## Benchmarks
+
+`benchmarks/tube_competition.py` scores results on the 2022 tube-competition
+recordings (two fish per trial, no ground truth traces). It builds a
+pseudo ground truth from the detections, independent of tracking, and reports
+purity, fragmentation and coverage for the raw tracks and for `cleanup -n 2`
+(see the module docstring for usage).
+
 ## Development
 
 ```bash

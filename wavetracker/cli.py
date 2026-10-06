@@ -95,6 +95,7 @@ def _progress() -> Progress:
         TimeRemainingColumn(),
         console=console,
         transient=False,
+        disable=not console.is_terminal,  # no redraw spam in logs/pipes
     )
 
 
