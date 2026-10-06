@@ -67,6 +67,18 @@ Progress = Callable[[str, int, int], None]
 # --- segments and frequency grouping ------------------------------------------------
 
 
+def survey_mask(
+    times: np.ndarray, track: ElectrodeTrack, cfg: PositionMergingConfig
+) -> np.ndarray:
+    """Frames with a valid electrode geometry within [t_start, t_end]."""
+    survey = track.valid(times)
+    if cfg.t_start is not None:
+        survey &= times >= cfg.t_start
+    if cfg.t_end is not None:
+        survey &= times <= cfg.t_end
+    return survey
+
+
 def make_segments(
     results: Results, in_survey: np.ndarray, cfg: PositionMergingConfig
 ) -> tuple[pd.DataFrame, np.ndarray]:
@@ -231,18 +243,20 @@ def _map(fn, items: list, n_jobs: int, stage: str, progress: Progress | None):
             if progress:
                 progress(stage, k + 1, len(items))
         return out
-    from concurrent.futures import ProcessPoolExecutor
+    from concurrent.futures import ProcessPoolExecutor, as_completed
     from multiprocessing import get_context
 
+    out = [None] * len(items)
     with ProcessPoolExecutor(
         max_workers=min(n_jobs, len(items)),
         mp_context=get_context("spawn"),
         initializer=_init_worker,
     ) as ex:
-        for k, res in enumerate(ex.map(fn, items)):
-            out.append(res)
+        futures = {ex.submit(fn, item): k for k, item in enumerate(items)}
+        for done, fut in enumerate(as_completed(futures), start=1):
+            out[futures[fut]] = fut.result()
             if progress:
-                progress(stage, k + 1, len(items))
+                progress(stage, done, len(items))
     return out
 
 
@@ -344,14 +358,8 @@ def merge_by_position(
             results.fund_v, results.sign_v, cfg.noise_quantile
         )
 
-    # survey frames: valid geometry within [t_start, t_end]
-    times = results.times
-    frame_pos = track.at(times)
-    survey = np.isfinite(frame_pos).all(axis=(1, 2))
-    if cfg.t_start is not None:
-        survey &= times >= cfg.t_start
-    if cfg.t_end is not None:
-        survey &= times <= cfg.t_end
+    frame_pos = track.at(results.times)
+    survey = survey_mask(results.times, track, cfg)
     survey_frames = np.flatnonzero(survey)
     if len(survey_frames) == 0:
         raise ValueError("No frames with valid electrode positions in the survey")

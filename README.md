@@ -60,6 +60,7 @@ Post-processing and tools:
 | command | purpose |
 |---|---|
 | `wavetracker cleanup DIR -n 2` | join/filter tracks, keep the N most prominent fish |
+| `wavetracker merge-by-position DIR -e electrodes.npz` | group track segments into fish by frequency and position (moving electrodes) |
 | `wavetracker concat DAY1 DAY2 … -o OUT` | concatenate consecutive recordings |
 | `wavetracker freq-analysis DIRS…` | top-N frequencies at fixed times of day |
 | `wavetracker sorter DIR` | GUI for manual track correction (`--extra gui`) |
@@ -292,7 +293,7 @@ drift by > 2 Hz, i.e. that continue on a different fish, from 55 % to 19 %
 (median shift 2.4 → 0.9 Hz), while 89 % of the detections are still tracked.
 Identities can still jump between fish 3–4 Hz apart after gaps; treat
 identities as track segments and merge them into fish with additional
-information (e.g. position).
+information, e.g. position (`merge-by-position`, below).
 
 Observations on a 16 min, 2-channel, ~40-fish recording (Iriri 2026):
 
@@ -311,6 +312,127 @@ Observations on a 16 min, 2-channel, ~40-fish recording (Iriri 2026):
 * Recorders that split a take into several files may write the take's start
   time into every file; thunderlab then refuses to read them as one
   recording. Concatenate them first (e.g. with `audioio`).
+
+## Post-processing: merging by position (moving electrodes)
+
+With moving electrodes (e.g. a boat towing an electrode pair over resting
+fish) each fish is in range only during passes, identities are track
+segments, and the neighbouring fish is often only 3–4 Hz away, so frequency
+alone cannot tell whether two segments separated by a gap are one fish.
+Resting fish keep their position, which survives the gaps.
+`merge-by-position` groups segments into fish by frequency *and* a source
+position estimated from the amplitudes (`sign_v`) and relative signs
+(`cplx_v`) of the detections and the electrode positions:
+
+```bash
+wavetracker merge-by-position results/take -e electrodes.npz -c cfg.yaml -j 16
+```
+
+```yaml
+position_merging:
+  reference: 2       # channel i = electrode i - electrode 2 (two tips, hull reference)
+  water_depth: 1.2   # insulating bottom [m]; omit for a half-space
+```
+
+**Electrode positions** (`-e`) are on the recording's time base: an `.npz`
+with `time` (T,) [s] and `positions` (T, E, 3) [m] (or `x`, `y`, `z`, each
+(T, E)), or a `.csv` with columns `time, x0, y0, z0, x1, …`. `z` is relative
+to the water surface (negative under water). NaN rows mark times without a
+valid geometry; the survey consists of the frames with valid positions
+within `t_start`–`t_end`. Channels (columns of `sign_v`) are electrode
+pairs: `reference: k` (channel i = electrode i − k, skipping k),
+`channel_pairs: [[0, 2], [1, 2]]`, or neither (each electrode against a
+distant ground).
+
+**Noise floor**: per channel and frequency, a low percentile
+(`noise_quantile`, 10 %) of the power spectrum over survey frames, computed
+from the recording in `wavetracker.json` (or `--recording`) with the
+spectrogram's scaling, and cached as `noise_floor.npz`
+(`--noise-floor` reuses it). Without a recording it is estimated from the
+detection powers near the fish's frequency (less reliable).
+
+**Method** (`wavetracker.position`):
+
+1. Segments: identities split at gaps > `split_gap` (3 s); segments
+   < `min_segment_duration` (3 s) or < `min_segment_detections` (15) are
+   clutter.
+2. Candidates: segments, strongest first, join the candidate with the
+   closest median frequency within `freq_tolerance` (1 Hz) unless they
+   overlap one of its segments by > `max_overlap` (1 s).
+3. Fit (per candidate, in parallel): forward model
+   (`efield.SourceModel`) = a horizontal line of 10 monopoles over 0.2 m
+   (Chen et al. 2005; `model: dipole` for a point dipole) in water between
+   an insulating surface and optional insulating bottom (method of images,
+   `n_images`). Parameters x, y, depth, heading, log strength. Residuals:
+   log amplitudes with the noise floor (`log sqrt(V² + n²) − log A`);
+   relative sign of channel pairs above `strong_snr`; censored survey frames
+   (no detection within `censor_freq_tolerance` of the fish) must not be
+   predicted above the fish's lowest detected level; distance to the nearest
+   electrode-pair midpoint at a detection ≤ `detection_range` (2.5 m); depth
+   ≤ `max_depth`. Soft-L1 least squares with an analytic Jacobian; a
+   multi-start grid (7 × 7 positions over ±1.5 m, 8 headings, 2 depths) on
+   every 4th frame, the 6 best distinct basins refined on all data. A
+   competing basin > 0.5 m away within Δcost 25 marks the fit ambiguous.
+4. Position check: segments whose mean |log residual| (channels above the
+   noise floor) exceeds max(`resid_abs`, `resid_rel` × median), or that lie
+   beyond the detection range of the fitted fish, are split off, regrouped
+   by frequency and fitted as new candidates.
+5. Standard errors: delete-a-block jackknife over 8 blocks of the
+   candidate's detection times.
+6. Merge: candidates without temporal overlap whose segments agree in
+   frequency within `merge_freq_tolerance` (1.5 Hz) and whose positions
+   agree within `merge_se_factor` (2) combined standard errors are refitted
+   jointly; the merge is kept if the joint fit passes the check of step 4.
+   The standard error is at least `merge_min_se` (0.1 m), and for ambiguous
+   fits at least the spread of the competing basins.
+
+**Output** (in the results directory; `ident_v.npy` is not changed):
+
+| file | content |
+|---|---|
+| `fish_v.npy` | fish of each detection (NaN: clutter, outside the survey, untracked) |
+| `fish.csv` | per fish: `freq`, `x`, `y`, `depth`, `heading` [deg], `log_strength`, jackknife `se_major`/`se_minor`/`se_angle`/`se_x`/`se_y`, `ambiguous`, `alt_x`/`alt_y`/`alt_dcost`, `basin_radius`, `r_fit`, `cost`, `n_det`, `n_cens`, `n_segments`, `at_bound`, `at_depth_cap`, `t_first`/`t_last`, `segments` |
+| `fish_segments.csv` | per segment: identity, time span, frequency, clutter flag, fish, residual and distance under its fish |
+| `position_merging.json` | counts, timings and the configuration used |
+
+**Assumptions and limits**:
+
+* Fish are stationary during the survey (resting). Moving fish are split
+  into several "fish" or poorly fitted.
+* Line-of-monopoles and point-dipole models are valid beyond about one body
+  length; closer passes are fitted with systematic errors. The model's
+  heading has a near-180° ambiguity (the field of a reversed fish is almost
+  the same), which shifts the position by a few cm.
+* Surface and bottom are taken as flat insulating planes in homogeneous
+  water; rocks, banks and conductivity gradients are not modelled.
+* Depth is weakly constrained (trades off against strength and horizontal
+  distance) and often ends at `max_depth`; positions of fish seen in a
+  single weak pass are often ambiguous (mirror positions across the path).
+* Frequency must stay within `merge_freq_tolerance` between segments of one
+  fish; rises are handled by the tracker's stitching, not here.
+* Electrode positions must be accurate to well below the fish–electrode
+  distance; timing errors between video and audio shift fish along the path.
+
+**Validation** (`tests/test_position_merging.py`, synthetic boat survey
+from `wavetracker.synthetic.boat_survey`/`simulate_survey`: 10 × 6 m, lanes
+1 m apart, 6 fish; one identity joins two fish 3 Hz apart and 6 m apart,
+two fish are 0.5 Hz apart, one drifts 2.5 Hz over the survey; 20 clutter
+tracks): every fish ends up in exactly one group, no two fish are merged,
+the 3-Hz pair is separated, clutter stays unassigned; position errors 1–10
+mm, ≈ 6 cm when the heading-reversed solution wins; depth within 0.05 m.
+Runtime: ~15 s with a reduced start grid on 4 processes, ~45 s with the
+default grid (~20 s per candidate of ~300 detections on one core).
+
+On the Iriri recording (Site A, 6 min survey, 2 channels, 107 600 survey
+detections; 30 processes, 12.5 min): 2614 segments (1585 clutter, 79 % of
+the survey detections kept), 361 frequency candidates, 140 segments split
+off, 102 merges → 352 groups with 85 000 detections. Most groups are small:
+118 have < 50 detections (92 % ambiguous), 85 have ≥ 300 (12–26 %
+ambiguous); `r_fit` is about 0.5, as for the catalogue-based fits of the
+habitat-mapping project (other detections, same model). Of 59 of its fish
+matched by frequency, 14 agree within 0.15 m, the median distance is
+0.85 m. Treat small and ambiguous groups as unresolved fragments rather
+than fish.
 
 ## Known limitations / next steps
 

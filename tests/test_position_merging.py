@@ -79,6 +79,46 @@ def test_noise_floor_from_detections_and_recording(tmp_path):
     )
 
 
+def test_cli(tmp_path):
+    from typer.testing import CliRunner
+
+    from wavetracker.cli import app
+    from wavetracker.config import Config
+
+    rng = np.random.default_rng(1)
+    t, pos = boat_survey(length=6.0, width=3.0, lane_spacing=1.0)
+    fish = [StationaryFish(600.0, 2.0, 1.2, 0.4), StationaryFish(603.0, 4.5, 2.0, 0.3)]
+    sd = simulate_survey(fish, t, pos, n_clutter=5, rng=rng)
+    sd.results.save(tmp_path)
+    np.savez(tmp_path / "electrodes.npz", time=sd.time, positions=sd.positions)
+    cfg = Config()
+    pm = cfg.position_merging
+    pm.reference, pm.water_depth = 2, 1.2
+    pm.start_grid, pm.start_headings, pm.start_depths = 4, 4, [0.4]
+    cfg.save(tmp_path / "cfg.yaml")
+    res = CliRunner().invoke(
+        app,
+        [
+            "merge-by-position",
+            str(tmp_path),
+            "-e",
+            str(tmp_path / "electrodes.npz"),
+            "-c",
+            str(tmp_path / "cfg.yaml"),
+            "-j",
+            "1",
+        ],
+    )
+    assert res.exit_code == 0, res.output
+    fish_v, table = load_fish(tmp_path)
+    assert len(table) == 2
+    for k, fi in enumerate(fish):
+        lab = fish_v[sd.fish == k]
+        assert len(set(lab[np.isfinite(lab)])) == 1
+        row = table.iloc[int(np.nanmax(lab))]
+        assert np.hypot(row.x - fi.x, row.y - fi.y) < 0.15
+
+
 FISH = [
     StationaryFish(600.0, 2.0, 1.5, 0.4, 0.3),
     StationaryFish(603.0, 7.5, 4.5, 0.5, 2.0),  # 3 Hz from fish 0

@@ -381,6 +381,161 @@ def cleanup(
     )
 
 
+@app.command("merge-by-position")
+def merge_by_position_cmd(
+    results_dir: Annotated[Path, typer.Argument(exists=True, file_okay=False)],
+    electrodes: Annotated[
+        Path,
+        typer.Option(
+            "--electrodes",
+            "-e",
+            exists=True,
+            dir_okay=False,
+            help="Electrode positions over time (.npz: time, positions (T, E, 3); "
+            ".csv: time, x0, y0, z0, x1, ...) in s and m, z <= 0 under water.",
+        ),
+    ],
+    config: ConfigOpt = None,
+    reference: Annotated[
+        int | None,
+        typer.Option(
+            help="Reference electrode: channel i = electrode i - reference "
+            "(default: from config)."
+        ),
+    ] = None,
+    recording: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            help="Recording for the noise floor (default: the input in "
+            "wavetracker.json, if it exists).",
+        ),
+    ] = None,
+    noise_floor: Annotated[
+        Path | None,
+        typer.Option(
+            exists=True,
+            dir_okay=False,
+            help="Noise floor .npz (freqs, power (F, channels)) instead of the recording.",
+        ),
+    ] = None,
+    t_start: Annotated[
+        float | None, typer.Option(help="Survey start \\[s] (default: config).")
+    ] = None,
+    t_end: Annotated[
+        float | None, typer.Option(help="Survey end \\[s] (default: config).")
+    ] = None,
+    jobs: Annotated[
+        int | None,
+        typer.Option("--jobs", "-j", help="Parallel processes (default: all CPUs)."),
+    ] = None,
+    verbose: Verbose = 0,
+) -> None:
+    """Group track segments into fish by frequency and position (moving electrodes).
+
+    For stationary fish recorded with moving electrodes: identities are split
+    into segments, grouped by frequency, localised from their amplitudes and
+    relative signs, split where the position does not fit, and merged where
+    frequency and position agree. Writes fish_v.npy (fish of each detection),
+    fish.csv, fish_segments.csv and position_merging.json; ident_v is kept.
+    """
+    from .position.electrodes import ElectrodeTrack
+    from .position.merging import merge_by_position, survey_mask
+    from .position.noise import DetectionNoiseFloor, SpectrumNoiseFloor
+    from .results import Results
+
+    _setup_logging(verbose)
+    cfg = Config.load(config).position_merging
+    if reference is not None:
+        cfg.reference = reference
+    if t_start is not None:
+        cfg.t_start = t_start
+    if t_end is not None:
+        cfg.t_end = t_end
+    results = Results.load(results_dir)
+    track = ElectrodeTrack.load(electrodes, cfg.reference, cfg.channel_pairs)
+
+    if noise_floor is not None:
+        floor = SpectrumNoiseFloor.load(noise_floor)
+    else:
+        rec = recording
+        if rec is None and isinstance(results.meta.get("input"), str):
+            rec = Path(results.meta["input"])
+        if rec is not None and rec.exists():
+            survey = survey_mask(results.times, track, cfg)
+            nfft = results.meta.get("config", {}).get("spectrogram", {}).get("nfft")
+            if nfft is None:
+                raise typer.BadParameter("nfft unknown: no config in wavetracker.json")
+            with console.status(f"noise floor from {rec}"):
+                floor = SpectrumNoiseFloor.from_recording(
+                    rec,
+                    results.times[survey],
+                    int(nfft),
+                    channels=results.meta.get("channels"),
+                    quantile=cfg.noise_quantile,
+                    max_freq=float(results.fund_v.max()) + 10.0,
+                )
+            floor.save(results_dir / "noise_floor.npz")
+        else:
+            console.print(
+                "[yellow]No recording found: noise floor estimated from the "
+                "detections (pass --recording or --noise-floor)."
+            )
+            floor = DetectionNoiseFloor(
+                results.fund_v, results.sign_v, cfg.noise_quantile
+            )
+
+    t0 = time.perf_counter()
+    with _progress() as progress:
+        tasks: dict[str, int] = {}
+
+        def update(stage: str, done: int, total: int) -> None:
+            if stage not in tasks:
+                tasks[stage] = progress.add_task(stage, total=total, speed="")
+            progress.update(tasks[stage], completed=done, total=total)
+
+        out = merge_by_position(
+            results, track, cfg, noise_floor=floor, n_jobs=jobs, progress=update
+        )
+    out.save(results_dir)
+    st = out.stats
+    console.print(
+        f"{st['segments']} segments ({st['clutter_segments']} clutter) → "
+        f"{st['initial_candidates']} frequency candidates, "
+        f"{st['segments_split_off']} segments split off, {st['merges']} merges → "
+        f"[bold]{st['fish']} fish[/] ({st['ambiguous']} ambiguous) in "
+        f"{time.perf_counter() - t0:.0f}s"
+    )
+    table = Table(title=str(results_dir), title_justify="left")
+    for col in (
+        "fish",
+        "f [Hz]",
+        "x [m]",
+        "y [m]",
+        "depth [m]",
+        "SE [m]",
+        "ambiguous",
+        "r",
+        "segments",
+        "detections",
+    ):
+        table.add_column(col, justify="right")
+    for row in out.fish.itertuples():
+        table.add_row(
+            f"{row.fish}",
+            f"{row.freq:.1f}",
+            f"{row.x:.2f}",
+            f"{row.y:.2f}",
+            f"{row.depth:.2f}",
+            f"{row.se_major:.2f}",
+            "yes" if row.ambiguous else "",
+            f"{row.r_fit:.2f}",
+            f"{row.n_segments}",
+            f"{row.n_det}",
+        )
+    Console().print(table)
+
+
 @app.command()
 def concat(
     day_folders: Annotated[list[Path], typer.Argument(exists=True, file_okay=False)],
