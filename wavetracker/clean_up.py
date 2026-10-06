@@ -136,7 +136,7 @@ def get_valid_ids_by_freq_dist(
         return None, old_valid_ids
 
     # TODO: min_freq & max_freq + buffer (.cfg)
-    convolve_f = np.arange(400, 1200, 0.1)
+    convolve_f = np.arange(300, 1200, 0.1)
     g = gauss(convolve_f, ff, sigma=2 * f_th, size=1, norm=True)
     kde = np.sum(g, axis=0)
 
@@ -409,6 +409,10 @@ def connect_with_overlap(fund_v, ident_v, valid_v, idx_v, times, time_tol=5*60, 
         connections_candidates.append([id0, id1, mean_freq_dist])
 
     connections_candidates = np.array(connections_candidates)
+
+    # Return guard in case no pairs passed the initial overlap checks
+    if len(connections_candidates) == 0:
+        return ident_v
 
     for pair_no in np.argsort(connections_candidates[:, 2]):
         id0 = connections_candidates[pair_no, 0]

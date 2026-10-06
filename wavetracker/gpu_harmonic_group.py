@@ -452,10 +452,7 @@ def harmonic_group_pipeline(spec_arr, spec_freq_arr, cfg, verbose=0):
         (spec_arr.shape[1], spec_arr.shape[0]), dtype=np.float32
     )
     spec[:, :] = spec_arr.transpose()[:, :]
-    log_spec = cuda.pinned_array_like(spec)
-    log_spec = np.zeros_like(
-        log_spec
-    )  # TODO: This is now a numpy array again, not a pinned array
+    log_spec = np.zeros_like(spec)
 
     # GPU arrays
     g_spec = cuda.to_device(spec)
@@ -540,13 +537,9 @@ def harmonic_group_pipeline(spec_arr, spec_freq_arr, cfg, verbose=0):
     ### peak detection ###
     if verbose >= 4:
         t0 = time.time()
-    # CPU arrays (pinned)
-    peaks = cuda.pinned_array_like(log_spec)
-    peaks = np.zeros_like(
-        peaks
-    )  # TODO: This might be a numpy array again, not a pinned array, maybe delete this line
-    troughs = cuda.pinned_array_like(log_spec)
-    troughs = np.zeros_like(troughs)  # TODO: Same
+    # CPU arrays
+    peaks = np.zeros_like(log_spec)
+    troughs = np.zeros_like(log_spec)
 
     spec_freq = cuda.pinned_array_like(spec_freq_arr)
     spec_freq[:] = spec_freq_arr[:]
@@ -628,43 +621,53 @@ def harmonic_group_pipeline(spec_arr, spec_freq_arr, cfg, verbose=0):
     )
     value[:, :] = np.zeros_like(value)
 
-    # GPU arrays
-    g_check_freqs = cuda.to_device(check_freqs)
-    g_out = cuda.device_array(
-        shape=(check_freqs.shape[0], check_freqs.shape[1], max_group_size),
-        dtype=int,
-    )
-    g_value = cuda.device_array(
-        shape=(check_freqs.shape[0], check_freqs.shape[1]), dtype=float
-    )
-    #
-    # kernel setup & execution
-    tpb = (1, 1)
-    bpg = (
-        g_check_freqs.shape[0] // tpb[0] + 1,
-        g_check_freqs.shape[1] // tpb[1] + 1,
-    )
+    # a snippet with zero detected peaks yields a zero-width check_freqs array;
+    # launching the kernel over it crashes with CUDA_ERROR_ILLEGAL_ADDRESS, so skip it
+    if check_freqs.shape[1] > 0:
+        # GPU arrays; log_spec/spec_freq/peaks are read-only inputs, transferred
+        # explicitly to avoid numba's implicit host-array writeback on kernel args
+        g_check_freqs = cuda.to_device(check_freqs)
+        g_log_spec = cuda.to_device(log_spec)
+        g_spec_freq = cuda.to_device(spec_freq)
+        g_peaks = cuda.to_device(peaks)
+        # out must start zeroed: get_group() checks "if out[i] != 0" and uses
+        # unwritten slots as an array index, so uninitialized device memory
+        # here causes wild out-of-bounds reads
+        g_out = cuda.to_device(out)
+        g_value = cuda.device_array(
+            shape=(check_freqs.shape[0], check_freqs.shape[1]), dtype=float
+        )
+        #
+        # kernel setup & execution
+        tpb = (1, 1)
+        bpg = (
+            g_check_freqs.shape[0] // tpb[0] + 1,
+            g_check_freqs.shape[1] // tpb[1] + 1,
+        )
 
-    # print(g_check_freqs.shape)
-    get_harmonic_groups_coordinator[bpg, tpb](
-        g_check_freqs,
-        log_spec,
-        spec_freq,
-        peaks,
-        g_out,
-        g_value,
-        int64(cfg.harmonic_groups["min_group_size"]),
-        float64(cfg.harmonic_groups["max_freq_tol"]),
-        float64(cfg.harmonic_groups["mains_freq"]),
-        float64(cfg.harmonic_groups["mains_freq_tol"]),
-    )
+        # print(g_check_freqs.shape)
+        get_harmonic_groups_coordinator[bpg, tpb](
+            g_check_freqs,
+            g_log_spec,
+            g_spec_freq,
+            g_peaks,
+            g_out,
+            g_value,
+            int64(cfg.harmonic_groups["min_group_size"]),
+            float64(cfg.harmonic_groups["max_freq_tol"]),
+            float64(cfg.harmonic_groups["mains_freq"]),
+            float64(cfg.harmonic_groups["mains_freq_tol"]),
+        )
 
-    # copy GPU -> CPU
-    g_out.copy_to_host(out)
-    g_value.copy_to_host(value)
-    del g_check_freqs
-    del g_out
-    del g_value
+        # copy GPU -> CPU
+        g_out.copy_to_host(out)
+        g_value.copy_to_host(value)
+        del g_check_freqs
+        del g_log_spec
+        del g_spec_freq
+        del g_peaks
+        del g_out
+        del g_value
 
     if verbose >= 4:
         print(f"get harmonic groups: {time.time() - t0:.4f}s")
