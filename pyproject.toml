@@ -1,98 +1,73 @@
 [project]
 name = "wavetracker"
-version = "0.2.0"
-description = "Track the frequencies of wave-type electric fish on electric recordings."
-license = {text = "GPL-3.0-or-later"}
+version = "0.3.0"
+description = "Detect and track the EOD frequencies of wave-type electric fish in long multi-electrode recordings."
 readme = "README.md"
+license = "GPL-3.0-or-later"
 requires-python = ">=3.11"
 authors = [
-    {name = "Till Raab"}, 
-    {name = "Joerg Henninger"},
+    { name = "Till Raab" },
+    { name = "Joerg Henninger" },
 ]
 maintainers = [
-    {name = "Patrick Weygoldt", email = "patrick.weygoldt@uni-tuebingen.de"},
-    {name = "Jan Benda", email = "jan.benda@uni-tuebingen.de"}
+    { name = "Patrick Weygoldt", email = "patrick.weygoldt@uni-tuebingen.de" },
+    { name = "Jan Benda", email = "jan.benda@uni-tuebingen.de" },
 ]
-keywords = [ "bioinformatics", "biology", "ridge extraction", "spectrogram"]
+keywords = ["electric fish", "spectrogram", "tracking", "neuroethology"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
 dependencies = [
-    "numba (>=0.61.0,<0.62.0)",
-    "torch (>=2.5.1,<3.0.0)",
-    "pyqt5 (>=5.15.11,<6.0.0)",
-    "pyqtgraph (>=0.13.7,<0.14.0)",
-    "rich (>=13.9.4,<14.0.0)",
-    "matplotlib (>=3.10.0,<4.0.0)",
-    "ruamel-yaml (>=0.18.10,<0.19.0)",
-    "scipy (>=1.15.1,<2.0.0)",
-    "thunderfish @ git+https://github.com/janscience/thunderfish",
-    "thunderlab @ git+https://github.com/bendalab/thunderlab",
-    "typer (>=0.15.1,<0.16.0)",
-    "audioio @ git+https://github.com/bendalab/audioio",
-    "plottools @ git+https://github.com/bendalab/plottools",
-    "ipython>=9.4.0",
+    "numpy>=1.26",
+    "scipy>=1.12",
+    "numba>=0.60",
+    "torch>=2.4",
+    "thunderlab>=1.5",
+    "audioio>=2.5",
+    "matplotlib>=3.8",
+    "pandas>=2.1",
+    "pyyaml>=6.0",
+    "rich>=13.7",
+    "typer>=0.12",
 ]
+
+[project.optional-dependencies]
+gui = ["pyqt5>=5.15"]
 
 [project.scripts]
-EODsorter = "wavetracker.EODsorter:main"
-trackingGUI = "wavetracker.trackingGUI:main"
-wavetracker = "wavetracker.wavetracker:app"
-dataviewer = "wavetracker.dataviewer:main_UI"
-cleanup = "wavetracker.clean_up:cli"
-cleandatastructure = "wavetracker.clean_data_sidsel:main"
+wavetracker = "wavetracker.cli:app"
 
+[project.urls]
+Repository = "https://github.com/weygoldt/wavetracker"
+Paper = "https://doi.org/10.3389/fnint.2022.965211"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+]
 
 [build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["wavetracker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: long-running tests",
+    "data: tests that need the recordings on /mnt/data2 (skipped if absent)",
+]
 
 [tool.ruff]
-line-length = 79
+line-length = 88
+target-version = "py311"
+# Legacy GUI and contributed post-processing scripts are kept as-is for now.
+extend-exclude = ["wavetracker/gui", "wavetracker/postprocessing", "tests/legacy_tracking.py"]
 
 [tool.ruff.lint]
-select = [
-    "W", # pycodestyle
-    "E", # pycodestyle
-    "F", # Pyflakes
-    "UP", # pyupgrade
-    "B", # flake8-bugbear
-    "SIM", # flake8-simplify
-    "ANN", # flake8-annotations
-    "A", # flake8-builtins
-    "COM", # flake8-commas
-    "C4", # flake8-comprehensions
-    "EM", # flake8-error-msg
-    "EXE", # flake8-executable
-    "ICN", # flake8-import-conventions
-    "PT", # flake8-pytest-style
-    "Q", # flake8-quotes
-    "RET", # flake8-return
-    "SIM", # flake8-simplify
-    "ARG", # flake8-unused-arguments
-    "PTH", # flake8-use-pathlib
-    "PD", # pandas-vet
-    "PL", # pylint
-    "TRY", # tryceratops
-    "NPY", # numpy-specific
-    "I", # isort
-    "C90", # complexity (McCabe)
-    "N", # pep8-naming
-    "D", # pydocstyle
-]
-
-ignore = [
-    "COM812", # missing trailing comma
-    "TD002", # missing todo author
-    "TD003", # missing todo link
-]
-
-[tool.ruff.lint.pydocstyle]
-convention = "numpy"
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-line-ending = "auto"
-
-[tool.poetry.group.dev.dependencies]
-ruff = "^0.9.3"
-ipython = "^8.31.0"
-
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "NPY", "RUF"]
+ignore = ["E501"]

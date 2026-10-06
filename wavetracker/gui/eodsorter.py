@@ -636,7 +636,7 @@ class MainWindow(QMainWindow):
         package_dir = os.path.dirname(os.path.abspath(__file__))
 
         self.Act_undo = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "undo.png")),
+            QIcon(os.path.join(package_dir, "icons", "undo.png")),
             "&Undo",
             self,
         )
@@ -652,7 +652,7 @@ class MainWindow(QMainWindow):
 
         # self.Act_interactive_sel = QAction(QIcon('./gui_sym/sel.png'), 'Create new frequencies', self)
         self.Act_interactive_sel = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "sel.png")),
+            QIcon(os.path.join(package_dir, "icons", "sel.png")),
             "Create new frequencies",
             self,
         )
@@ -664,7 +664,7 @@ class MainWindow(QMainWindow):
 
         # self.Act_interactive_con = QAction(QIcon('./gui_sym/conn.png'), 'Connect', self)
         self.Act_interactive_con = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "conn.png")),
+            QIcon(os.path.join(package_dir, "icons", "conn.png")),
             "Connect",
             self,
         )
@@ -674,7 +674,7 @@ class MainWindow(QMainWindow):
 
         # self.Act_interactive_GrCon = QAction(QIcon('./gui_sym/GrCon.png'), 'Group Connect', self)
         self.Act_interactive_GrCon = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "GrCon.png")),
+            QIcon(os.path.join(package_dir, "icons", "GrCon.png")),
             "Group Connect",
             self,
         )
@@ -683,7 +683,7 @@ class MainWindow(QMainWindow):
 
         # self.Act_interactive_newassign = QAction(QIcon('./gui_sym/newassign.png'), 'Re-assign', self)
         self.Act_interactive_newassign = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "newassign.png")),
+            QIcon(os.path.join(package_dir, "icons", "newassign.png")),
             "Re-assign",
             self,
         )
@@ -692,7 +692,7 @@ class MainWindow(QMainWindow):
 
         # self.Act_interactive_del = QAction(QIcon('./gui_sym/del.png'), 'Delete Trace', self)
         self.Act_interactive_del = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "del.png")),
+            QIcon(os.path.join(package_dir, "icons", "del.png")),
             "Delete Trace",
             self,
         )
@@ -701,7 +701,7 @@ class MainWindow(QMainWindow):
 
         # self.Act_interactive_GrDel = QAction(QIcon('./gui_sym/GrDel.png'), 'Group Delete', self)
         self.Act_interactive_GrDel = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "GrDel.png")),
+            QIcon(os.path.join(package_dir, "icons", "GrDel.png")),
             "Group Delete",
             self,
         )
@@ -710,7 +710,7 @@ class MainWindow(QMainWindow):
 
         # self.Act_interactive_reset = QAction(QIcon('./gui_sym/reset.png'), 'Reset Variables', self)
         self.Act_interactive_reset = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "reset.png")),
+            QIcon(os.path.join(package_dir, "icons", "reset.png")),
             "Reset Variables",
             self,
         )
@@ -719,7 +719,7 @@ class MainWindow(QMainWindow):
 
         # self.Act_interactive_cut = QAction(QIcon('./gui_sym/cut.png'), 'Cut trace', self)
         self.Act_interactive_cut = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "cut.png")),
+            QIcon(os.path.join(package_dir, "icons", "cut.png")),
             "Cut trace",
             self,
         )
@@ -728,14 +728,14 @@ class MainWindow(QMainWindow):
 
         # self.Act_interactive_AutoSort = QAction(QIcon('./gui_sym/auto.png'), 'Auto Connect', self)
         self.Act_interactive_AutoSort = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "auto.png")),
+            QIcon(os.path.join(package_dir, "icons", "auto.png")),
             "Auto Connect",
             self,
         )
         self.Act_interactive_AutoSort.setEnabled(False)
         # self.Act_interactive_ManualSort = QAction(QIcon('./gui_sym/manuel.png'), 'Manual Connect', self)
         self.Act_interactive_ManualSort = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "manuel.png")),
+            QIcon(os.path.join(package_dir, "icons", "manuel.png")),
             "Manual Connect",
             self,
         )
@@ -743,7 +743,7 @@ class MainWindow(QMainWindow):
 
         # self.Act_interactive_zoom_out = QAction(QIcon('./gui_sym/zoomout.png'), 'Zoom -', self)
         self.Act_interactive_zoom_out = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "zoomout.png")),
+            QIcon(os.path.join(package_dir, "icons", "zoomout.png")),
             "Zoom -",
             self,
         )
@@ -752,7 +752,7 @@ class MainWindow(QMainWindow):
 
         # self.Act_interactive_zoom_in = QAction(QIcon('./gui_sym/zoomin.png'), 'zoom +', self)
         self.Act_interactive_zoom_in = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "zoomin.png")),
+            QIcon(os.path.join(package_dir, "icons", "zoomin.png")),
             "zoom +",
             self,
         )
@@ -761,7 +761,7 @@ class MainWindow(QMainWindow):
 
         # self.Act_interactive_zoom_home = QAction(QIcon('./gui_sym/zoom_home.png'), 'zoom Home', self)
         self.Act_interactive_zoom_home = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "zoom_home.png")),
+            QIcon(os.path.join(package_dir, "icons", "zoom_home.png")),
             "zoom Home",
             self,
         )
@@ -770,7 +770,7 @@ class MainWindow(QMainWindow):
 
         # self.Act_save_plt = QAction(QIcon('./gui_sym/saveplot.png'), 'save current plot', self)
         self.Act_save_plt = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "saveplot.png")),
+            QIcon(os.path.join(package_dir, "icons", "saveplot.png")),
             "save current plot",
             self,
         )
@@ -779,7 +779,7 @@ class MainWindow(QMainWindow):
 
         # self.Act_interactive_zoom = QAction(QIcon('./gui_sym/zoom.png'), 'Zoom select', self)
         self.Act_interactive_zoom = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "zoom.png")),
+            QIcon(os.path.join(package_dir, "icons", "zoom.png")),
             "Zoom select",
             self,
         )
@@ -790,7 +790,7 @@ class MainWindow(QMainWindow):
 
         # self.Act_fine_spec = QAction(QIcon('./gui_sym/spec_fine.png'), 'Show fine Spectrogram', self)
         self.Act_fine_spec = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "spec_fine.png")),
+            QIcon(os.path.join(package_dir, "icons", "spec_fine.png")),
             "Show fine Spectrogram",
             self,
         )
@@ -798,7 +798,7 @@ class MainWindow(QMainWindow):
         self.Act_fine_spec.triggered.connect(self.Mfine_spec)
         # self.Act_norm_spec = QAction(QIcon('./gui_sym/spec_roght.png'), 'Show rough Spectrogram', self)
         self.Act_norm_spec = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "spec_roght.png")),
+            QIcon(os.path.join(package_dir, "icons", "spec_roght.png")),
             "Show rough Spectrogram",
             self,
         )
@@ -807,7 +807,7 @@ class MainWindow(QMainWindow):
 
         # self.Act_arrowkeys = QAction(QIcon('./gui_sym/arrowkeys.png'), 'Activate arrorw keys', self)
         self.Act_arrowkeys = QAction(
-            QIcon(os.path.join(package_dir, "gui_sym", "arrowkeys.png")),
+            QIcon(os.path.join(package_dir, "icons", "arrowkeys.png")),
             "Activate arrorw keys",
             self,
         )

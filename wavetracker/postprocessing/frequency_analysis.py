@@ -603,8 +603,11 @@ Examples:
         help="Output file or directory (default: parent directory of data)"
     )
     
-    args = parser.parse_args()
-    
+    run(parser.parse_args())
+
+
+def run(args):
+    """Run the analysis; `args` holds the attributes defined by `main`'s parser."""
     # Expand glob patterns
     expanded_folders = []
     for folder_pattern in args.folders:

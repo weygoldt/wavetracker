@@ -63,7 +63,7 @@ def load_config(config_path=None, folder=None):
     
     if not config_file:
         # Look in script directory
-        script_dir = Path(__file__).parent.parent
+        script_dir = Path(__file__).parent
         candidate = script_dir / 'cleanup_config_default.cfg'
         if candidate.exists():
             config_file = candidate

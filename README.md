@@ -1,175 +1,184 @@
-# Wavetracker
+# wavetracker
 
-[![Published in Frontiers in Integrative Neuroscience](https://img.shields.io/badge/Published%20in-Frontiers%20in%20Integrative%20Neuroscience-blue?style=for-the-badge)](https://www.frontiersin.org/articles/10.3389/fnint.2022.965211/full)
+[![Frontiers in Integrative Neuroscience](https://img.shields.io/badge/Published%20in-Frontiers%20in%20Integrative%20Neuroscience-blue)](https://doi.org/10.3389/fnint.2022.965211)
 
-**Wavetracker** is a Python toolkit for analysing multi-electrode recordings of *wave-type electric fish*.  
-It automatically detects individual fish, follows their electric-organ discharges (EODs) through time, and provides downstream utilities for curation and visualisation.  
+Detect and track the EOD frequencies of individual **wave-type electric fish**
+in long, multi-electrode recordings.
 
----
+The pipeline:
 
-### Key Concepts
+1. **Spectrogram** – one-sided power spectral densities of every electrode,
+   computed block-wise on the GPU with PyTorch (CPU works too).
+2. **Harmonic groups** – peaks of the electrode-summed spectrum are grouped
+   into harmonic series; each group is one fish (parallel numba code).
+3. **Tracking** – detections are linked into identities using their
+   frequency and their amplitude pattern across electrodes
+   ([Raab et al. 2022](https://doi.org/10.3389/fnint.2022.965211)).
 
-| Term | Meaning |
-|------|---------|
-| *Wave-type fish* | Species that emit a continuous, quasi-sinusoidal EOD. |
-| *EOD frequency* | Fundamental frequency of the electric discharge; uniquely identifies a fish over short time scales. |
-
----
+It runs at several hundred times realtime on an 11-channel, 20 kHz recording
+(a 4 h recording takes about a minute on an RTX 4080, mostly disk IO).
 
 ## Installation
 
-> **Requirements**: Python 3.9 – 3.12, Git ≥ 2.20, and ideally a virtual-environment manager (`venv`, Conda, Poetry, …).
-
-<details>
-<summary><strong>macOS / Linux</strong></summary>
+Requires Python ≥ 3.11. With [uv](https://docs.astral.sh/uv/):
 
 ```bash
-# clone the development branch
-git clone -b dev https://github.com/weygoldt/wavetracker.git
+git clone https://github.com/weygoldt/wavetracker.git
 cd wavetracker
-
-# (recommended) create & activate venv
-python -m venv wavetracker_env
-source wavetracker_env/bin/activate
-
-# editable install
-pip install -e .
+uv sync                 # add --extra gui for the EOD sorter GUI
+uv run wavetracker --help
 ```
-</details>
 
-<details>
-<summary><strong>Windows (venv or Conda)</strong></summary>
+or with pip into an existing environment: `pip install -e ".[gui]"`.
 
-```powershell
-git clone -b dev https://github.com/weygoldt/wavetracker.git
-cd wavetracker
+PyTorch from PyPI ships with CUDA support on Linux; the GPU is used
+automatically when available (`--device cpu` forces the CPU).
 
-# ---- venv ----
-python -m venv wavetracker_env
-.\wavetracker_env\Scripts\Activate.ps1
-pip install -e .
-
-# ---- or Conda ----
-conda create -n wavetracker python=3.11
-conda activate wavetracker
-pip install -e .
-```
-</details>
-
-Verify:
+## Usage
 
 ```bash
-python -c "import importlib.metadata; print(importlib.metadata.version('wavetracker'))"
+wavetracker info  /data/2022-05-10-10_00                 # channels, rate, duration
+wavetracker run   /data/2022-05-10-10_00 -o results/0510 # detect + track
+wavetracker run   /data/2022-05-10-10_00 -o test --start 3600 --duration 300
+wavetracker summary results/0510                          # table of identities
+wavetracker plot    results/0510 -o tracks.png            # tracks on spectrogram
+wavetracker track   results/0510 -c my_config.yaml        # re-track only
 ```
 
----
+`run` accepts a single file, a fishgrid recording directory
+(`traces-grid*.raw` + `fishgrid.cfg`) or a directory with a sequence of audio
+files (read as one continuous recording via
+[thunderlab](https://github.com/bendalab/thunderlab)). Several inputs can be
+given at once; each gets a subdirectory of `--output`. Existing results are
+skipped unless `-f/--overwrite` is given.
 
-## Data Organisation
+Post-processing and tools:
 
-Place recordings in date-stamped session folders:
+| command | purpose |
+|---|---|
+| `wavetracker cleanup DIR -n 2` | join/filter tracks, keep the N most prominent fish |
+| `wavetracker concat DAY1 DAY2 … -o OUT` | concatenate consecutive recordings |
+| `wavetracker freq-analysis DIRS…` | top-N frequencies at fixed times of day |
+| `wavetracker sorter DIR` | GUI for manual track correction (`--extra gui`) |
+| `wavetracker synth out.wav -n 4` | synthetic recording with ground truth |
+| `wavetracker config [FILE]` | print or write the default configuration |
 
-```
-dataset/
-└── 2024-01-01_12-34/
-    └── recordings/
-        ├── 2024-01-01_12-34.wav
-        ├── 2024-01-01_12-35.wav
-        └── …
-```
+### Configuration
 
-Wavetracker will recurse through `recordings/` and assemble a continuous stream from sequential `.wav` files.
+All parameters live in one YAML file; `wavetracker config cfg.yaml` writes the
+defaults, pass your edited copy with `-c cfg.yaml`. Unknown keys are an error.
+The most relevant parameters:
 
----
+| parameter | default | meaning |
+|---|---|---|
+| `spectrogram.nfft` | 32768 | FFT window (0.61 Hz resolution at 20 kHz) |
+| `spectrogram.overlap_frac` | 0.9 | window overlap (0.16 s frame step) |
+| `spectrogram.exclude_channels` | `[]` | broken/noisy electrodes to ignore (`run -x 8`) |
+| `harmonic_groups.min_freq` / `max_freq` | 400 / 1200 | fundamental frequency range [Hz] |
+| `harmonic_groups.low_thresh_factor` / `high_thresh_factor` | 6 / 10 | peak thresholds in units of the noise std |
+| `harmonic_groups.exclusive_harmonics` | `core` | `all` reproduces the original grouping (see below) |
+| `tracking.freq_tolerance` | 2.5 | max. frequency jump between linked detections [Hz] |
+| `tracking.max_dt` | 10 | max. gap between linked detections [s] |
+| `output.save_fine_spec` | false | also store the full-resolution spectrogram |
 
-## End-to-end Pipeline
+### Output
 
-Run the full tracker with one command:
+Each results directory holds plain NumPy files, compatible with the
+post-processing tools and the sorter GUI:
 
-```bash
-wavetracker /path/to/dataset
-```
-
-The script executes three stages:
-
-1. **Spectrogram construction** – Each channel is converted to a high-resolution time–frequency representation (STFT).  
-2. **Harmonic-group detection** – Using the [`thunderfish`](https://github.com/bendalab/thunderfish) library, harmonic stacks that belong to individual fish are located in the spectrogram.  
-3. **Identity tracking** – Fundamental frequencies are extracted and stitched through time; electrode-array amplitude “signatures” help maintain identity when frequencies cross.
-
-Outputs (`*.npy`) are written to a single results folder:
-
-| File | Description |
-|------|-------------|
-| `fund_v.npy` | Vector of fundamental frequencies. |
-| `idx_v.npy`  | Time-index vector for each detection. |
-| `ident_v.npy`| Identity label for every detection. |
-| `times.npy`  | Absolute time axis corresponding to indices. |
-
----
-
-## Post-processing Tools
-
-| Tool | Purpose | Invocation |
-|------|---------|------------|
-| `cleanup`   | Remove obvious false positives / correct tracking glitches. | `cleanup  path/to/output` |
-| `EODsorter` | GUI for manual inspection and fine correction of tracks.   | `EODsorter path/to/output` |
-
----
-
-## Example Analysis
-
-### Plot EOD frequency traces
+| file | content |
+|---|---|
+| `fund_v.npy` | fundamental frequency of every detection [Hz] |
+| `idx_v.npy` | frame index of every detection (into `times`) |
+| `ident_v.npy` | identity of every detection (NaN = unassigned) |
+| `sign_v.npy` | power at the fundamental on each electrode, `(n, channels)` |
+| `times.npy` | time of each frame, relative to the recording start [s] |
+| `sparse_spectra.npy`, `sparse_freq.npy`, `sparse_time.npy` | overview spectrogram (freq × time, power) |
+| `fine_spec.npy`, `fine_freqs.npy`, `fine_times.npy` | optional full spectrogram (time × freq, `np.load(..., mmap_mode="r")`) |
+| `wavetracker.json` | input, config, estimated thresholds, timings, version |
 
 ```python
-import numpy as np, matplotlib.pyplot as plt
+from wavetracker.results import Results
 
-f0 = np.load('fund_v.npy',   allow_pickle=True)
-idx = np.load('idx_v.npy',   allow_pickle=True)
-ids = np.load('ident_v.npy', allow_pickle=True)
-t   = np.load('times.npy',   allow_pickle=True)
-
-for fish in np.unique(ids[~np.isnan(ids)]):
-    mask = ids == fish
-    plt.plot(t[idx[mask]], f0[mask], '.', label=f'Fish {int(fish)}')
-
-plt.xlabel('Time [s]'); plt.ylabel('Frequency [Hz]')
-plt.legend(); plt.show()
+r = Results.load("results/0510")
+for fish in r.ids():
+    m = r.ident_v == fish
+    t, f = r.times[r.idx_v[m]], r.fund_v[m]
 ```
 
-### Visualise a fine spectrogram
+### Python API
 
 ```python
-import numpy as np, matplotlib.pyplot as plt
-from thunderlab.powerspectrum import decibel
+from wavetracker.config import Config
+from wavetracker.pipeline import detect, track_results
 
-freqs   = np.load('fine_freqs.npy',        allow_pickle=True)
-times   = np.load('fine_times.npy',        allow_pickle=True)
-shape   = np.load('fine_spec_shape.npy',   allow_pickle=True)
-spec_mm = np.memmap('fine_spec.npy', dtype='float', mode='r', shape=shape, order='F')
-
-# display first 20 min, 0–1.2 kHz
-fmask = (freqs >= 0) & (freqs <= 1200)
-tmask = (times >= 0) & (times <= 1200)
-S_db  = decibel(spec_mm[fmask][:, tmask])
-
-plt.pcolormesh(times[tmask], freqs[fmask], S_db, cmap='viridis')
-plt.xlabel('Time [s]'); plt.ylabel('Frequency [Hz]')
-plt.title('Fine spectrogram (dB)')
-plt.colorbar(label='Power [dB]')
-plt.show()
+cfg = Config.load("cfg.yaml")            # or Config()
+out = detect("/data/rec", "results/rec", cfg, start=0, duration=600)
+track_results(out.results, cfg)
+out.results.save("results/rec")
 ```
 
----
+`wavetracker.synthetic` generates recordings of fish with known frequency
+traces and `wavetracker.evaluation.evaluate` scores results against them
+(precision, recall, identity coverage and purity).
 
+## Differences to the original implementation
 
-## Practical Tips
+The detection and tracking algorithms follow Raab et al. (2022). The tracker
+is a numba port that reproduces the original `freq_tracking_v6` assignments
+exactly (verified in the test-suite), while being roughly 25× faster and
+linear in recording length. Deliberate changes:
 
-* **Memory** – Long, high-sample-rate files produce large spectrograms and memmaps; adjust window length and overlap if you run into RAM limits.  
-* **Validation** – Automatic tracking is robust but not perfect; use `cleanup` and `EODsorter` for publication-quality datasets.  
-* **Windows specifics** – If PowerShell blocks `Activate.ps1`, run  
-  `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned`.
+* **Harmonic exclusivity** – the original rejects a fish if *any* of its up to
+  8 harmonics coincides with a peak of an already accepted fish. Because the
+  harmonic tolerance grows with the harmonic number, high harmonics of one
+  fish regularly capture a harmonic of another, which makes that fish
+  disappear. By default only the `min_group_size` lowest harmonics are now
+  exclusive (this still rejects in-range harmonics of other fish as ghosts).
+  `exclusive_harmonics: all` restores the original behaviour.
+* **Sub-bin frequencies** – fundamentals are refined by parabolic
+  interpolation (`refine_frequency`), giving ~0.01 Hz precision instead of the
+  0.61 Hz bin spacing.
+* **Seamless blocks** – blocks are aligned to the STFT frame grid, so there
+  are no edge artifacts or duplicate frames between blocks.
+* Spectra are true PSDs (mlab `scale_by_freq` convention). They are 3 dB
+  above the old hand-calibrated scale, which does not affect the
+  noise-relative thresholds.
 
----
+## Known limitations / next steps
 
-Questions or pull requests? Visit the [GitHub issues page](https://github.com/weygoldt/wavetracker).  
+* Tracking fragments a fish during fast frequency excursions (rises) whose
+  jump exceeds `freq_tolerance`; `cleanup` is currently needed to rejoin them.
+* The amplitude-error distribution used for tracking is estimated once from
+  the first `3 * max_dt` seconds only.
+* Detection thresholds are estimated once from the first block and frozen
+  (as in the original), so slow changes in noise over days are not followed.
+* Fish within ±1 Hz of a mains harmonic (multiples of 50 Hz) are not detected.
+* Stationary interference combs look exactly like fish to the harmonic-group
+  detector. In the 2022 tube-competition recordings electrode 8 picks up a
+  95.4 Hz comb (lines at 477, 573, 669, 764, 859 Hz); exclude it with `-x 8`.
+  An automatic filter (zero frequency variance, single-electrode spatial
+  pattern) would be a good addition.
+* `tracking._assign` keeps a quirk of the original that compares a detection
+  offset with a frame count (marked `QUIRK`); fixing it changes results.
+* Tracking runs on the CPU; for weeks of data with many fish it should be
+  chunked/parallelized.
 
-*Happy tracking!* 🐟⚡
+## Development
+
+```bash
+uv sync --all-extras
+uv run pytest            # tests using recordings in /mnt/data2 are skipped if absent
+uv run ruff check . && uv run ruff format .
+```
+
+`tests/legacy_tracking.py` holds the original tracker as a reference for the
+equivalence tests. `wavetracker/gui` and `wavetracker/postprocessing` contain
+older and contributed code that is wrapped by the CLI but not yet refactored.
+
+## Citation
+
+Raab T, Madhav MS, Jayakumar RP, Henninger J, Cowan NJ, Benda J (2022).
+*Advances in non-invasive tracking of wave-type electric fish in natural and
+laboratory settings.* Front. Integr. Neurosci. 16:965211.
+[doi:10.3389/fnint.2022.965211](https://doi.org/10.3389/fnint.2022.965211)

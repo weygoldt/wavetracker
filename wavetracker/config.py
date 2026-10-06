@@ -1,173 +1,126 @@
-import os
-import sys
+"""Typed configuration for the wavetracker pipeline.
 
-import ruamel.yaml
+All parameters live in a single :class:`Config` made of one dataclass per
+pipeline stage. A config can be written to / read from YAML; unknown keys are
+rejected so typos do not silently fall back to defaults.
+"""
 
+from __future__ import annotations
 
-class Configuration:
-    """
-    Configuration class providing meta-parameters for the different processing steps in the wavetracker pipeline.
-    The Object attributes refelct the differen analysis stages, e.g. "spectrogram", "harmonix_groups", and "tracking".
-    """
+from dataclasses import asdict, dataclass, field, fields
+from pathlib import Path
+from typing import Any
 
-    def __init__(
-        self,
-        folder: str = None,
-        file: str = None,
-        verbose: int = 0,
-        logger=None,
-    ) -> None:
-        """
-        Constructs all necessary parameters and attributes to generate/provide a configuration file for the
-        wavetracker-package.
-
-        Parameters
-        ----------
-        folder
-        file
-        verbose
-        logger
-        """
-        if folder == None:
-            # folder = os.path.dirname(os.path.abspath(__file__))
-            folder = os.path.dirname(os.path.abspath(__file__))
-        self.file = file
-        self.verbose = verbose
-        if not file:
-            self.find_config(folder)
-        else:
-            self.file = file
-
-        self.basic = {}
-        self.spectrogram = {}
-        self.raw = {}
-        self.harmonic_groups = {}
-        self.tracking = {}
-
-        if self.verbose >= 1:
-            # print(f'{"Config file from":^25}: {os.path.realpath(self.file)}.')
-            # if logger:
-            logger.info(f"Config file from: {os.path.realpath(self.file)}.")
-
-        self.yaml = ruamel.yaml.YAML()
-        with open(self.file) as f:
-            self.cfg = self.yaml.load(f)
-            self.dicts = list(self.cfg.keys())
-            for dict in self.cfg:
-                setattr(self, dict, self.cfg[dict])
-            f.close()
-
-    def __repr__(self) -> str:
-        rep_list = []
-        for dict in self.dicts:
-            rep_list.append(f"{dict}:")
-            rep_list.extend(
-                list(
-                    f"  {k: <16}:  {v}"
-                    for k, v in zip(
-                        getattr(self, dict).keys(),
-                        getattr(self, dict).values(),
-                        strict=False,
-                    )
-                )
-            )
-        return "\n".join(rep_list)
-
-    def find_config(self, folder) -> None:
-        """
-        Search for a .yaml file that contains configuration data. First look in input folder, second in the data derectory,
-        and last in the programm directory. In none is available, create the standard config file with standard settings
-        (as define in fn "create_standard_cfg_file").
-
-        Parameters
-        ----------
-            folder : str
-                Folder where to search first for the .yaml file containing the configuration data.
-        """
-        folder = os.path.realpath(folder)
-        folder = os.path.normpath(folder)
-        search_folders = [
-            folder,
-            os.sep.join(folder.split(os.sep)[:-1]),
-            os.path.dirname(os.path.abspath(__file__)),
-        ]
-
-        found = False
-        for search_folder in search_folders:
-            for dirpath, dirnames, filenames in os.walk(
-                search_folder, topdown=True
-            ):
-                for filename in [f for f in filenames if f.endswith(".yaml")]:
-                    self.file = os.path.join(dirpath, filename)
-                    found = True
-                    break
-                if found:
-                    break
-            if found:
-                break
-        if not found:
-            self.file = create_standard_cfg_file()
-
-    @property
-    def keys(self) -> list:
-        """
-        Get the Object attributes, representing the differen analysis stages in the wavetracker pipeline.
-        """
-        return self.dicts
-
-    def save(self) -> None:
-        """
-        Translate object attributes to a dictonary which will be saved in its original loading path.
-        """
-        for dict in self.cfg:
-            self.cfg[dict] = getattr(self, dict)
-        with open(self.file, "w") as f:
-            self.yaml.dump(self.cfg, f)
-            f.close()
+import yaml
 
 
-def create_standard_cfg_file(folder="."):
-    """
-    Create a standard configuration file, when none could be found to be loaded.
-
-    Parameters
-    ----------
-        folder : str
-            Folder where the generated config-file shall be saved.
-    """
-    yaml_str = """\
-    # Basic configureation
-    basic:
-      project: wavetracker
-      version: 0.1
-
-    # Data processing configuration
-    data_processing:
-      snippet_size: 2**21
-      channels: -1
-
-    # add another comment
-    spectrogram:
-      snippet: 2**21
-      nfft: 2**15
-      overlap_frac: 0.9
-    """
-    yaml = ruamel.yaml.YAML()  # defaults to round-trip if no parameters given
-    code = yaml.load(yaml_str)
-
-    file = os.path.join(folder, "cfg.yaml")
-    yaml.dump(code, file)
-    return file
+@dataclass
+class SpectrogramConfig:
+    nfft: int = 2**15
+    """Samples per FFT window (frequency resolution = rate / nfft)."""
+    overlap_frac: float = 0.9
+    """Overlap of consecutive FFT windows (0-1)."""
+    block_duration: float = 60.0
+    """Seconds of data processed per block on the device."""
+    exclude_channels: list[int] = field(default_factory=list)
+    """Electrodes to ignore (e.g. broken ones picking up interference)."""
 
 
-def main():
-    if len(sys.argv) > 1:
-        folder = sys.argv[1]
-    else:
-        folder = "."
-    c = Configuration(folder)
-    exit(c.save())
+@dataclass
+class HarmonicGroupsConfig:
+    min_freq: float = 400.0
+    """Lowest fundamental frequency considered [Hz]."""
+    max_freq: float = 1200.0
+    """Highest fundamental frequency considered [Hz]."""
+    low_threshold: float | None = None
+    """Peak detection threshold [dB]; estimated from the noise floor if None."""
+    high_threshold: float | None = None
+    """Threshold for 'good' peaks [dB]; estimated from the noise floor if None."""
+    low_thresh_factor: float = 6.0
+    """Multiple of the noise std used for the low threshold."""
+    high_thresh_factor: float = 10.0
+    """Multiple of the noise std used for the high threshold."""
+    max_freq_tol: float = 1.0
+    """Tolerance when matching a peak to a harmonic, in fundamental units [Hz]."""
+    mains_freq: float = 50.0
+    """Mains frequency; its harmonics are excluded [Hz]."""
+    mains_freq_tol: float = 1.0
+    """Tolerance around mains harmonics [Hz]."""
+    max_divisor: int = 3
+    """Peaks are tested as harmonics 1..max_divisor of a fundamental."""
+    min_group_size: int = 3
+    """Number of lowest harmonics that must all be present."""
+    min_good_peak_power: float = -100.0
+    """Minimum power of a fundamental [dB]."""
+    exclusive_harmonics: str = "core"
+    """Which peaks of an accepted fish are unavailable to further fish:
+    "core" (its `min_group_size` lowest harmonics) or "all" (every harmonic,
+    as in Raab et al. 2022; drops fish whose harmonics coincide by chance)."""
+    max_groups_per_frame: int = 64
+    """Upper bound on fish detected in a single spectrum."""
+    refine_frequency: bool = True
+    """Refine fundamentals with parabolic interpolation (sub-bin precision)."""
 
 
-if __name__ == "__main__":
-    main()
+@dataclass
+class TrackingConfig:
+    freq_tolerance: float = 2.5
+    """Maximum frequency difference of two detections to be linked [Hz]."""
+    max_dt: float = 10.0
+    """Maximum time difference of two detections to be linked [s]."""
+
+
+@dataclass
+class OutputConfig:
+    save_fine_spec: bool = False
+    """Store the full-resolution summed spectrogram (large!)."""
+    fine_spec_max_freq: float = 2000.0
+    """Upper frequency limit of the stored fine spectrogram [Hz]."""
+    sparse_spec_max_freq: float = 2000.0
+    """Upper frequency limit of the overview spectrogram [Hz]."""
+    sparse_spec_time_bins: int = 4000
+    """Approximate number of time bins of the overview spectrogram."""
+    sparse_spec_freq_res: float = 2.0
+    """Approximate frequency resolution of the overview spectrogram [Hz]."""
+
+
+@dataclass
+class Config:
+    spectrogram: SpectrogramConfig = field(default_factory=SpectrogramConfig)
+    harmonic_groups: HarmonicGroupsConfig = field(default_factory=HarmonicGroupsConfig)
+    tracking: TrackingConfig = field(default_factory=TrackingConfig)
+    output: OutputConfig = field(default_factory=OutputConfig)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def to_yaml(self) -> str:
+        return yaml.safe_dump(self.to_dict(), sort_keys=False)
+
+    def save(self, path: str | Path) -> None:
+        Path(path).write_text(self.to_yaml())
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any] | None) -> Config:
+        data = data or {}
+        sections = {f.name: f for f in fields(cls)}
+        unknown = set(data) - set(sections)
+        if unknown:
+            raise ValueError(f"Unknown config section(s): {sorted(unknown)}")
+        kwargs = {}
+        for name, f in sections.items():
+            section_cls = f.default_factory  # type: ignore[misc]
+            values = data.get(name) or {}
+            valid = {sf.name for sf in fields(section_cls)}
+            bad = set(values) - valid
+            if bad:
+                raise ValueError(f"Unknown key(s) in '{name}': {sorted(bad)}")
+            kwargs[name] = section_cls(**values)
+        return cls(**kwargs)
+
+    @classmethod
+    def load(cls, path: str | Path | None = None) -> Config:
+        """Load a YAML config; returns the defaults if `path` is None."""
+        if path is None:
+            return cls()
+        return cls.from_dict(yaml.safe_load(Path(path).read_text()))
