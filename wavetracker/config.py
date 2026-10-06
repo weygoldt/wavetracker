@@ -49,6 +49,10 @@ class HarmonicGroupsConfig:
     """Tolerance around mains harmonics [Hz]."""
     max_divisor: int = 3
     """Peaks are tested as harmonics 1..max_divisor of a fundamental."""
+    max_harmonics: int | None = None
+    """Cap on the harmonics collected per group. Without it the count is
+    max_freq / min_freq * min_group_size - 1, which explodes for wide
+    frequency ranges (e.g. 199 for 20-2000 Hz)."""
     min_group_size: int = 3
     """Number of lowest harmonics that must all be present."""
     min_good_peak_power: float = -100.0

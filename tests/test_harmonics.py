@@ -71,3 +71,13 @@ def test_frequency_range():
         cfg.high_thresh_factor * std,
     )
     np.testing.assert_allclose(det.freq, 811.7, atol=0.1)
+
+
+def test_max_harmonics_caps_wide_ranges():
+    from wavetracker.harmonics import n_harmonics
+
+    assert n_harmonics(HarmonicGroupsConfig()) == 8  # 1200 * 3 // 400 - 1
+    wide = HarmonicGroupsConfig(min_freq=20.0, max_freq=2000.0, min_group_size=2)
+    assert n_harmonics(wide) == 199
+    wide.max_harmonics = 10
+    assert n_harmonics(wide) == 10

@@ -299,10 +299,12 @@ class Detections:
 
 
 def n_harmonics(cfg: HarmonicGroupsConfig) -> int:
-    """Number of harmonics collected per group (as in the original code)."""
-    return max(
-        cfg.min_group_size, int(cfg.max_freq * cfg.min_group_size // cfg.min_freq) - 1
-    )
+    """Number of harmonics collected per group (as in the original code),
+    capped at `max_harmonics`."""
+    n = int(cfg.max_freq * cfg.min_group_size // cfg.min_freq) - 1
+    if cfg.max_harmonics is not None:
+        n = min(n, cfg.max_harmonics)
+    return max(cfg.min_group_size, n)
 
 
 def detect_harmonic_groups(
