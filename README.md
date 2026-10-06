@@ -9,6 +9,7 @@ The pipeline:
 
 1. **Spectrogram** – one-sided power spectral densities of every electrode,
    computed block-wise on the GPU with PyTorch (CPU works too).
+   Stationary interference combs are detected and removed per electrode.
 2. **Harmonic groups** – peaks of the electrode-summed spectrum are grouped
    into harmonic series; each group is one fish (parallel numba code).
 3. **Tracking** – detections are linked into identities using their
@@ -74,6 +75,7 @@ The most relevant parameters:
 | `spectrogram.nfft` | 32768 | FFT window (0.61 Hz resolution at 20 kHz) |
 | `spectrogram.overlap_frac` | 0.9 | window overlap (0.16 s frame step) |
 | `spectrogram.exclude_channels` | `[]` | broken/noisy electrodes to ignore (`run -x 8`) |
+| `interference.enabled` | true | remove interference combs (`run --no-interference`) |
 | `harmonic_groups.min_freq` / `max_freq` | 400 / 1200 | fundamental frequency range [Hz] |
 | `harmonic_groups.low_thresh_factor` / `high_thresh_factor` | 6 / 10 | peak thresholds in units of the noise std |
 | `harmonic_groups.exclusive_harmonics` | `core` | `all` reproduces the original grouping (see below) |
@@ -142,6 +144,7 @@ linear in recording length. Deliberate changes:
   number of fish. It now checks the target's frame. In practice this rarely
   matters (on a 4 h recording it assigns ~100 more detections and changes no
   existing assignment); `track(..., v6_compat=True)` reproduces the original.
+* **Interference removal** – new, see below.
 * **Sub-bin frequencies** – fundamentals are refined by parabolic
   interpolation (`refine_frequency`), giving ~0.01 Hz precision instead of the
   0.61 Hz bin spacing.
@@ -150,6 +153,39 @@ linear in recording length. Deliberate changes:
 * Spectra are true PSDs (mlab `scale_by_freq` convention). They are 3 dB
   above the old hand-calibrated scale, which does not affect the
   noise-relative thresholds.
+
+## Interference removal
+
+Electrical interference often forms a *comb* of persistent lines at
+consecutive multiples of a low fundamental (in the 2022 tube recordings:
+95.4 Hz on all electrodes, plus 25, 55.5, 100 and 125 Hz combs). Each tooth's
+harmonics are other teeth, so the harmonic-group detector cannot tell them
+from fish. `wavetracker.interference` removes them before the channels are
+summed. For every electrode and 60 s block it:
+
+1. estimates the persistent spectrum: the 20th percentile over time, then
+   the minimum over the last 5 blocks. A line must sit on the same bin for
+   5 minutes.
+2. finds lines ≥10 dB above a running-median noise baseline;
+3. searches them for combs: spacing 20–300 Hz, at least 4 *consecutive* teeth
+   within 0.3 Hz;
+4. subtracts a high level of each tooth (90th percentile + 3 dB, minimum over
+   the history) on that electrode.
+
+A fish is never a comb: its harmonics are spaced by its own fundamental
+(≥ `min_freq`), and sub-multiples of it match only every 2nd/3rd tooth. So a
+resting fish that is stable for hours and seen on a single electrode is kept
+(tested with synthetic data). Subtracting rather than notching keeps a fish
+visible while it passes a tooth, as long as it is stronger than the tooth.
+The remaining blind spot is a fish that is **weaker than a tooth and stays
+within ~1 Hz of it for 5+ minutes** on the same electrodes. At 0.6 Hz
+resolution the two cannot be separated.
+
+On the 4 h recording 2022-06-14 (no channel excluded) it removes all
+interference detections (4.1 → 2.0 detections per frame for two fish) without
+losing fish detections, and `cleanup -n 2` then recovers both fish with 96 %
+and 93 % coverage. The detected combs are listed in `wavetracker.json`
+(`interference_combs`). It costs ~40 ms per 60 s block.
 
 ## Known limitations / next steps
 
@@ -160,11 +196,12 @@ linear in recording length. Deliberate changes:
 * Detection thresholds are estimated once from the first block and frozen
   (as in the original), so slow changes in noise over days are not followed.
 * Fish within ±1 Hz of a mains harmonic (multiples of 50 Hz) are not detected.
-* Stationary interference combs look exactly like fish to the harmonic-group
-  detector. In the 2022 tube-competition recordings electrode 8 picks up a
-  95.4 Hz comb (lines at 477, 573, 669, 764, 859 Hz); exclude it with `-x 8`.
-  An automatic filter (zero frequency variance, single-electrode spatial
-  pattern) would be a good addition.
+* Interference that is a single stationary harmonic series with a
+  fundamental in the fish range (not a comb) is indistinguishable from a
+  resting fish and is not removed.
+* Subtracted comb teeth are floored at the persistent noise baseline, which
+  is a few dB below the median noise; they show as faint white lines in
+  spectrogram plots.
 * Tracking runs on the CPU; for weeks of data with many fish it should be
   chunked/parallelized.
 

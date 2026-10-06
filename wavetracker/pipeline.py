@@ -15,6 +15,7 @@ import torch
 from . import __version__
 from .config import Config
 from .harmonics import detect_harmonic_groups
+from .interference import CombCanceller
 from .io import FrameLayout, iter_blocks, open_recording, resolve_input
 from .results import Results
 from .spectrogram import (
@@ -151,6 +152,10 @@ def detect(
             np.save(output_dir / "fine_freqs.npy", freqs[:nf_fine])
             np.save(output_dir / "fine_times.npy", times)
 
+        canceller = (
+            CombCanceller(cfg.interference, freqs) if cfg.interference.enabled else None
+        )
+        comb_log: dict[float, dict] = {}
         low_th, high_th = hc.low_threshold, hc.high_threshold
         noise_std = None
         funds, idxs, signs = [], [], []
@@ -161,6 +166,16 @@ def detect(
             timings.read += t0 - t_read
 
             power = spectrogram(torch.from_numpy(block.data).to(dev, non_blocking=True))
+            if canceller is not None:
+                power = canceller(power)
+                for comb in canceller.combs:
+                    entry = comb_log.setdefault(
+                        round(comb.spacing, 1),
+                        {"blocks": set(), "channels": set(), "max_teeth": 0},
+                    )
+                    entry["blocks"].add(block.first_frame)
+                    entry["channels"].add(int(channels[comb.channel]))
+                    entry["max_teeth"] = max(entry["max_teeth"], len(comb.teeth))
             summed = power.sum(0)
             log_spec = decibel(summed)
             if low_th is None or high_th is None:
@@ -228,6 +243,14 @@ def detect(
         "frame_step": step / rate,
         "freq_resolution": float(freqs[1]),
         "noise_std": noise_std,
+        "interference_combs": {
+            f"{spacing:.1f}": {
+                "blocks": len(e["blocks"]),
+                "channels": sorted(e["channels"]),
+                "max_teeth": e["max_teeth"],
+            }
+            for spacing, e in sorted(comb_log.items())
+        },
         "low_threshold": low_th,
         "high_threshold": high_th,
         "config": cfg.to_dict(),

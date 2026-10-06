@@ -28,6 +28,24 @@ class Fish:
     """Standard deviation of the position random walk."""
     rises: list[tuple[float, float, float]] = field(default_factory=list)
     """(time [s], size [Hz], decay [s]) of rises."""
+    spread: float = 0.25
+    """Width of the amplitude falloff along the array (smaller: fewer
+    electrodes see the fish)."""
+
+
+@dataclass
+class Hum:
+    """Stationary interference comb: lines at k * spacing for k in teeth."""
+
+    spacing: float = 95.4
+    teeth: tuple[int, int] = (4, 30)
+    """First and last harmonic number."""
+    amplitude: float = 0.05
+    channel_gains: tuple[float, ...] | None = None
+    """Gain per channel (default: equal on all channels)."""
+    flutter: float = 0.05
+    """Relative amplitude fluctuation (random modulation on a ~1 min scale;
+    the 95.4 Hz hum in the 2022 tube recordings varies by ~0.4 dB)."""
 
 
 def _smooth_walk(
@@ -99,6 +117,7 @@ def random_fish(
 def synthesize(
     fish: list[Fish],
     duration: float,
+    hum: list[Hum] | None = None,
     rate: float = 20000.0,
     channels: int = 8,
     noise: float = 0.05,
@@ -126,7 +145,9 @@ def synthesize(
             1.2,
         )
         # amplitude decays with distance to each electrode
-        amp = fi.amplitude / (1.0 + ((electrodes[None, :] - pos[:, None]) / 0.25) ** 2)
+        amp = fi.amplitude / (
+            1.0 + ((electrodes[None, :] - pos[:, None]) / fi.spread) ** 2
+        )
         truth_f[k], truth_a[k] = f, amp
 
         phase = 2 * np.pi * np.cumsum(np.interp(t, truth_times, f)) / rate
@@ -137,6 +158,21 @@ def synthesize(
             data[:, c] += (wave * np.interp(t, truth_times, amp[:, c])).astype(
                 np.float32
             )
+
+    for h in hum or []:
+        gains = (
+            np.ones(channels)
+            if h.channel_gains is None
+            else np.asarray(h.channel_gains)
+        )
+        wave = np.zeros(n)
+        for k in range(h.teeth[0], h.teeth[1] + 1):
+            if k * h.spacing >= rate / 2:
+                break
+            wave += np.sin(2 * np.pi * k * h.spacing * t + rng.uniform(0, 2 * np.pi))
+        env = 1.0 + _smooth_walk(len(truth_times), h.flutter, int(60 * truth_rate), rng)
+        wave *= h.amplitude * np.interp(t, truth_times, env)
+        data += (wave[:, None] * gains[None, :]).astype(np.float32)
 
     return SyntheticRecording(data, rate, truth_times, truth_f, truth_a)
 

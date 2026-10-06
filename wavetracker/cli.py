@@ -162,6 +162,10 @@ def run(
     save_spec: Annotated[
         bool, typer.Option(help="Store the full-resolution spectrogram (large).")
     ] = False,
+    interference: Annotated[
+        bool | None,
+        typer.Option(help="Remove interference combs (default: from config, on)."),
+    ] = None,
     exclude: Annotated[
         list[int] | None,
         typer.Option(
@@ -183,6 +187,8 @@ def run(
         cfg.output.save_fine_spec = True
     if exclude:
         cfg.spectrogram.exclude_channels = sorted(set(exclude))
+    if interference is not None:
+        cfg.interference.enabled = interference
 
     jobs = [
         (p, output if len(inputs) == 1 else output / p.resolve().name) for p in inputs

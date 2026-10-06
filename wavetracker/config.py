@@ -63,6 +63,45 @@ class HarmonicGroupsConfig:
 
 
 @dataclass
+class InterferenceConfig:
+    """Removal of stationary interference combs (see wavetracker.interference)."""
+
+    enabled: bool = True
+    line_threshold: float = 10.0
+    """Persistent excess over the noise baseline for a line [dB]."""
+    persistence_quantile: float = 0.2
+    """Quantile over time defining the persistent spectrum (0.2: a line must
+    be present in >80% of a block's frames)."""
+    subtract_quantile: float = 0.9
+    """Quantile over time of a tooth's power that is subtracted."""
+    subtract_margin: float = 3.0
+    """Extra level added to the subtracted power [dB]."""
+    history_blocks: int = 5
+    """A line must be persistent at the same bin in this many consecutive
+    blocks (protects resting fish that slowly drift past a tooth)."""
+    baseline_width: int = 301
+    """Width of the running median giving the noise baseline [bins]."""
+    min_spacing: float = 20.0
+    """Lowest comb fundamental [Hz]."""
+    max_spacing: float = 300.0
+    """Highest comb fundamental [Hz]; must be well below the lowest fish
+    frequency, otherwise a fish's own harmonic series counts as a comb."""
+    min_run: int = 4
+    """Minimum number of consecutive teeth."""
+    tooth_tolerance: float = 0.3
+    """Maximum deviation of a tooth from k * spacing [Hz]."""
+    search_max_freq: float = 3000.0
+    """Combs are searched among lines below this frequency, then extended
+    to all lines [Hz]."""
+    max_line_freq: float = 10000.0
+    """Lines above this frequency are ignored [Hz]."""
+    min_frames: int = 30
+    """Blocks with fewer frames reuse the previous block's combs."""
+    frame_stride: int = 4
+    """Use every n-th frame to estimate the persistent spectrum (speed)."""
+
+
+@dataclass
 class TrackingConfig:
     freq_tolerance: float = 2.5
     """Maximum frequency difference of two detections to be linked [Hz]."""
@@ -87,6 +126,7 @@ class OutputConfig:
 @dataclass
 class Config:
     spectrogram: SpectrogramConfig = field(default_factory=SpectrogramConfig)
+    interference: InterferenceConfig = field(default_factory=InterferenceConfig)
     harmonic_groups: HarmonicGroupsConfig = field(default_factory=HarmonicGroupsConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
