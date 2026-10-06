@@ -22,7 +22,7 @@ the original implementation.
 from __future__ import annotations
 
 import numpy as np
-from numba import njit
+from numba import njit, prange
 
 from .config import TrackingConfig
 
@@ -64,7 +64,9 @@ def _amplitude_error_distribution(idx, nsign, frame_start, f0, f1, comp_range):
 
 
 @njit(cache=True)
-def _connections(fund, nsign, frame_start, f0, f1, comp_range, freq_tol, a_dist):
+def _connections(
+    fund, idx, nsign, frame_start, f0, f1, comp_range, freq_tol, tol0, tol_rate, a_dist
+):
     """Candidate links (a, b, error) for origins in frames [f0, f1), sorted by
     error; ties keep the (origin, target) order of the original error cube."""
     # First pass: count, second pass: fill.
@@ -72,7 +74,8 @@ def _connections(fund, nsign, frame_start, f0, f1, comp_range, freq_tol, a_dist)
     for i in range(f0, f1):
         for a in range(frame_start[i], frame_start[i + 1]):
             for b in range(frame_start[i + 1], frame_start[i + comp_range + 1]):
-                if abs(fund[a] - fund[b]) < freq_tol:
+                df = abs(fund[a] - fund[b])
+                if df < freq_tol and df < tol0 + tol_rate * (idx[b] - idx[a]):
                     n += 1
     ca = np.empty(n, dtype=np.int64)
     cb = np.empty(n, dtype=np.int64)
@@ -83,7 +86,7 @@ def _connections(fund, nsign, frame_start, f0, f1, comp_range, freq_tol, a_dist)
         for a in range(frame_start[i], frame_start[i + 1]):
             for b in range(frame_start[i + 1], frame_start[i + comp_range + 1]):
                 df = abs(fund[a] - fund[b])
-                if df < freq_tol:
+                if df < freq_tol and df < tol0 + tol_rate * (idx[b] - idx[a]):
                     if n_dist > 0:
                         rel_a = (
                             A_WEIGHT
@@ -265,7 +268,7 @@ def _assign(
 
 
 @njit(cache=True)
-def _track(fund, idx, nsign, comp_range, freq_tol, v6_compat):
+def _track(fund, idx, nsign, comp_range, freq_tol, tol0, tol_rate, v6_compat):
     n_frames = idx[-1] + 4 * comp_range + 2
     frame_start = np.searchsorted(idx, np.arange(n_frames + 1))
     start = idx[0]
@@ -284,12 +287,15 @@ def _track(fund, idx, nsign, comp_range, freq_tol, v6_compat):
             continue
         ca, cb, _ = _connections(
             fund,
+            idx,
             nsign,
             frame_start,
             s + 1,
             s + 2 * comp_range,
             comp_range,
             freq_tol,
+            tol0,
+            tol_rate,
             a_dist,
         )
         tmp = _tmp_identities(idx, fund, ca, cb, lo, hi, n_window_frames, s)
@@ -309,7 +315,17 @@ def _track(fund, idx, nsign, comp_range, freq_tol, v6_compat):
                         ident[lo + j] = next_identity
                 next_identity += 1
         ca, cb, _ = _connections(
-            fund, nsign, frame_start, s, s + comp_range, comp_range, freq_tol, a_dist
+            fund,
+            idx,
+            nsign,
+            frame_start,
+            s,
+            s + comp_range,
+            comp_range,
+            freq_tol,
+            tol0,
+            tol_rate,
+            a_dist,
         )
         next_identity = _assign(
             ident,
@@ -329,12 +345,55 @@ def _track(fund, idx, nsign, comp_range, freq_tol, v6_compat):
     return ident
 
 
-def normalize_signatures(sign_v: np.ndarray) -> np.ndarray:
-    """Scale each detection's electrode powers to the range 0..1."""
+def normalize_signatures(sign_v: np.ndarray, feature: str = "minmax") -> np.ndarray:
+    """Electrode amplitude pattern of each detection.
+
+    "minmax": powers scaled to 0..1 per detection (original). With two
+    electrodes this degenerates to [0, 1] / [1, 0].
+    "db": powers in dB relative to the detection's mean over electrodes; with
+    two electrodes this is their level ratio, which changes smoothly when
+    fish or electrodes move.
+    """
+    if feature == "db":
+        db = 10.0 * np.log10(np.maximum(sign_v, 1e-30))
+        return db - db.mean(axis=1, keepdims=True)
+    if feature != "minmax":
+        raise ValueError(f"amplitude_feature must be 'minmax' or 'db', not {feature!r}")
     lo = sign_v.min(axis=1, keepdims=True)
     hi = sign_v.max(axis=1, keepdims=True)
     with np.errstate(invalid="ignore", divide="ignore"):
         return (sign_v - lo) / (hi - lo)
+
+
+@njit(cache=True, parallel=True)
+def _support(fund, idx, window, df):
+    """Number of other detections within +-`window` frames and +-`df` Hz."""
+    n = fund.shape[0]
+    frame_start = np.searchsorted(idx, np.arange(idx[-1] + 2))
+    out = np.zeros(n, dtype=np.int64)
+    for i in prange(n):
+        f0 = max(idx[i] - window, 0)
+        f1 = min(idx[i] + window + 1, idx[-1] + 1)
+        c = 0
+        for j in range(frame_start[f0], frame_start[f1]):
+            if j != i and abs(fund[j] - fund[i]) <= df:
+                c += 1
+        out[i] = c
+    return out
+
+
+def support(fund_v, idx_v, times, window: float, df: float) -> np.ndarray:
+    """For each detection, the number of other detections within `window`
+    seconds and `df` Hz (idx_v must be sorted)."""
+    if len(fund_v) == 0:
+        return np.zeros(0, dtype=np.int64)
+    w = max(1, int(np.round(window / (times[1] - times[0]))))
+    return _support(
+        np.ascontiguousarray(fund_v, dtype=np.float64),
+        np.ascontiguousarray(idx_v, dtype=np.int64),
+        w,
+        float(df),
+    )
 
 
 def track(
@@ -374,15 +433,26 @@ def track(
         return ident_v
     if np.any(np.diff(idx_v) < 0):
         raise ValueError("idx_v must be sorted")
+    if cfg.min_support > 0:  # isolated detections are not tracked
+        valid &= (
+            support(fund_v, idx_v, times, cfg.support_window, cfg.support_freq)
+            >= cfg.min_support
+        )
+        if valid.sum() < 2:
+            return ident_v
     comp_range = int(np.floor(cfg.max_dt / (times[1] - times[0])))
     if comp_range < 1:
         raise ValueError("max_dt must be larger than the frame interval")
     ident = _track(
         np.ascontiguousarray(fund_v[valid], dtype=np.float64),
         np.ascontiguousarray(idx_v[valid], dtype=np.int64),
-        np.ascontiguousarray(normalize_signatures(sign_v[valid]), dtype=np.float64),
+        np.ascontiguousarray(
+            normalize_signatures(sign_v[valid], cfg.amplitude_feature), dtype=np.float64
+        ),
         comp_range,
         float(cfg.freq_tolerance),
+        np.inf if cfg.gap_tolerance is None else float(cfg.gap_tolerance),
+        float(cfg.gap_tolerance_rate) * (times[1] - times[0]),
         v6_compat,
     )
     ident_v[valid] = np.where(ident >= 0, ident, np.nan)

@@ -30,6 +30,12 @@ def test_synthetic_end_to_end(synthetic_wav, tmp_path, device):
     assert score.purity > 0.98
     assert all(f.freq_error < 0.2 for f in score.fish)
 
+    r = out.results
+    assert r.cplx_v is not None and r.cplx_v.shape == r.sign_v.shape
+    # |cplx|^2 is the stored power (no interference in synthetic data)
+    np.testing.assert_allclose(np.abs(r.cplx_v) ** 2, r.sign_v, rtol=1e-3)
+    assert Results.load(tmp_path).cplx_v.dtype == np.complex64
+
     fine = np.load(tmp_path / "fine_spec.npy", mmap_mode="r")
     assert fine.shape == (
         len(out.results.times),

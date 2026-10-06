@@ -87,6 +87,9 @@ The most relevant parameters:
 | `harmonic_groups.exclusive_harmonics` | `core` | `all` reproduces the original grouping (see below) |
 | `tracking.freq_tolerance` | 2.5 | max. frequency jump between linked detections [Hz] |
 | `tracking.max_dt` | 10 | max. gap between linked detections [s] |
+| `tracking.gap_tolerance` / `gap_tolerance_rate` | none / 0 | gap-dependent frequency tolerance `tol + rate * gap` (dense populations) |
+| `tracking.amplitude_feature` | `minmax` | electrode pattern in the link error; `db` (level ratios) for few electrodes |
+| `tracking.min_support` | 0 | only track detections with ≥ n neighbours within `support_window` s and `support_freq` Hz |
 | `stitching.enabled` | true | join fragments across rises, dropouts and double detections |
 | `stitching.max_dropout` | 900 | longest gap bridged when nothing else is at that frequency [s] |
 | `output.save_fine_spec` | false | also store the full-resolution spectrogram |
@@ -102,6 +105,7 @@ post-processing tools and the sorter GUI:
 | `idx_v.npy` | frame index of every detection (into `times`) |
 | `ident_v.npy` | identity of every detection (NaN = unassigned) |
 | `sign_v.npy` | power at the fundamental on each electrode, `(n, channels)` |
+| `cplx_v.npy` | complex spectrum at the fundamental on each electrode (`abs(cplx_v)**2 == sign_v`); the phase difference gives the relative sign of electrodes: `np.angle(cplx_v[:, 1] * np.conj(cplx_v[:, 0]))` |
 | `times.npy` | time of each frame, relative to the recording start [s] |
 | `sparse_spectra.npy`, `sparse_freq.npy`, `sparse_time.npy` | overview spectrogram (freq × time, power) |
 | `fine_spec.npy`, `fine_freqs.npy`, `fine_times.npy` | optional full spectrogram (time × freq, `np.load(..., mmap_mode="r")`) |
@@ -265,12 +269,30 @@ harmonic_groups:
   high_thresh_factor: 5.0  # the defaults (6/10) miss most fish
   min_group_size: 2      # fish often show only two harmonics
   max_harmonics: 10      # otherwise ~200 harmonics per candidate
+tracking:
+  min_support: 3         # isolated noise detections bridge neighbouring fish
+  amplitude_feature: db  # min-max patterns are meaningless with 2 electrodes
+  gap_tolerance: 0.5     # allowed frequency jump grows with the gap:
+  gap_tolerance_rate: 0.1  # 0.5 Hz + 0.1 Hz/s (capped at freq_tolerance)
 stitching:
   max_dropout: 60.0
+  baseline_tolerance: 1.0  # neighbouring fish can be 3 Hz apart
+  rise_baseline_tolerance: 2.0
+  dropout_tolerance: 0.5
+  overlap_tolerance: 1.0
 output:
   save_fine_spec: true
   fine_spec_max_freq: 2050.0
 ```
+
+The tracking and stitching settings matter when neighbouring fish are only
+a few Hz apart. On the Iriri recording (identities ≥ 30 s; shift of the
+10th-percentile frequency in 20 s windows) they reduced identities that
+drift by > 2 Hz, i.e. that continue on a different fish, from 55 % to 19 %
+(median shift 2.4 → 0.9 Hz), while 89 % of the detections are still tracked.
+Identities can still jump between fish 3–4 Hz apart after gaps; treat
+identities as track segments and merge them into fish with additional
+information (e.g. position).
 
 Observations on a 16 min, 2-channel, ~40-fish recording (Iriri 2026):
 
@@ -281,6 +303,9 @@ Observations on a 16 min, 2-channel, ~40-fish recording (Iriri 2026):
   is often absent while the 3rd is present (odd-harmonic waveforms), and the
   detector requires harmonics 1..`min_group_size` to all be present.
 * Broadband noise (boat motor, contact) produces short clutter tracks.
+* The relative sign of the electrodes (from `cplx_v`) is bimodal as
+  expected for a dipole field: 86 % of strong detections at 150–180°,
+  8 % at 0–30°.
 * With moving electrodes each fish is in range for seconds to minutes, so
   many short tracks are expected; identity counts are not fish counts.
 * Recorders that split a take into several files may write the take's start

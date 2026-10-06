@@ -129,6 +129,23 @@ class TrackingConfig:
     """Maximum frequency difference of two detections to be linked [Hz]."""
     max_dt: float = 10.0
     """Maximum time difference of two detections to be linked [s]."""
+    gap_tolerance: float | None = None
+    """If set, two detections may differ by at most gap_tolerance +
+    gap_tolerance_rate * gap [Hz] (and freq_tolerance): stricter links across
+    gaps for dense populations. None: original behaviour."""
+    gap_tolerance_rate: float = 0.0
+    """Growth of the gap tolerance [Hz/s]."""
+    amplitude_feature: str = "minmax"
+    """Electrode pattern used in the link error: "minmax" (original) or "db"
+    (level ratios; use with few electrodes, e.g. 2)."""
+    min_support: int = 0
+    """Only track detections with at least this many other detections within
+    support_window and support_freq (0: off). Removes isolated noise
+    detections that otherwise bridge tracks of neighbouring fish."""
+    support_window: float = 1.0
+    """Time window for min_support [s] (+-)."""
+    support_freq: float = 1.0
+    """Frequency window for min_support [Hz] (+-)."""
 
 
 @dataclass

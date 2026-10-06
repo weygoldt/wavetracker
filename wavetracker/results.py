@@ -7,6 +7,11 @@ post-processing tools and the EOD sorter GUI):
 ``fund_v.npy``      fundamental frequency of each detection [Hz]
 ``idx_v.npy``       frame index of each detection (into ``times``)
 ``sign_v.npy``      power of each detection on every electrode (n, channels)
+``cplx_v.npy``      complex spectrum of each detection on every electrode
+                    (n, channels; ``abs(cplx_v)**2 == sign_v`` before
+                    interference gating). The phase difference between
+                    electrodes gives their relative sign:
+                    ``np.angle(cplx_v[:, 1] * np.conj(cplx_v[:, 0]))``.
 ``ident_v.npy``     identity of each detection (NaN = unassigned)
 ``times.npy``       time of each frame relative to recording start [s]
 ``sparse_*.npy``    downsampled overview spectrogram (freq x time, power)
@@ -35,6 +40,8 @@ class Results:
     ident_v: np.ndarray
     times: np.ndarray
     meta: dict[str, Any] = field(default_factory=dict)
+    cplx_v: np.ndarray | None = None
+    """Complex spectrum per detection and electrode (optional)."""
 
     @property
     def n_ids(self) -> int:
@@ -48,6 +55,8 @@ class Results:
         folder.mkdir(parents=True, exist_ok=True)
         for name in ("fund_v", "idx_v", "sign_v", "ident_v", "times"):
             np.save(folder / f"{name}.npy", getattr(self, name))
+        if self.cplx_v is not None:
+            np.save(folder / "cplx_v.npy", self.cplx_v)
         (folder / META_FILE).write_text(json.dumps(self.meta, indent=2, default=str))
 
     @classmethod
@@ -63,6 +72,8 @@ class Results:
         arrays["ident_v"] = (
             np.load(ident) if ident.exists() else np.full(len(arrays["fund_v"]), np.nan)
         )
+        cplx = folder / "cplx_v.npy"
+        arrays["cplx_v"] = np.load(cplx) if cplx.exists() else None
         meta_file = folder / META_FILE
         meta = json.loads(meta_file.read_text()) if meta_file.exists() else {}
         return cls(**arrays, meta=meta)

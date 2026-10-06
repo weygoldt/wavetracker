@@ -159,14 +159,17 @@ def detect(
         comb_log: dict[float, dict] = {}
         low_th, high_th = hc.low_threshold, hc.high_threshold
         noise_std = None
-        funds, idxs, signs = [], [], []
+        funds, idxs, signs, cplxs = [], [], [], []
 
         t_read = time.perf_counter()
         for block in iter_blocks(data, layout, frames_per_block, channels):
             t0 = time.perf_counter()
             timings.read += t0 - t_read
 
-            power = spectrogram(torch.from_numpy(block.data).to(dev, non_blocking=True))
+            stft = spectrogram.stft(
+                torch.from_numpy(block.data).to(dev, non_blocking=True)
+            )
+            power = spectrogram.power(stft)
             if canceller is not None:
                 power = canceller(power)
                 for comb in canceller.combs:
@@ -213,15 +216,13 @@ def detect(
                 )
                 det = Detections(det.frame[keep], det.bin[keep], det.freq[keep])
             if len(det.frame):
-                sel = power[
-                    :,
-                    torch.from_numpy(det.bin).to(dev),
-                    torch.from_numpy(det.frame).to(dev),
-                ]
-                signs.append(sel.T.cpu().numpy())
+                b = torch.from_numpy(det.bin).to(dev)
+                fr = torch.from_numpy(det.frame).to(dev)
+                signs.append(power[:, b, fr].T.cpu().numpy())
+                cplxs.append(stft[:, b, fr].T.cpu().numpy())
                 funds.append(det.freq)
                 idxs.append(det.frame + block.first_frame)
-            del power, summed, log_spec
+            del stft, power, summed, log_spec
             t_read = time.perf_counter()
             timings.detection += t_read - t1
             if progress:
@@ -233,6 +234,11 @@ def detect(
         np.concatenate(signs).astype(np.float32)
         if signs
         else np.empty((0, n_channels), np.float32)
+    )
+    cplx_v = (
+        np.concatenate(cplxs).astype(np.complex64)
+        if cplxs
+        else np.empty((0, n_channels), np.complex64)
     )
     spec, sfreqs, stimes = sparse.finish()
     np.save(output_dir / "sparse_spectra.npy", spec)
@@ -268,7 +274,9 @@ def detect(
         "config": cfg.to_dict(),
         "timings": vars(timings),
     }
-    results = Results(fund_v, idx_v, sign_v, np.full(len(fund_v), np.nan), times, meta)
+    results = Results(
+        fund_v, idx_v, sign_v, np.full(len(fund_v), np.nan), times, meta, cplx_v=cplx_v
+    )
     results.save(output_dir)
     return DetectionOutput(results, timings)
 

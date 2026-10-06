@@ -48,8 +48,11 @@ class PowerSpectrogram:
             scale[-1] = 1.0
         self.scale = scale / (rate * self.window.pow(2).sum())
 
-    def __call__(self, block: np.ndarray | torch.Tensor) -> torch.Tensor:
-        """Power of each channel, shape (channels, freqs, frames)."""
+    def stft(self, block: np.ndarray | torch.Tensor) -> torch.Tensor:
+        """Complex spectrum of each channel, shape (channels, freqs, frames),
+        scaled so that ``abs(X)**2`` is the power spectral density. The phase
+        refers to each frame's first sample; phase differences between
+        channels (e.g. the relative sign of two electrodes) are meaningful."""
         x = torch.as_tensor(block, device=self.device)
         x = x - x.mean(dim=-1, keepdim=True)
         spec = torch.stft(
@@ -60,7 +63,15 @@ class PowerSpectrogram:
             center=False,
             return_complex=True,
         )
-        return spec.real.square_().add_(spec.imag.square()).mul_(self.scale)
+        return spec.mul_(self.scale.sqrt())
+
+    @staticmethod
+    def power(spec: torch.Tensor) -> torch.Tensor:
+        return spec.real.square().add_(spec.imag.square())
+
+    def __call__(self, block: np.ndarray | torch.Tensor) -> torch.Tensor:
+        """Power of each channel, shape (channels, freqs, frames)."""
+        return self.power(self.stft(block))
 
 
 def decibel(power: torch.Tensor, min_power: float = 1e-20) -> torch.Tensor:

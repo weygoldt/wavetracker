@@ -80,3 +80,46 @@ def test_empty_input():
         TrackingConfig(),
     )
     assert ident.shape == (0,)
+
+
+def test_support_counts_neighbours():
+    from wavetracker.tracking import support
+
+    times = np.arange(100) * 0.1
+    # a line at 600 Hz in every frame, plus an isolated noise detection
+    idx = np.concatenate([np.arange(50), [25]])
+    fund = np.concatenate([np.full(50, 600.0), [603.0]])
+    order = np.argsort(idx, kind="stable")
+    s = support(fund[order], idx[order], times, window=0.5, df=1.0)
+    s = s[np.argsort(order)]
+    assert s[-1] == 0  # isolated
+    assert s[25] >= 5
+
+
+def test_support_filter_blocks_noise_bridges():
+    """Two fish 4 Hz apart, a gap in fish A, and noise detections bridging
+    A to B: with the support filter A is not continued on B."""
+    dt = 0.1
+    times = np.arange(400) * dt
+    rows = [(k, 600.0) for k in range(0, 150)] + [(k, 600.0) for k in range(250, 400)]
+    rows += [(k, 604.0) for k in range(150, 400)]
+    rows += [(155, 601.5), (165, 602.5), (175, 603.5)]  # stepping stones
+    rows.sort()
+    idx = np.array([r[0] for r in rows])
+    fund = np.array([r[1] for r in rows])
+    sign = np.ones((len(fund), 2))
+    cfg = TrackingConfig(freq_tolerance=2.5, max_dt=5.0, min_support=3)
+    ident = track(fund, idx, sign, times, cfg)
+    early_a = ident[(fund == 600.0) & (idx < 150)]
+    fish_b = ident[fund == 604.0]
+    assert not np.isin(np.unique(early_a), np.unique(fish_b)).any()
+
+
+def test_db_amplitude_feature():
+    from wavetracker.tracking import normalize_signatures
+
+    sign = np.array([[1.0, 10.0], [2.0, 2.0]])
+    db = normalize_signatures(sign, "db")
+    np.testing.assert_allclose(db, [[-5.0, 5.0], [0.0, 0.0]], atol=1e-9)
+    mm = normalize_signatures(sign[:1], "minmax")
+    np.testing.assert_allclose(mm, [[0.0, 1.0]])
