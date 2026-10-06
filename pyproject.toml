@@ -16,6 +16,7 @@ maintainers = [
 keywords = [ "bioinformatics", "biology", "ridge extraction", "spectrogram"]
 dependencies = [
     "numba (>=0.61.0,<0.62.0)",
+    "cuda-python (>=12.0.0,<13.0.0)",
     "torch (>=2.5.1,<3.0.0)",
     "pyqt5 (>=5.15.11,<6.0.0)",
     "pyqtgraph (>=0.13.7,<0.14.0)",
