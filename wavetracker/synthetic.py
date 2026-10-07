@@ -116,6 +116,36 @@ def random_fish(
     ]
 
 
+ODD_HARMONICS = (1.0, 0.0, 0.5, 0.0, 0.25)
+"""Odd-harmonic waveform without even harmonics (common in low-frequency
+fish in the field)."""
+
+
+def low_frequency_chorus(
+    duration: float,
+    n_low: int = 8,
+    n_chorus: int = 30,
+    low_range: tuple[float, float] = (120.0, 300.0),
+    chorus_range: tuple[float, float] = (350.0, 900.0),
+    min_df: float = 5.0,
+    rng: np.random.Generator | None = None,
+) -> list[Fish]:
+    """Odd-harmonic low fish (`ODD_HARMONICS`) in a dense chorus.
+
+    The first `n_low` fish lie in `low_range` and lack a 2nd harmonic; the
+    `n_chorus` others have the default waveform. All base frequencies are at
+    least `min_df` apart.
+    """
+    rng = rng or np.random.default_rng()
+    low = random_fish(n_low, duration, *low_range, min_df=min_df, rng=rng)
+    chorus = random_fish(n_chorus, duration, *chorus_range, min_df=min_df, rng=rng)
+    for f in low:
+        f.harmonics = ODD_HARMONICS
+    for f in low + chorus:
+        f.drift = rng.uniform(0.2, 1.0)  # dense: keep fish apart
+    return low + chorus
+
+
 def synthesize(
     fish: list[Fish],
     duration: float,
