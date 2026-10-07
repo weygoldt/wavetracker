@@ -283,6 +283,10 @@ tolerance grows by 0.2 Hz per minute of gap), unless two fish fit about
 equally well (`assign_leftovers` in the cleanup config). Parameters are read
 from `cleanup_config.cfg` in the results directory or the packaged default.
 
+Cleanup assumes a known number of fish with persistent frequencies (grid
+recordings). For moving electrodes, where every fish appears in short passes,
+use `merge-by-position` instead.
+
 ## Field recordings and dense populations
 
 The defaults are tuned for long grid recordings with few fish. For short
@@ -491,6 +495,9 @@ than fish.
   to ~1 Hz (the merged detection is the stronger of two split peaks).
 * Tracking runs on the CPU; for weeks of data with many fish it should be
   chunked/parallelized.
+* `merge-by-position` resolves synthetic surveys correctly, but on the Iriri
+  boat survey (~40 fish) it still leaves many small, ambiguous groups (352);
+  filter its fish table by detection count, ambiguity and fit quality.
 
 ## Benchmarks
 
@@ -515,6 +522,13 @@ Detection itself covers 95 % (winner) and 92 % (loser) of the frames; the rest i
 mostly rises, which leave the pseudo-ground-truth band. Remaining
 fragmentation is concentrated in losers with many rises (pairing 4a: 79 %
 after cleanup).
+
+![Coverage per fish and identities per trial](docs/images/tube_benchmark_summary.png)
+
+Tracks of a rise-heavy trial before and after `cleanup -n 2` (successive
+identities of one fish alternate light/dark):
+
+![Tracks of trial 2022-06-20](docs/images/tube_tracks_2022-06-20.png)
 
 ## Development
 
