@@ -113,3 +113,32 @@ def test_connect_with_overlap_without_candidates():
     out = connect_with_overlap(fund, ident.copy(), valid, idx, times)
     out_ident = out[0] if isinstance(out, tuple) else out
     np.testing.assert_array_equal(out_ident, ident)
+
+
+def test_main_reports_monotonic_progress_to_completion(synthetic_wav, tmp_path):
+    from wavetracker.config import Config
+    from wavetracker.pipeline import detect, track_results
+    from wavetracker.postprocessing import cleanup
+
+    path, _ = synthetic_wav
+    cfg = Config()
+    out = detect(path, tmp_path / "res", cfg, device="cpu")
+    track_results(out.results, cfg)
+    out.results.save(tmp_path / "res")
+    seen = []
+    cleanup.show_results = False
+    # windows shorter than the 60 s recording, so the window pass loops
+    cleanup.main(
+        tmp_path / "res",
+        n_fish=3,
+        stride_minutes=0.5,
+        time_tolerance_minutes=0.25,
+        progress=lambda stage, frac: seen.append((stage, frac)),
+    )
+    fracs = [f for _, f in seen]
+    assert fracs == sorted(fracs), "progress never goes back"
+    assert fracs[0] < 0.05 and fracs[-1] == 1.0
+    stages = [s for s, _ in seen]
+    assert any(s.startswith("window ") for s in stages)
+    assert "joining overlapping tracks" in stages
+    assert (tmp_path / "res" / "ident_v_cleaned_n3.npy").exists()

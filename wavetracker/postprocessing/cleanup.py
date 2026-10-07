@@ -255,7 +255,8 @@ def get_valid_ids_by_freq_dist(
 
 
 def connect_by_similarity(
-    times, idx_v, ident_v, fund_v, sign_v, valid_v, valid_ids, f_th, i0, stride
+    times, idx_v, ident_v, fund_v, sign_v, valid_v, valid_ids, f_th, i0, stride,
+    tick=None,
 ):
     if len(valid_ids) == 0:
         return valid_ids, ident_v
@@ -276,8 +277,13 @@ def connect_by_similarity(
     similar_mask = idx0s == idx1s
     idx0s = idx0s[~similar_mask]
     idx1s = idx1s[~similar_mask]
+    # the loop stops at the first pair further apart than f_th: that many
+    n_pairs = int(np.count_nonzero(d_med_f[idx0s, idx1s] <= f_th))
+    every = max(1, n_pairs // 200)
 
     for enu, (idx0, idx1) in enumerate(zip(idx0s, idx1s, strict=False)):
+        if tick is not None and enu % every == 0:
+            tick(enu, n_pairs)
         if np.abs(valid_ids[idx0, 1] - valid_ids[idx1, 1]) > f_th:
             break
         id0 = valid_ids[idx0, 0]
@@ -337,17 +343,24 @@ def connect_by_similarity(
             ident_v[ident_v == id0] = id1
 
     previous_valid_ids = np.unique(valid_ids[:, 0])
+    if tick is not None:
+        tick(n_pairs, n_pairs)
 
     return previous_valid_ids, ident_v
 
 
-def connect_with_overlap(fund_v, ident_v, valid_v, idx_v, times, time_tol=5*60, freq_tol=2.5):
+def connect_with_overlap(fund_v, ident_v, valid_v, idx_v, times, time_tol=5*60, freq_tol=2.5,
+                         tick=None):
 
     # old_ident_v = np.copy(ident_v)
 
     connections_candidates = []
     unique_ids = np.unique(ident_v[(~np.isnan(ident_v)) & (valid_v == 1)])
-    for id0, id1 in itertools.combinations(unique_ids, r=2):
+    n_pairs = len(unique_ids) * (len(unique_ids) - 1) // 2
+    every = max(1, n_pairs // 200)
+    for enu, (id0, id1) in enumerate(itertools.combinations(unique_ids, r=2)):
+        if tick is not None and enu % every == 0:
+            tick(enu, n_pairs)
         # for ii, jj in itertools.combinations(range(len(valid_ids)), r=2):
         # id0 = valid_ids[ii, 0]
         # id1 = valid_ids[jj, 0]
@@ -906,7 +919,7 @@ def assign_leftovers(fund_v, idx_v, ident_v, times, kept_ids, freq_tol=2.5,
 
 def main(folder, n_fish=None, stride_minutes=None, overlap_frac=None, 
          freq_tolerance=None, time_tolerance_minutes=None, density_threshold=None,
-         config_path=None):
+         config_path=None, progress=None):
     """
     Run cleanup on wavetracker output.
     
@@ -928,6 +941,12 @@ def main(folder, n_fish=None, stride_minutes=None, overlap_frac=None,
         Minimum detection density (overrides config)
     config_path : str or Path, optional
         Path to config file
+    progress : callable, optional
+        ``progress(stage, fraction)`` is called as the cleanup runs, with a
+        short description of the current step and the fraction of the whole
+        run done (0 to 1, non-decreasing).  The window pass and joining
+        overlapping tracks take nearly all the time; their pair loops report
+        about 200 times each.
     """
     # Load configuration
     config = load_config(config_path, folder)
@@ -984,9 +1003,27 @@ def main(folder, n_fish=None, stride_minutes=None, overlap_frac=None,
     f_th = freq_tolerance
     kde_th = None
     previous_valid_ids = np.array([])
-    
 
-    for i0 in np.arange(0, times[-1], int(stride * (1 - overlap))):
+    # share of the run each step takes (measured on a dense field recording:
+    # the window pass and the overlap joining are ~50 % each, the rest ~2 %)
+    w_windows, w_density, w_overlap = 0.5, 0.01, 0.47
+
+    def report(stage, fraction):
+        if progress is not None:
+            progress(stage, float(min(max(fraction, 0.0), 1.0)))
+
+    starts = np.arange(0, times[-1], int(stride * (1 - overlap)))
+    n_windows = max(len(starts), 1)
+    for k, i0 in enumerate(starts):
+
+        def tick(done, total, k=k):
+            inner = done / total if total else 1.0
+            report(
+                f"window {k + 1}/{n_windows}",
+                w_windows * (k + 0.5 + 0.5 * inner) / n_windows,
+            )
+
+        report(f"window {k + 1}/{n_windows}", w_windows * k / n_windows)
         kde_th, valid_ids = get_valid_ids_by_freq_dist(
             times,
             idx_v,
@@ -1011,8 +1048,10 @@ def main(folder, n_fish=None, stride_minutes=None, overlap_frac=None,
             f_th,
             i0,
             stride,
+            tick=tick,
         )
 
+    report("density filter", w_windows)
     ################### illustation ###################
     if show_results:
         fig = plt.figure(figsize=(30 / 2.54, 18 / 2.54))
@@ -1070,9 +1109,15 @@ def main(folder, n_fish=None, stride_minutes=None, overlap_frac=None,
         # plt.show()
     ###################################################
 
+    base = w_windows + w_density
+    report("joining overlapping tracks", base)
     ident_v = connect_with_overlap(fund_v, ident_v, valid_v, idx_v, times,
                                     time_tol=time_tolerance_minutes*60,
-                                    freq_tol=freq_tolerance)
+                                    freq_tol=freq_tolerance,
+                                    tick=lambda done, total: report(
+                                        "joining overlapping tracks",
+                                        base + w_overlap * (done / total if total else 1.0)))
+    report(f"keeping the {n_fish} best fish", base + w_overlap)
 
     # Take only the best n_fish
 
@@ -1150,9 +1195,11 @@ def main(folder, n_fish=None, stride_minutes=None, overlap_frac=None,
     ###################################################
 
     # save data
+    report("saving", 0.99)
     np.save(os.path.join(folder, f"ident_v_cleaned_n{n_fish}.npy"), ident_v)
     np.save(os.path.join(folder, f"idx_v_cleaned_n{n_fish}.npy"), idx_v)
     np.save(os.path.join(folder, f"fund_v_cleaned_n{n_fish}.npy"), fund_v)
+    report("done", 1.0)
 
 
 def cli():
