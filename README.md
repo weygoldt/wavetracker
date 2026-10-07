@@ -18,6 +18,9 @@ The pipeline:
 4. **Stitching** – track fragments are joined across rises, dropouts and
    short double detections.
 
+Set the frequency range of your fish (see [Usage](#usage)); the default
+range is a broad catch-all.
+
 It runs at several hundred times realtime on an 11-channel, 20 kHz recording
 (a 4 h recording takes about a minute on an RTX 4080, mostly disk IO).
 
@@ -48,22 +51,31 @@ wavetracker plot    results/0510 -o tracks.png            # tracks on spectrogra
 wavetracker track   results/0510 -c my_config.yaml        # re-track only
 ```
 
-> **Set the frequency range of your species.** By default fundamentals from
-> 80 to 2400 Hz are tracked, which covers wave-type fish from *Sternopygus*
-> to fast *Apteronotus* species. If you know your species' range, set it:
-> it is ~3× faster and, more importantly, lets the interference filter remove
-> hum combs. A comb is only removed if its spacing is below the lowest fish
-> frequency (otherwise a resting fish's harmonic series would be removed),
-> so with the default only combs below 72 Hz are removed. On a grid recording
-> with a 95 Hz hum comb, the default range turned hum teeth into "fish"
-> (3× more detections, `cleanup -n 2` coverage 92 % → 50 %); with
-> `min_freq: 400, max_freq: 1200` everything was removed correctly.
+> **Important: set the fish frequency range explicitly, as narrow as you
+> can.** The default (fundamentals from 80 to 2400 Hz) is a catch-all for
+> unknown populations, from *Sternopygus* to the fastest *Apteronotus*. If
+> you know the EOD frequencies of your fish, or the range they can be
+> expected in, restrict `harmonic_groups.min_freq`/`max_freq` to a narrow
+> band around it (with some margin for drift and rises). This maximizes
+> performance in every respect:
+>
+> * **Interference removal.** Hum combs are only removed if they are spaced
+>   closer than the lowest fish frequency (anything wider could be a
+>   resting fish's harmonic series). With the default range that is only
+>   combs below 72 Hz; with 400–1200 Hz combs up to 300 Hz are removed.
+> * **Fewer false fish.** Harmonics and interference outside the band cannot
+>   become fish. On a grid recording with a 95 Hz hum comb the default range
+>   gave 3× the detections and `cleanup -n 2` coverage dropped from 92 % to
+>   50 %; with 400–1200 Hz the result was clean.
+> * **Speed.** ~3× faster detection (17 s instead of 51 s for 4 h).
 >
 > ```yaml
 > harmonic_groups:
->   min_freq: 400.0   # e.g. Apteronotus leptorhynchus
+>   min_freq: 400.0   # e.g. Apteronotus leptorhynchus in the lab
 >   max_freq: 1200.0
 > ```
+>
+> `wavetracker run` prints a reminder when the default range is in use.
 
 `run` accepts a single file, a fishgrid recording directory
 (`traces-grid*.raw` + `fishgrid.cfg`) or a directory with a sequence of audio

@@ -120,3 +120,14 @@ def test_stored_spectrograms_follow_tracked_range(synthetic_wav, tmp_path):
     detect(path, tmp_path / "explicit", cfg, duration=10.0, device="cpu")
     assert np.load(tmp_path / "explicit" / "fine_freqs.npy").max() <= 900.0
     assert np.load(tmp_path / "explicit" / "sparse_freq.npy").max() <= 900.0
+
+
+def test_cli_reminds_to_set_frequency_range(synthetic_wav, tmp_path):
+    path, _ = synthetic_wav
+    args = ["run", str(path), "--duration", "5", "--device", "cpu", "--no-track"]
+    r = runner.invoke(app, [*args, "-o", str(tmp_path / "a")])
+    assert r.exit_code == 0 and "default fish range" in r.output
+    cfg = tmp_path / "cfg.yaml"
+    cfg.write_text("harmonic_groups:\n  min_freq: 400.0\n  max_freq: 1200.0\n")
+    r = runner.invoke(app, [*args, "-o", str(tmp_path / "b"), "-c", str(cfg)])
+    assert r.exit_code == 0 and "default fish range" not in r.output

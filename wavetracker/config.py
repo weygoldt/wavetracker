@@ -29,11 +29,12 @@ class SpectrogramConfig:
 @dataclass
 class HarmonicGroupsConfig:
     min_freq: float = 80.0
-    """Lowest fundamental frequency considered [Hz]. The default excludes the
-    50/60 Hz mains fundamental but includes low-frequency species (e.g.
-    Sternopygus). Set the range of your species if known (e.g. 400-1200 Hz for
-    Apteronotus leptorhynchus): it is faster and lets the interference filter
-    remove combs with wider spacing."""
+    """Lowest fundamental frequency considered [Hz]. The default 80-2400 Hz
+    is a broad catch-all (excludes the mains fundamental, includes
+    Sternopygus to fast Apteronotus). If the fish frequencies or their
+    expected range are known, set min_freq/max_freq explicitly to a narrow
+    band (e.g. 400-1200 Hz for A. leptorhynchus): fewer false fish, better
+    interference removal, faster."""
     max_freq: float = 2400.0
     """Highest fundamental frequency considered [Hz]."""
     low_threshold: float | None = None
@@ -322,6 +323,18 @@ class PositionMergingConfig:
     times."""
 
 
+YAML_HEADER = """\
+# wavetracker configuration (see README.md).
+#
+# IMPORTANT: set harmonic_groups.min_freq / max_freq to the frequency band of
+# your fish, as narrow as you can (with some margin for drift and rises),
+# e.g. 400-1200 Hz for Apteronotus leptorhynchus. The default 80-2400 Hz is a
+# broad catch-all: slower, more false fish, and hum combs spaced wider than
+# the lowest fish frequency are not removed.
+
+"""
+
+
 @dataclass
 class Config:
     spectrogram: SpectrogramConfig = field(default_factory=SpectrogramConfig)
@@ -338,7 +351,13 @@ class Config:
         return asdict(self)
 
     def to_yaml(self) -> str:
-        return yaml.safe_dump(self.to_dict(), sort_keys=False)
+        return YAML_HEADER + yaml.safe_dump(self.to_dict(), sort_keys=False)
+
+    def default_frequency_range(self) -> bool:
+        """True if the fish frequency range was left at the broad default."""
+        d = HarmonicGroupsConfig()
+        hc = self.harmonic_groups
+        return hc.min_freq == d.min_freq and hc.max_freq == d.max_freq
 
     def save(self, path: str | Path) -> None:
         Path(path).write_text(self.to_yaml())

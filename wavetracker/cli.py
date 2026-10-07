@@ -184,6 +184,14 @@ def run(
 
     _setup_logging(verbose)
     cfg = Config.load(config)
+    if cfg.default_frequency_range():
+        hc = cfg.harmonic_groups
+        console.print(
+            f"[yellow]Note:[/] tracking the broad default fish range "
+            f"{hc.min_freq:.0f}-{hc.max_freq:.0f} Hz. If you know the frequencies "
+            "of your fish, set harmonic_groups.min_freq/max_freq to a narrow band "
+            "(-c config.yaml): fewer false fish, better hum removal, faster."
+        )
     if save_spec:
         cfg.output.save_fine_spec = True
     if exclude:
