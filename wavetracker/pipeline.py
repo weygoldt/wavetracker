@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -83,7 +83,7 @@ class DetectionOutput:
 
 
 def detect(
-    input_path: str | Path,
+    input_path: str | Path | Sequence[str | Path],
     output_dir: str | Path,
     cfg: Config,
     start: float = 0.0,
@@ -94,6 +94,8 @@ def detect(
     """Compute spectrograms and detect fish fundamentals in a recording.
 
     Results (without identities) and spectrograms are written to `output_dir`.
+    `input_path` is a file, a recording directory, or a sequence of files that
+    together make one recording (see `io.resolve_input`).
     """
     t_start = time.perf_counter()
     timings = Timings()
@@ -273,7 +275,11 @@ def detect(
     timings.total = time.perf_counter() - t_start
     meta = {
         "version": __version__,
-        "input": str(Path(input_path).resolve()),
+        "input": (
+            [str(Path(p).resolve()) for p in input_path]
+            if isinstance(input_path, (list, tuple))
+            else str(Path(input_path).resolve())
+        ),
         "files": resolve_input(input_path),
         "rate": rate,
         "channels": channels.tolist(),

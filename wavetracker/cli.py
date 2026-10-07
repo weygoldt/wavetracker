@@ -530,9 +530,15 @@ def merge_by_position_cmd(
         floor = SpectrumNoiseFloor.load(noise_floor)
     else:
         rec = recording
-        if rec is None and isinstance(results.meta.get("input"), str):
-            rec = Path(results.meta["input"])
-        if rec is not None and rec.exists():
+        meta_input = results.meta.get("input")
+        if rec is None and isinstance(meta_input, str):
+            rec = Path(meta_input)
+        elif rec is None and isinstance(meta_input, list) and meta_input:
+            rec = [Path(p) for p in meta_input]  # a recording split over files
+        rec_exists = rec is not None and (
+            all(p.exists() for p in rec) if isinstance(rec, list) else rec.exists()
+        )
+        if rec_exists:
             survey = survey_mask(results.times, track, cfg)
             nfft = results.meta.get("config", {}).get("spectrogram", {}).get("nfft")
             if nfft is None:
