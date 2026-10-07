@@ -17,10 +17,9 @@ A faithful, parallel CPU port of the GPU kernels of Raab et al. (2022):
    harmonics does not suppress a fish.
 4. Optional (``max_missing_harmonics > 0``, not in the original): groups
    with gaps, i.e. the fundamental and `min_group_size` of the first
-   ``min_group_size + max_missing_harmonics`` harmonics. They are assigned
-   in a second greedy pass after all complete groups, starting from their
-   fundamental (strongest first) and only on unclaimed peaks; a group at
-   f/2 or f/3 of an accepted fish thus finds its peak at f claimed.
+   ``min_group_size + max_missing_harmonics`` harmonics (see
+   `_assign_with_gaps`). With "core" such a group claims these first
+   harmonics.
 
 Frames are processed independently and in parallel with numba.
 """
@@ -166,6 +165,108 @@ def _get_group(
 
 
 @njit(cache=True, nogil=True)
+def _assign_with_gaps(
+    groups,
+    values,
+    log_row,
+    good,
+    nf,
+    min_good,
+    min_group_size,
+    n_window,
+    n_harmonics,
+    n_exclusive,
+    n_exclusive_gaps,
+    out_bins,
+):
+    """Greedy assignment allowing gaps among the first `n_window` harmonics.
+
+    A group needs its fundamental and `min_group_size` of its first
+    `n_window` harmonics. Good peaks are visited in descending power; a peak
+    first becomes the fundamental of the best unused group starting with it.
+    Only if there is none, it joins a complete group as a higher harmonic
+    (the original rule). Visiting by power keeps a fish's own fundamental
+    ahead of its higher harmonics and of noise below it, so neither its 3rd
+    harmonic nor a sub-harmonic group takes its peaks. A group with gaps is
+    rejected if its fundamental is a harmonic of an accepted fish. Accepted
+    groups claim their first `n_exclusive` (complete) or `n_exclusive_gaps`
+    (with gaps) harmonics.
+    """
+    n_cand = groups.shape[0]
+    order = np.argsort(-values, kind="mergesort")
+    valid = np.empty(n_cand, dtype=np.int64)
+    gapped = np.zeros(n_cand, dtype=np.bool_)
+    n_valid = 0
+    for i in order:
+        if groups[i, 0] == 0:
+            continue
+        present = 0
+        complete = True
+        for h in range(n_window):
+            if groups[i, h] != 0:
+                present += 1
+            elif h < min_group_size:
+                complete = False
+        if complete or present >= min_group_size:
+            valid[n_valid] = i
+            gapped[i] = not complete
+            n_valid += 1
+
+    assigned = np.zeros(nf, dtype=np.int8)
+    harmonic = np.zeros(nf, dtype=np.int8)  # any harmonic of an accepted fish
+    good_order = good[np.argsort(-log_row[good], kind="mergesort")]
+    n_found = 0
+    for search_peak in good_order:
+        if assigned[search_peak] != 0:
+            continue
+        accepted = -1
+        for as_fundamental in (True, False):
+            for vi in range(n_valid):
+                i = valid[vi]
+                if as_fundamental:
+                    if groups[i, 0] != search_peak:
+                        continue
+                    if gapped[i] and harmonic[search_peak] != 0:
+                        continue
+                else:
+                    if gapped[i]:
+                        continue
+                    contains = False
+                    for h in range(1, min_group_size):
+                        if groups[i, h] == search_peak:
+                            contains = True
+                            break
+                    if not contains:
+                        continue
+                if log_row[groups[i, 0]] < min_good:
+                    continue
+                n_claim = n_exclusive_gaps if gapped[i] else n_exclusive
+                used = False
+                for h in range(n_claim):
+                    b = groups[i, h]
+                    if b != 0 and assigned[b] != 0:
+                        used = True
+                        break
+                if not used:
+                    accepted = i
+                    break
+            if accepted >= 0:
+                break
+        if accepted < 0:
+            continue
+        n_claim = n_exclusive_gaps if gapped[accepted] else n_exclusive
+        for h in range(n_claim):
+            if groups[accepted, h] != 0:
+                assigned[groups[accepted, h]] = 1
+        for h in range(n_harmonics):
+            harmonic[groups[accepted, h]] = 1
+        if n_found < out_bins.shape[0]:
+            out_bins[n_found] = groups[accepted, 0]
+            n_found += 1
+    return n_found
+
+
+@njit(cache=True, nogil=True)
 def _frame_groups(
     log_row,
     freqs,
@@ -225,6 +326,22 @@ def _frame_groups(
                 mains_tol,
             )
 
+    if n_window > min_group_size:
+        return _assign_with_gaps(
+            groups,
+            values,
+            log_row,
+            good,
+            nf,
+            min_good,
+            min_group_size,
+            n_window,
+            n_harmonics,
+            n_exclusive,
+            n_exclusive_gaps,
+            out_bins,
+        )
+
     # Candidates in descending score whose lowest harmonics are all present.
     order = np.argsort(-values, kind="mergesort")
     valid = np.empty(n_cand, dtype=np.int64)
@@ -269,49 +386,6 @@ def _frame_groups(
                     assigned[groups[i, h]] = 1
             if n_found < out_bins.shape[0]:
                 out_bins[n_found] = lowest
-                n_found += 1
-            break
-
-    if n_window == min_group_size:
-        return n_found
-
-    # Groups with gaps: fundamental and min_group_size of the first n_window
-    # harmonics; only on peaks not claimed by the complete groups above.
-    gapped = np.empty(n_cand, dtype=np.int64)
-    n_gapped = 0
-    for i in order:
-        if groups[i, 0] == 0:
-            continue
-        present = 0
-        complete = True
-        for h in range(n_window):
-            if groups[i, h] != 0:
-                present += 1
-            elif h < min_group_size:
-                complete = False
-        if not complete and present >= min_group_size:
-            gapped[n_gapped] = i
-            n_gapped += 1
-    for search_peak in good_order:
-        if assigned[search_peak] != 0:
-            continue
-        for vi in range(n_gapped):
-            i = gapped[vi]
-            # seeded from its own fundamental only
-            if groups[i, 0] != search_peak or log_row[search_peak] < min_good:
-                continue
-            used = False
-            for h in range(n_exclusive_gaps):
-                b = groups[i, h]
-                if b != 0 and assigned[b] != 0:
-                    used = True
-            if used:
-                continue
-            for h in range(n_exclusive_gaps):
-                if groups[i, h] != 0:
-                    assigned[groups[i, h]] = 1
-            if n_found < out_bins.shape[0]:
-                out_bins[n_found] = search_peak
                 n_found += 1
             break
     return n_found

@@ -143,3 +143,18 @@ def test_group_window_fits_into_collected_harmonics():
         min_group_size=3, max_missing_harmonics=2, max_harmonics=3
     )
     assert n_harmonics(cfg) == 5
+
+
+@pytest.mark.parametrize("tone", [6 * LOW, LOW / 2])
+def test_fundamental_keeps_its_peaks(tone):
+    # a weak tone at 6f makes the fish's 3rd harmonic a complete group
+    # (3f, 6f); one at f/2 makes a complete group (f/2, f). Both take the
+    # fish's peaks without gaps allowed, but not with them.
+    fish = [(LOW, ODD), (tone, (0.05,))]
+    det, n_frames = _detect(fish)
+    assert np.sum(np.abs(det.freq - LOW) < 0.1) < n_frames
+
+    det, n_frames = _detect(fish, max_missing_harmonics=1)
+    assert np.sum(np.abs(det.freq - LOW) < 0.1) == n_frames
+    assert not np.any(np.abs(det.freq - 3 * LOW) < 1.0)
+    assert not np.any(np.abs(det.freq - LOW / 2) < 1.0)
