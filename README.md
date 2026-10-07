@@ -26,7 +26,7 @@ It runs at several hundred times realtime on an 11-channel, 20 kHz recording
 
 ## Installation
 
-Requires Python ≥ 3.14. With [uv](https://docs.astral.sh/uv/):
+Requires Python 3.11–3.14. With [uv](https://docs.astral.sh/uv/):
 
 ```bash
 git clone https://github.com/weygoldt/wavetracker.git

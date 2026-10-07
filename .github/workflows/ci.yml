@@ -8,9 +8,15 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The ends of the supported range: numpy and scipy fork at 3.12.
+        python-version: ["3.11", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
       - run: uv sync
       - run: uv run ruff check wavetracker tests
       - run: uv run ruff format --check wavetracker tests
