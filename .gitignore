@@ -21,3 +21,6 @@ tmp/
 .vscode/
 .envrc
 .python-version
+
+# Claude Code worktrees
+.claude/
