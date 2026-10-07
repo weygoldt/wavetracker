@@ -66,9 +66,10 @@ class HarmonicGroupsConfig:
     and `min_group_size` of its first `min_group_size + max_missing_harmonics`
     harmonics. 1 with min_group_size 2 ("2 of the first 3") finds
     odd-harmonic fish without a 2nd harmonic (common below ~350 Hz in the
-    field). Such groups are accepted after all complete ones, only from
-    their own fundamental (a good peak) and only on unclaimed peaks, so
-    sub-harmonics of accepted fish are not reported. 0: original behaviour."""
+    field). Peaks are then visited by power and first tried as the
+    fundamental of a group (a good peak); groups with gaps only use
+    unclaimed peaks, so sub-harmonics of accepted fish are not reported.
+    0: original behaviour."""
     min_good_peak_power: float = -100.0
     """Minimum power of a fundamental [dB]."""
     exclusive_harmonics: str = "core"
