@@ -112,6 +112,8 @@ The most relevant parameters:
 | `harmonic_groups.min_freq` / `max_freq` | 80 / 2400 | fundamental frequency range [Hz]; set it for your species (see above) |
 | `harmonic_groups.low_thresh_factor` / `high_thresh_factor` | 6 / 10 | peak thresholds in units of the noise std |
 | `harmonic_groups.min_group_size` | 3 | harmonics 1..n that must all be present |
+| `harmonic_groups.max_missing_harmonics` | 0 | gaps allowed: fundamental + `min_group_size` of the first `min_group_size + n` harmonics (odd-harmonic fish) |
+| `harmonic_groups.min_good_peak_power` | -100 | absolute power limit for fundamentals [dB]; `null` for quiet audio recordings (a warning says when it binds) |
 | `harmonic_groups.max_harmonics` | 10 | cap on harmonics per group (the original formula gives 89 for 80–2400 Hz) |
 | `harmonic_groups.mains_freq` | 50 | mains harmonics are excluded; 0 disables (battery-powered recordings) |
 | `harmonic_groups.exclusive_harmonics` | `core` | `all` reproduces the original grouping (see below) |
@@ -307,6 +309,9 @@ harmonic_groups:
   high_thresh_factor: 5.0  # the defaults (6/10) miss most fish
   min_group_size: 2      # fish often show only two harmonics
   max_harmonics: 10      # (the default) otherwise ~200 harmonics per candidate
+  min_good_peak_power: null  # absolute -100 dB limit removes weak (low) fish
+  max_missing_harmonics: 0   # 1: "2 of the first 3" for fish without a 2nd
+                             # harmonic (see below; neutral on the Iriri data)
 tracking:
   min_support: 3         # isolated noise detections bridge neighbouring fish
   amplitude_feature: db  # min-max patterns are meaningless with 2 electrodes
@@ -337,9 +342,21 @@ Observations on a 16 min, 2-channel, ~40-fish recording (Iriri 2026):
 * Detections follow the visible fish lines from 350 Hz to 2 kHz; harmonics
   of lower fish rarely appear as extra fish (≤ 4 % of detections above
   1 kHz in excess of chance).
-* Many fish with fundamentals below ~350 Hz are missed: their 2nd harmonic
-  is often absent while the 3rd is present (odd-harmonic waveforms), and the
-  detector requires harmonics 1..`min_group_size` to all be present.
+* With `min_good_peak_power: -100` (the default) most fish below ~300 Hz
+  were missed: the recording's noise floor is at about -122 dB and their
+  fundamentals at -95 to -121 dB, so they never passed the absolute limit,
+  although their 2nd harmonics were mostly present. Without the limit 17
+  instead of 3 of 29 visible lines between 110 and 300 Hz are detected in
+  more than 20 % of their frames (Site A), detections below 350 Hz rise
+  from 2.4 % to 9.2 %, and all fish of an independent co-modulation
+  catalogue (125–166 Hz) are found. Low detections near f/2 or f/3 of a
+  stronger chorus detection occur at chance level (2f) or come from a few
+  persistent near-3:1 pairs that are not co-modulated, i.e. independent
+  fish (3f).
+* `max_missing_harmonics: 1` adds little on this recording once the
+  absolute limit is off (13.6k instead of 15.8k detections below 350 Hz in
+  Site A); it helps where the 2nd harmonic is really absent (synthetic
+  benchmark below).
 * Broadband noise (boat motor, contact) produces short clutter tracks.
 * The relative sign of the electrodes (from `cplx_v`) is bimodal as
   expected for a dipole field: 86 % of strong detections at 150–180°,
@@ -479,9 +496,12 @@ than fish.
   (as in the original), so slow changes in noise over days are not followed.
 * Fish within ±1 Hz of a mains harmonic (multiples of 50 Hz) are not detected
   (set `mains_freq: 0` if there is no mains).
-* A fish needs harmonics 1..`min_group_size`; fish with a missing 2nd
-  harmonic (odd-harmonic waveforms, common below ~350 Hz in the field) are
-  missed. Accepting "2 of the first 3 harmonics" would fix this.
+* A fish needs harmonics 1..`min_group_size` unless
+  `max_missing_harmonics` > 0. Groups with gaps are judged by the same
+  greedy assignment; a fish with gaps whose 3rd harmonic coincides (within
+  a bin) with a stronger fish is lost.
+* `min_good_peak_power` is an absolute level whose meaning depends on the
+  recording's gain; it is not derived from the data.
 * Detection thresholds are relative to the global noise floor; in a dense
   chorus the troughs between fish are far above it, so thresholds have to be
   lowered by hand (see field recordings).
@@ -529,6 +549,23 @@ Tracks of a rise-heavy trial before and after `cleanup -n 2` (successive
 identities of one fish alternate light/dark):
 
 ![Tracks of trial 2022-06-20](docs/images/tube_tracks_2022-06-20.png)
+
+### Low-frequency fish without a 2nd harmonic
+
+`benchmarks/low_frequency.py` synthesizes odd-harmonic fish (no even
+harmonics) at 120–300 Hz in a dense 30-fish chorus at 350–900 Hz (2 channels,
+48 kHz, field-recording settings) and compares `max_missing_harmonics` 0 and 1.
+60 s, three seeds:
+
+| | `max_missing_harmonics: 0` | `1` |
+|---|---|---|
+| recall of the low fish (fraction of frames) | 0.29 / 0.22 / 0.21 | 0.89 / 0.85 / 0.82 |
+| recall of the chorus fish | 0.92 / 0.91 / 0.93 | 0.96 / 0.93 / 0.96 |
+| unmatched detections at f/2 of a chorus fish | 57 / 25 / 81 | 31 / 25 / 62 |
+| unmatched detections at f/3 of a chorus fish | 64 / 47 / 45 | 29 / 27 / 27 |
+
+(430 frames each.) Groups with gaps cost about two extra unmatched
+detections per frame above 900 Hz (chance groups among chorus harmonics).
 
 ## Development
 
