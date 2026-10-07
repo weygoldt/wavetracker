@@ -130,12 +130,16 @@ def test_no_subharmonic_ghost(amps):
 
 def test_missing_fundamental_is_not_a_fish():
     # harmonics 3, 5, 7 of LOW without the fundamental
-    det, _ = _detect([(LOW, (0.0, 0.0, 1.0, 0.0, 0.6, 0.0, 0.4))], max_missing_harmonics=1)
+    det, _ = _detect(
+        [(LOW, (0.0, 0.0, 1.0, 0.0, 0.6, 0.0, 0.4))], max_missing_harmonics=1
+    )
     assert not np.any(np.abs(det.freq - LOW) < 1.0)
 
 
 def test_group_window_fits_into_collected_harmonics():
     from wavetracker.harmonics import n_harmonics
 
-    cfg = HarmonicGroupsConfig(min_group_size=3, max_missing_harmonics=2, max_harmonics=3)
+    cfg = HarmonicGroupsConfig(
+        min_group_size=3, max_missing_harmonics=2, max_harmonics=3
+    )
     assert n_harmonics(cfg) == 5
