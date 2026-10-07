@@ -110,8 +110,26 @@ def gauss(t, shift, sigma, size, norm=False):
         * size
     )
     s = np.sum(res, axis=1)
-    res = res / s.reshape(len(s), 1)
+    # rows without support on the grid (shift far outside t) stay zero
+    res = res / np.where(s > 0, s, 1.0).reshape(len(s), 1)
     return res
+
+
+def frequency_kde(ff, convolve_f, sigma):
+    """Sum of one area-normalised Gaussian per frequency in `ff`, sampled on
+    the regular grid `convolve_f`, and the peak value of a single Gaussian.
+
+    Equivalent to ``gauss(convolve_f, ff, sigma, 1, norm=True).sum(0)`` with
+    frequencies snapped to the grid, but linear in memory: the dense version
+    needs len(ff) x len(convolve_f) floats (tens of GB for dense field data).
+    """
+    df = convolve_f[1] - convolve_f[0]
+    edges = np.append(convolve_f - df / 2, convolve_f[-1] + df / 2)
+    counts = np.histogram(ff, bins=edges)[0].astype(float)
+    half = int(np.ceil(5 * sigma / df))
+    kernel = np.exp(-((np.arange(-half, half + 1) * df / sigma) ** 2) / 2)
+    kernel /= kernel.sum()
+    return np.convolve(counts, kernel, mode="same"), kernel.max()
 
 
 def get_valid_ids_by_freq_dist(
@@ -134,16 +152,20 @@ def get_valid_ids_by_freq_dist(
     ff = fund_v[(~np.isnan(ident_v)) & (window_t_mask)]
 
     if len(ff) == 0:
-        return None, old_valid_ids
+        # no detections in this window (e.g. electrodes out of the water):
+        # nothing is valid here; keep the threshold. (This used to return the
+        # flat id list `old_valid_ids` in place of the (n, 3) table.)
+        return kde_th, np.empty((0, 3))
 
-    # TODO: min_freq & max_freq + buffer (.cfg)
-    convolve_f = np.arange(400, 1200, 0.1)
-    g = gauss(convolve_f, ff, sigma=2 * f_th, size=1, norm=True)
-    kde = np.sum(g, axis=0)
+    # frequency grid spanning the detections of this window (was fixed to
+    # 400-1200 Hz: detections outside gave NaN densities and no valid ids)
+    margin = 5 * 2 * f_th
+    convolve_f = np.arange(np.floor(ff.min() - margin), np.ceil(ff.max() + margin), 0.1)
+    kde, g_max = frequency_kde(ff, convolve_f, sigma=2 * f_th)
 
     if not kde_th:
         kde_th = (
-            np.max(g)
+            g_max
             * len(times[(times >= times[0]) & (times < times[0] + stride)])
             * 0.05
         )
@@ -1012,6 +1034,14 @@ def main(folder, n_fish=None, stride_minutes=None, overlap_frac=None,
         plt.show()
     ###################################################
 
+    if not np.any(valid_v == 1):
+        raise ValueError(
+            "cleanup: no identity passed the frequency-density selection, so "
+            "there is nothing to clean up. The selection assumes a few fish "
+            "with well separated, persistent frequencies; it does not suit "
+            "dense populations or short track segments (e.g. moving "
+            "electrodes). Check --stride/--freq-tol, or use merge-by-position."
+        )
     valid_v = power_density_filter(
         valid_v, sign_v, ident_v, idx_v, fund_v, times,
         density_th=density_threshold
