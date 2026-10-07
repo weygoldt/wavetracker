@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import torch
 
 from wavetracker.config import HarmonicGroupsConfig
@@ -15,11 +16,13 @@ NFFT = 2**15
 
 
 def _spectrum(freqs_hz, seconds=3.0, noise=0.01, mains=0.0):
+    """Fish at `freqs_hz`; an item may be (frequency, harmonic amplitudes)."""
     rng = np.random.default_rng(0)
     t = np.arange(int(seconds * RATE)) / RATE
     x = noise * rng.standard_normal(len(t))
     for f in freqs_hz:
-        for h, a in enumerate((1.0, 0.5, 0.3, 0.2), start=1):
+        f, amps = f if isinstance(f, tuple) else (f, (1.0, 0.5, 0.3, 0.2))
+        for h, a in enumerate(amps, start=1):
             x += a * np.sin(2 * np.pi * h * f * t)
     for h in range(1, 10):
         x += mains * np.sin(2 * np.pi * 50 * h * t)
@@ -83,3 +86,56 @@ def test_max_harmonics_caps_wide_ranges():
     wide = HarmonicGroupsConfig(min_freq=20.0, max_freq=2000.0, min_group_size=2)
     wide.max_harmonics = None
     assert n_harmonics(wide) == 199
+
+
+ODD = (1.0, 0.0, 0.5, 0.0, 0.3)  # odd-harmonic waveform: no 2nd harmonic
+LOW = 163.7  # 3rd harmonic 491.1 Hz, clear of 50 Hz mains harmonics
+
+
+def _detect(fish, **kw):
+    cfg = HarmonicGroupsConfig(min_group_size=2, **kw)
+    log, std = _spectrum(fish)
+    det = detect_harmonic_groups(
+        log,
+        frequencies(NFFT, RATE),
+        cfg,
+        cfg.low_thresh_factor * std,
+        cfg.high_thresh_factor * std,
+    )
+    return det, log.shape[0]
+
+
+def test_missing_second_harmonic_needs_option():
+    fish = [(LOW, ODD), 811.7]
+    det, n_frames = _detect(fish)
+    assert not np.any(np.abs(det.freq - LOW) < 1.0)
+
+    det, n_frames = _detect(fish, max_missing_harmonics=1)
+    # (min_group_size 2 also yields a few noise pairs in this clean spectrum)
+    for frame in range(n_frames):
+        f = det.freq[det.frame == frame]
+        for target in (LOW, 811.7):
+            assert np.sum(np.abs(f - target) < 0.1) == 1
+
+
+@pytest.mark.parametrize("amps", [(1.0, 0.5, 0.3, 0.2), ODD])
+def test_no_subharmonic_ghost(amps):
+    # a weak pure tone at f/3 and the fish's own peak at f form a group with
+    # harmonics 1 and 3 present; the fish has to keep its peak
+    fish = [(3 * LOW, amps), (LOW, (0.05,))]
+    det, n_frames = _detect(fish, max_missing_harmonics=1)
+    assert not np.any(np.abs(det.freq - LOW) < 1.0)
+    assert np.sum(np.abs(det.freq - 3 * LOW) < 0.1) == n_frames
+
+
+def test_missing_fundamental_is_not_a_fish():
+    # harmonics 3, 5, 7 of LOW without the fundamental
+    det, _ = _detect([(LOW, (0.0, 0.0, 1.0, 0.0, 0.6, 0.0, 0.4))], max_missing_harmonics=1)
+    assert not np.any(np.abs(det.freq - LOW) < 1.0)
+
+
+def test_group_window_fits_into_collected_harmonics():
+    from wavetracker.harmonics import n_harmonics
+
+    cfg = HarmonicGroupsConfig(min_group_size=3, max_missing_harmonics=2, max_harmonics=3)
+    assert n_harmonics(cfg) == 5

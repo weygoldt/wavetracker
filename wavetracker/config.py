@@ -61,11 +61,20 @@ class HarmonicGroupsConfig:
     fewer (e.g. 8 for 400-1200 Hz) are unaffected. None: no cap."""
     min_group_size: int = 3
     """Number of lowest harmonics that must all be present."""
+    max_missing_harmonics: int = 0
+    """Gaps allowed among the lowest harmonics: a fish needs its fundamental
+    and `min_group_size` of its first `min_group_size + max_missing_harmonics`
+    harmonics. 1 with min_group_size 2 ("2 of the first 3") finds
+    odd-harmonic fish without a 2nd harmonic (common below ~350 Hz in the
+    field). Such groups are accepted after all complete ones, only from
+    their own fundamental (a good peak) and only on unclaimed peaks, so
+    sub-harmonics of accepted fish are not reported. 0: original behaviour."""
     min_good_peak_power: float = -100.0
     """Minimum power of a fundamental [dB]."""
     exclusive_harmonics: str = "core"
     """Which peaks of an accepted fish are unavailable to further fish:
-    "core" (its `min_group_size` lowest harmonics) or "all" (every harmonic,
+    "core" (its `min_group_size` lowest harmonics; for groups with gaps the
+    first `min_group_size + max_missing_harmonics`) or "all" (every harmonic,
     as in Raab et al. 2022; drops fish whose harmonics coincide by chance)."""
     max_groups_per_frame: int = 64
     """Upper bound on fish detected in a single spectrum."""

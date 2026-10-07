@@ -15,6 +15,12 @@ A faithful, parallel CPU port of the GPU kernels of Raab et al. (2022):
    harmonics of accepted fish are claimed; with "core" only the
    ``min_group_size`` lowest ones, so that a chance overlap of high
    harmonics does not suppress a fish.
+4. Optional (``max_missing_harmonics > 0``, not in the original): groups
+   with gaps, i.e. the fundamental and `min_group_size` of the first
+   ``min_group_size + max_missing_harmonics`` harmonics. They are assigned
+   in a second greedy pass after all complete groups, starting from their
+   fundamental (strongest first) and only on unclaimed peaks; a group at
+   f/2 or f/3 of an accepted fish thus finds its peak at f claimed.
 
 Frames are processed independently and in parallel with numba.
 """
@@ -102,9 +108,21 @@ def _detect_peaks(
 
 @njit(cache=True, nogil=True)
 def _get_group(
-    f0, pk_bins, freqs, log_row, out, min_group_size, max_freq_tol, mains, mains_tol
+    f0,
+    pk_bins,
+    freqs,
+    log_row,
+    out,
+    min_group_size,
+    n_window,
+    max_freq_tol,
+    mains,
+    mains_tol,
 ):
-    """Collect harmonics of candidate `f0` into `out`; return its score."""
+    """Collect harmonics of candidate `f0` into `out`; return its score.
+
+    Complete groups are scored on their `min_group_size` lowest harmonics,
+    groups with gaps on the harmonics present among the first `n_window`."""
     fzero = f0
     fzero_h = 1
     for h in range(1, out.shape[0] + 1):
@@ -123,17 +141,26 @@ def _get_group(
     peak_sum = 0.0
     n = 0
     nn = 0
-    for i in range(min_group_size):
+    window_sum = 0.0
+    n_win = 0
+    for i in range(n_window):
         if out[i] != 0:
-            nn += 1
+            if i < min_group_size:
+                nn += 1
             f = freqs[out[i]]
             if mains > 0 and (
                 f % mains < mains_tol or abs(f % mains - mains) < mains_tol
             ):
                 continue
-            n += 1
-            peak_sum += log_row[out[i]]
-    if nn < min_group_size - 1 or n == 0:
+            if i < min_group_size:
+                n += 1
+                peak_sum += log_row[out[i]]
+            n_win += 1
+            window_sum += log_row[out[i]]
+    if nn < min_group_size:
+        # incomplete: only used as a group with gaps
+        return window_sum / n_win if n_win > 0 else -1e6
+    if n == 0:
         return -1e6
     return peak_sum / n
 
@@ -151,9 +178,11 @@ def _frame_groups(
     min_good,
     max_divisor,
     min_group_size,
+    n_window,
     n_harmonics,
     max_freq_tol,
     n_exclusive,
+    n_exclusive_gaps,
     out_bins,
 ):
     """Detect fish in one spectrum; write fundamental bins to `out_bins`."""
@@ -190,6 +219,7 @@ def _frame_groups(
                 log_row,
                 groups[c],
                 min_group_size,
+                n_window,
                 max_freq_tol,
                 mains,
                 mains_tol,
@@ -241,6 +271,49 @@ def _frame_groups(
                 out_bins[n_found] = lowest
                 n_found += 1
             break
+
+    if n_window == min_group_size:
+        return n_found
+
+    # Groups with gaps: fundamental and min_group_size of the first n_window
+    # harmonics; only on peaks not claimed by the complete groups above.
+    gapped = np.empty(n_cand, dtype=np.int64)
+    n_gapped = 0
+    for i in order:
+        if groups[i, 0] == 0:
+            continue
+        present = 0
+        complete = True
+        for h in range(n_window):
+            if groups[i, h] != 0:
+                present += 1
+            elif h < min_group_size:
+                complete = False
+        if not complete and present >= min_group_size:
+            gapped[n_gapped] = i
+            n_gapped += 1
+    for search_peak in good_order:
+        if assigned[search_peak] != 0:
+            continue
+        for vi in range(n_gapped):
+            i = gapped[vi]
+            # seeded from its own fundamental only
+            if groups[i, 0] != search_peak or log_row[search_peak] < min_good:
+                continue
+            used = False
+            for h in range(n_exclusive_gaps):
+                b = groups[i, h]
+                if b != 0 and assigned[b] != 0:
+                    used = True
+            if used:
+                continue
+            for h in range(n_exclusive_gaps):
+                if groups[i, h] != 0:
+                    assigned[groups[i, h]] = 1
+            if n_found < out_bins.shape[0]:
+                out_bins[n_found] = search_peak
+                n_found += 1
+            break
     return n_found
 
 
@@ -257,9 +330,11 @@ def _detect_groups(
     min_good,
     max_divisor,
     min_group_size,
+    n_window,
     n_harmonics,
     max_freq_tol,
     n_exclusive,
+    n_exclusive_gaps,
     max_groups,
 ):
     n_frames = log_spec.shape[0]
@@ -278,9 +353,11 @@ def _detect_groups(
             min_good,
             max_divisor,
             min_group_size,
+            n_window,
             n_harmonics,
             max_freq_tol,
             n_exclusive,
+            n_exclusive_gaps,
             bins[t],
         )
     return bins, counts
@@ -300,11 +377,16 @@ class Detections:
 
 def n_harmonics(cfg: HarmonicGroupsConfig) -> int:
     """Number of harmonics collected per group (as in the original code),
-    capped at `max_harmonics`."""
+    capped at `max_harmonics`, but at least the group window."""
     n = int(cfg.max_freq * cfg.min_group_size // cfg.min_freq) - 1
     if cfg.max_harmonics is not None:
         n = min(n, cfg.max_harmonics)
-    return max(cfg.min_group_size, n)
+    return max(group_window(cfg), n)
+
+
+def group_window(cfg: HarmonicGroupsConfig) -> int:
+    """Number of lowest harmonics a group is judged on."""
+    return cfg.min_group_size + cfg.max_missing_harmonics
 
 
 def detect_harmonic_groups(
@@ -315,10 +397,13 @@ def detect_harmonic_groups(
     high_threshold: float,
 ) -> Detections:
     """Detect fish in a dB spectrogram of shape (frames, freqs)."""
+    if cfg.max_missing_harmonics < 0:
+        raise ValueError("max_missing_harmonics must be >= 0")
     if cfg.exclusive_harmonics == "all":
-        n_exclusive = n_harmonics(cfg)
+        n_exclusive = n_exclusive_gaps = n_harmonics(cfg)
     elif cfg.exclusive_harmonics == "core":
         n_exclusive = cfg.min_group_size
+        n_exclusive_gaps = group_window(cfg)
     else:
         raise ValueError(
             f"exclusive_harmonics must be 'core' or 'all', not {cfg.exclusive_harmonics!r}"
@@ -337,9 +422,11 @@ def detect_harmonic_groups(
         float(cfg.min_good_peak_power),
         int(cfg.max_divisor),
         int(cfg.min_group_size),
+        group_window(cfg),
         n_harmonics(cfg),
         float(cfg.max_freq_tol),
         n_exclusive,
+        n_exclusive_gaps,
         int(cfg.max_groups_per_frame),
     )
     frame = np.repeat(np.arange(len(counts)), counts)
