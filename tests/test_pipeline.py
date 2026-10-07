@@ -131,3 +131,12 @@ def test_cli_reminds_to_set_frequency_range(synthetic_wav, tmp_path):
     cfg.write_text("harmonic_groups:\n  min_freq: 400.0\n  max_freq: 1200.0\n")
     r = runner.invoke(app, [*args, "-o", str(tmp_path / "b"), "-c", str(cfg)])
     assert r.exit_code == 0 and "default fish range" not in r.output
+
+
+def test_warns_when_absolute_power_limit_binds(synthetic_wav, tmp_path, caplog):
+    path, _ = synthetic_wav
+    cfg = Config()
+    cfg.harmonic_groups.min_good_peak_power = 0.0
+    with caplog.at_level("WARNING", logger="wavetracker"):
+        detect(path, tmp_path, cfg, duration=5.0, device="cpu")
+    assert "min_good_peak_power" in caplog.text

@@ -482,6 +482,22 @@ def n_harmonics(cfg: HarmonicGroupsConfig) -> int:
     return max(group_window(cfg), n)
 
 
+def min_good_power(cfg: HarmonicGroupsConfig) -> float:
+    """Absolute power limit for fundamentals [dB] (-inf if disabled)."""
+    if cfg.min_good_peak_power is None:
+        return -np.inf
+    return float(cfg.min_good_peak_power)
+
+
+def absolute_limit_binds(
+    floor_db: float, high_threshold: float, cfg: HarmonicGroupsConfig
+) -> bool:
+    """Whether `min_good_peak_power` is above the level of peaks that just
+    pass the high threshold over the median noise floor `floor_db`, i.e.
+    removes weak fish the relative thresholds would accept."""
+    return floor_db + high_threshold < min_good_power(cfg)
+
+
 def group_window(cfg: HarmonicGroupsConfig) -> int:
     """Number of lowest harmonics a group is judged on."""
     return cfg.min_group_size + cfg.max_missing_harmonics
@@ -517,7 +533,7 @@ def detect_harmonic_groups(
         float(cfg.max_freq),
         float(cfg.mains_freq),
         float(cfg.mains_freq_tol),
-        float(cfg.min_good_peak_power),
+        min_good_power(cfg),
         int(cfg.max_divisor),
         int(cfg.min_group_size),
         group_window(cfg),

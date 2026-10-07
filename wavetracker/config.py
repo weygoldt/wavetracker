@@ -70,8 +70,12 @@ class HarmonicGroupsConfig:
     fundamental of a group (a good peak); groups with gaps only use
     unclaimed peaks, so sub-harmonics of accepted fish are not reported.
     0: original behaviour."""
-    min_good_peak_power: float = -100.0
-    """Minimum power of a fundamental [dB]."""
+    min_good_peak_power: float | None = -100.0
+    """Minimum absolute power of a fundamental [dB] (as in the original, for
+    fishgrid amplifier levels). Its scale depends on the recording's gain:
+    in quiet audio recordings (e.g. field recorders, floor around -120 dB)
+    it removes weak fish that pass the relative thresholds; a warning is
+    logged then. None: no absolute limit."""
     exclusive_harmonics: str = "core"
     """Which peaks of an accepted fish are unavailable to further fish:
     "core" (its `min_group_size` lowest harmonics; for groups with gaps the

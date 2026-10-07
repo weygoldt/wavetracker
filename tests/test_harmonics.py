@@ -168,3 +168,20 @@ def test_peak_of_another_fish_counts_as_gap():
         assert np.sum(np.abs(det.freq - f) < 0.1) == n_frames
     det, n_frames = _detect(fish, max_missing_harmonics=1, exclusive_harmonics="all")
     assert not np.any(np.abs(det.freq - LOW) < 0.1)
+
+
+def test_absolute_power_limit_can_be_disabled():
+    from wavetracker.harmonics import absolute_limit_binds
+
+    log, std = _spectrum([523.3, 811.7])
+    log = log - (log.max() + 10.0) - 100.0  # quiet recording: fish at -110 dB
+    floor = float(np.median(log))
+    cfg = HarmonicGroupsConfig()
+    args = (frequencies(NFFT, RATE), cfg, 6 * std, 10 * std)
+    assert len(detect_harmonic_groups(log, *args).freq) == 0
+    assert absolute_limit_binds(floor, 10 * std, cfg)
+
+    cfg.min_good_peak_power = None
+    det = detect_harmonic_groups(log, *args)
+    assert np.sum(np.abs(det.freq - 523.3) < 0.1) == log.shape[0]
+    assert not absolute_limit_binds(floor, 10 * std, cfg)

@@ -14,7 +14,7 @@ import torch
 
 from . import __version__
 from .config import Config
-from .harmonics import Detections, detect_harmonic_groups
+from .harmonics import Detections, absolute_limit_binds, detect_harmonic_groups
 from .interference import CombCanceller, merge_tooth_neighbours
 from .io import FrameLayout, iter_blocks, open_recording, resolve_input
 from .results import Results
@@ -167,6 +167,7 @@ def detect(
         comb_log: dict[float, dict] = {}
         low_th, high_th = hc.low_threshold, hc.high_threshold
         noise_std = None
+        noise_floor = None
         funds, idxs, signs, cplxs = [], [], [], []
 
         t_read = time.perf_counter()
@@ -203,6 +204,19 @@ def detect(
                     high_th,
                 )
             log_np = log_spec.T.contiguous().cpu().numpy()
+            if noise_floor is None:
+                band = (freqs >= hc.min_freq) & (freqs <= hc.max_freq)
+                level = log_np[:, band]
+                noise_floor = float(np.median(level[np.isfinite(level)]))
+                if absolute_limit_binds(noise_floor, high_th, hc):
+                    log.warning(
+                        "Median noise floor %.1f dB + high threshold %.1f dB is below "
+                        "harmonic_groups.min_good_peak_power (%.1f dB): weak fish are "
+                        "removed by this absolute limit. Lower it or set it to null.",
+                        noise_floor,
+                        high_th,
+                        hc.min_good_peak_power,
+                    )
             sparse.add(summed)
             if fine is not None:
                 fine[block.first_frame : block.first_frame + block.n_frames] = (
@@ -279,6 +293,7 @@ def detect(
         },
         "low_threshold": low_th,
         "high_threshold": high_th,
+        "noise_floor": noise_floor,
         "config": cfg.to_dict(),
         "timings": vars(timings),
     }
