@@ -160,7 +160,9 @@ def detect(
             np.save(output_dir / "fine_times.npy", times)
 
         canceller = (
-            CombCanceller(cfg.interference, freqs) if cfg.interference.enabled else None
+            CombCanceller(cfg.interference, freqs, min_fish_freq=hc.min_freq)
+            if cfg.interference.enabled
+            else None
         )
         comb_log: dict[float, dict] = {}
         low_th, high_th = hc.low_threshold, hc.high_threshold

@@ -8,7 +8,7 @@ trace belong to that fish; rises leave that band and count as unmatched.
 
 Usage::
 
-    wavetracker run <recordings...> -o output/benchmark
+    wavetracker run <recordings...> -c benchmarks/tube_competition.yaml -o output/benchmark
     for d in output/benchmark/2022-*; do wavetracker cleanup $d -n 2; done
     python benchmarks/tube_competition.py output/benchmark \\
         --meta /mnt/data2/2022_tube_competition/raw/meta.csv

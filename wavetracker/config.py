@@ -28,9 +28,13 @@ class SpectrogramConfig:
 
 @dataclass
 class HarmonicGroupsConfig:
-    min_freq: float = 400.0
-    """Lowest fundamental frequency considered [Hz]."""
-    max_freq: float = 1200.0
+    min_freq: float = 80.0
+    """Lowest fundamental frequency considered [Hz]. The default excludes the
+    50/60 Hz mains fundamental but includes low-frequency species (e.g.
+    Sternopygus). Set the range of your species if known (e.g. 400-1200 Hz for
+    Apteronotus leptorhynchus): it is faster and lets the interference filter
+    remove combs with wider spacing."""
+    max_freq: float = 2400.0
     """Highest fundamental frequency considered [Hz]."""
     low_threshold: float | None = None
     """Peak detection threshold [dB]; estimated from the noise floor if None."""
@@ -49,10 +53,11 @@ class HarmonicGroupsConfig:
     """Tolerance around mains harmonics [Hz]."""
     max_divisor: int = 3
     """Peaks are tested as harmonics 1..max_divisor of a fundamental."""
-    max_harmonics: int | None = None
-    """Cap on the harmonics collected per group. Without it the count is
-    max_freq / min_freq * min_group_size - 1, which explodes for wide
-    frequency ranges (e.g. 199 for 20-2000 Hz)."""
+    max_harmonics: int | None = 10
+    """Cap on the harmonics collected per group. The count is otherwise
+    max_freq / min_freq * min_group_size - 1 (as in the original), which
+    explodes for wide ranges (89 for the default 80-2400 Hz). Ranges needing
+    fewer (e.g. 8 for 400-1200 Hz) are unaffected. None: no cap."""
     min_group_size: int = 3
     """Number of lowest harmonics that must all be present."""
     min_good_peak_power: float = -100.0
@@ -105,9 +110,10 @@ class InterferenceConfig:
     """Width of the running median giving the noise baseline [bins]."""
     min_spacing: float = 20.0
     """Lowest comb fundamental [Hz]."""
-    max_spacing: float = 300.0
-    """Highest comb fundamental [Hz]; must be well below the lowest fish
-    frequency, otherwise a fish's own harmonic series counts as a comb."""
+    max_spacing: float | None = None
+    """Highest comb fundamental [Hz]; must be below the lowest fish frequency,
+    otherwise a resting fish's own harmonic series counts as a comb. None:
+    min(300, 0.9 * harmonic_groups.min_freq)."""
     min_run: int = 4
     """Minimum number of consecutive teeth."""
     tooth_tolerance: float = 0.3

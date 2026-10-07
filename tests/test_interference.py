@@ -62,6 +62,8 @@ def test_hum_removed_resting_fish_on_single_electrode_kept(tmp_path):
     save_recording(rec, path)
 
     cfg = Config()
+    # species range: lets the filter remove combs up to 300 Hz spacing
+    cfg.harmonic_groups.min_freq, cfg.harmonic_groups.max_freq = 400.0, 1200.0
     results = {}
     for enabled in (False, True):
         cfg.interference.enabled = enabled
@@ -128,3 +130,27 @@ def test_line_search_reaches_nyquist_by_default():
     cc = CombCanceller(InterferenceConfig(search_max_freq=20000.0), freqs)
     cc(power)
     assert any(abs(c.spacing - 120) < 0.5 for c in cc.combs)
+
+
+@pytest.mark.slow
+def test_resting_low_frequency_fish_is_not_a_comb_by_default(tmp_path):
+    """A resting 103.7 Hz fish has harmonics 103.7, 207.4, ... - a comb.
+    With the default fish range (from 80 Hz) the comb spacing limit is 72 Hz,
+    so the fish survives; the old fixed 300 Hz limit removed it."""
+    from wavetracker.synthetic import Fish, save_recording, synthesize
+
+    rng = np.random.default_rng(3)
+    fish = [Fish(103.7, drift=0.02, amplitude=0.5, position=0.5, movement=0.0)]
+    rec = synthesize(fish, 240.0, channels=4, rng=rng, mains=0.0)
+    path = tmp_path / "low.wav"
+    save_recording(rec, path)
+    recall = {}
+    for max_spacing in (None, 300.0):
+        cfg = Config()
+        cfg.interference.max_spacing = max_spacing
+        r = detect(path, tmp_path / str(max_spacing), cfg).results
+        recall[max_spacing] = (
+            evaluate(r, rec.truth_times, rec.truth_freqs).fish[0].recall
+        )
+    assert recall[None] > 0.95
+    assert recall[300.0] < 0.5

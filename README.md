@@ -48,6 +48,23 @@ wavetracker plot    results/0510 -o tracks.png            # tracks on spectrogra
 wavetracker track   results/0510 -c my_config.yaml        # re-track only
 ```
 
+> **Set the frequency range of your species.** By default fundamentals from
+> 80 to 2400 Hz are tracked, which covers wave-type fish from *Sternopygus*
+> to fast *Apteronotus* species. If you know your species' range, set it:
+> it is ~3× faster and, more importantly, lets the interference filter remove
+> hum combs. A comb is only removed if its spacing is below the lowest fish
+> frequency (otherwise a resting fish's harmonic series would be removed),
+> so with the default only combs below 72 Hz are removed. On a grid recording
+> with a 95 Hz hum comb, the default range turned hum teeth into "fish"
+> (3× more detections, `cleanup -n 2` coverage 92 % → 50 %); with
+> `min_freq: 400, max_freq: 1200` everything was removed correctly.
+>
+> ```yaml
+> harmonic_groups:
+>   min_freq: 400.0   # e.g. Apteronotus leptorhynchus
+>   max_freq: 1200.0
+> ```
+
 `run` accepts a single file, a fishgrid recording directory
 (`traces-grid*.raw` + `fishgrid.cfg`) or a directory with a sequence of audio
 files (read as one continuous recording via
@@ -80,10 +97,10 @@ The most relevant parameters:
 | `spectrogram.exclude_channels` | `[]` | broken/noisy electrodes to ignore (`run -x 8`) |
 | `interference.enabled` | true | remove interference combs (`run --no-interference`) |
 | `interference.level_history_blocks` | 5 | gate-level memory; 2 follows changing hum faster, costs fish detections near teeth |
-| `harmonic_groups.min_freq` / `max_freq` | 400 / 1200 | fundamental frequency range [Hz]; the only default frequency limit (set it for your species) |
+| `harmonic_groups.min_freq` / `max_freq` | 80 / 2400 | fundamental frequency range [Hz]; set it for your species (see above) |
 | `harmonic_groups.low_thresh_factor` / `high_thresh_factor` | 6 / 10 | peak thresholds in units of the noise std |
 | `harmonic_groups.min_group_size` | 3 | harmonics 1..n that must all be present |
-| `harmonic_groups.max_harmonics` | none | cap on harmonics per group (needed for wide frequency ranges) |
+| `harmonic_groups.max_harmonics` | 10 | cap on harmonics per group (the original formula gives 89 for 80–2400 Hz) |
 | `harmonic_groups.mains_freq` | 50 | mains harmonics are excluded; 0 disables (battery-powered recordings) |
 | `harmonic_groups.exclusive_harmonics` | `core` | `all` reproduces the original grouping (see below) |
 | `tracking.freq_tolerance` | 2.5 | max. frequency jump between linked detections [Hz] |
@@ -220,8 +237,10 @@ losing fish detections. The detected combs are listed in `wavetracker.json`
 
 Because a stationary fish's harmonic series is itself a comb with spacing
 equal to its fundamental, combs are only searched below
-`interference.max_spacing` (300 Hz). When tracking fish below ~300 Hz, switch
-the filter off (`interference.enabled: false` or `run --no-interference`).
+`interference.max_spacing`, by default `min(300, 0.9 × harmonic_groups.min_freq)`
+(72 Hz for the default range, 300 Hz for 400–1200 Hz). A comb spaced wider
+than the lowest fish frequency cannot be told apart from a resting fish and
+is kept; restrict the fish range to remove it.
 
 ## Stitching
 
@@ -263,7 +282,7 @@ spectrogram:
   nfft: 65536            # 0.73 Hz at 48 kHz: resolves fish a few Hz apart
   overlap_frac: 0.9
 interference:
-  enabled: false         # required when tracking fish below ~300 Hz
+  enabled: false         # no mains/hum on battery; avoids any risk to resting low fish
 harmonic_groups:
   min_freq: 20.0
   max_freq: 2000.0
@@ -271,7 +290,7 @@ harmonic_groups:
   low_thresh_factor: 3.0 # the chorus fills the troughs between fish peaks;
   high_thresh_factor: 5.0  # the defaults (6/10) miss most fish
   min_group_size: 2      # fish often show only two harmonics
-  max_harmonics: 10      # otherwise ~200 harmonics per candidate
+  max_harmonics: 10      # (the default) otherwise ~200 harmonics per candidate
 tracking:
   min_support: 3         # isolated noise detections bridge neighbouring fish
   amplitude_feature: db  # min-max patterns are meaningless with 2 electrodes
@@ -469,7 +488,8 @@ pseudo ground truth from the detections, independent of tracking, and reports
 purity, fragmentation and coverage for the raw tracks and for `cleanup -n 2`
 (see the module docstring for usage).
 
-Results on 10 full 4 h trials (all six pairings), means over trials:
+Results on 10 full 4 h trials (all six pairings) with the species range
+`benchmarks/tube_competition.yaml` (400–1200 Hz), means over trials:
 
 | | first rewrite | current |
 |---|---|---|

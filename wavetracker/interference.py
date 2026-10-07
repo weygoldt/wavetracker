@@ -192,8 +192,22 @@ def _running_median(x: torch.Tensor, width: int, step: int = 8) -> torch.Tensor:
 class CombCanceller:
     """Detects and subtracts interference combs block by block."""
 
-    def __init__(self, cfg: InterferenceConfig, freqs: np.ndarray):
+    def __init__(
+        self,
+        cfg: InterferenceConfig,
+        freqs: np.ndarray,
+        min_fish_freq: float | None = None,
+    ):
+        """`min_fish_freq` (the lowest fundamental tracked) bounds the comb
+        spacing if `cfg.max_spacing` is None: a resting fish's harmonic series
+        is a comb spaced by its fundamental and must not be removed."""
         self.cfg = cfg
+        if cfg.max_spacing is not None:
+            self.max_spacing = cfg.max_spacing
+        elif min_fish_freq is not None:
+            self.max_spacing = min(300.0, 0.9 * min_fish_freq)
+        else:
+            self.max_spacing = 300.0
         self.freqs = freqs
         self.df = float(freqs[1] - freqs[0])
         self.subtract: torch.Tensor | None = None
@@ -269,7 +283,7 @@ class CombCanceller:
             for spacing, _, run in find_combs(
                 line_f[low],
                 cfg.min_spacing,
-                cfg.max_spacing,
+                self.max_spacing,
                 cfg.tooth_tolerance,
                 cfg.min_run,
             ):

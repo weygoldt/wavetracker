@@ -76,8 +76,10 @@ def test_frequency_range():
 def test_max_harmonics_caps_wide_ranges():
     from wavetracker.harmonics import n_harmonics
 
-    assert n_harmonics(HarmonicGroupsConfig()) == 8  # 1200 * 3 // 400 - 1
+    # original formula for the original range: max_freq * group // min_freq - 1
+    assert n_harmonics(HarmonicGroupsConfig(min_freq=400.0, max_freq=1200.0)) == 8
+    # default range 80-2400 Hz would need 89; capped at 10
+    assert n_harmonics(HarmonicGroupsConfig()) == 10
     wide = HarmonicGroupsConfig(min_freq=20.0, max_freq=2000.0, min_group_size=2)
+    wide.max_harmonics = None
     assert n_harmonics(wide) == 199
-    wide.max_harmonics = 10
-    assert n_harmonics(wide) == 10
