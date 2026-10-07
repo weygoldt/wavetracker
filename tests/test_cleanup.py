@@ -1,6 +1,6 @@
 import numpy as np
 
-from wavetracker.postprocessing.cleanup import assign_leftovers
+from wavetracker.postprocessing.cleanup import assign_leftovers, connect_with_overlap
 
 DT = 0.164
 
@@ -104,3 +104,12 @@ def test_window_without_detections_returns_empty_table():
         times, idx, ident, fund, np.zeros(100), np.array([0.0]), 50.0, 10.0, 2.5, 3.0
     )
     assert kde_th == 3.0 and valid.shape == (0, 3)
+
+
+def test_connect_with_overlap_without_candidates():
+    # Two fish far apart in frequency: no pair qualifies, nothing may change.
+    fund, idx, ident, times = _join(_track(0, 600, 700.0, 0), _track(0, 600, 500.0, 1))
+    valid = np.ones(len(ident))
+    out = connect_with_overlap(fund, ident.copy(), valid, idx, times)
+    out_ident = out[0] if isinstance(out, tuple) else out
+    np.testing.assert_array_equal(out_ident, ident)

@@ -4,7 +4,7 @@ version = "0.3.0"
 description = "Detect and track the EOD frequencies of wave-type electric fish in long multi-electrode recordings."
 readme = "README.md"
 license = "GPL-3.0-or-later"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 authors = [
     { name = "Till Raab" },
     { name = "Joerg Henninger" },
@@ -16,20 +16,21 @@ maintainers = [
 keywords = ["electric fish", "spectrogram", "tracking", "neuroethology"]
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
-    "numpy>=1.26",
-    "scipy>=1.12",
-    "numba>=0.60",
-    "torch>=2.4",
-    "thunderlab>=1.5",
-    "audioio>=2.5",
-    "matplotlib>=3.8",
-    "pandas>=2.1",
+    "numpy>=2.5",
+    "scipy>=1.18",
+    "numba>=0.68",
+    "torch>=2.14",
+    "thunderlab>=1.8",
+    "audioio>=2.8",
+    "matplotlib>=3.11",
+    "pandas>=3.0",
     "pyyaml>=6.0",
-    "rich>=13.7",
-    "typer>=0.12",
+    "rich>=15.0",
+    "typer>=0.27",
 ]
 
 [project.optional-dependencies]
@@ -44,8 +45,8 @@ Paper = "https://doi.org/10.3389/fnint.2022.965211"
 
 [dependency-groups]
 dev = [
-    "pytest>=8",
-    "ruff>=0.6",
+    "pytest>=9.1",
+    "ruff>=0.16",
 ]
 
 [build-system]
@@ -64,7 +65,7 @@ markers = [
 
 [tool.ruff]
 line-length = 88
-target-version = "py311"
+target-version = "py314"
 # Legacy GUI and contributed post-processing scripts are kept as-is for now.
 extend-exclude = ["wavetracker/gui", "wavetracker/postprocessing", "tests/legacy_tracking.py"]
 

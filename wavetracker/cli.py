@@ -106,8 +106,8 @@ def _summary_table(results, title: str, min_detections: int = 1) -> Table:
         "detections",
         "median f [Hz]",
         "f range [Hz]",
-        "start [s]",
-        "end [s]",
+        "start \\[s]",
+        "end \\[s]",
     ):
         table.add_column(col, justify="right")
     t = results.times[results.idx_v]
@@ -149,10 +149,10 @@ def run(
     ] = Path("wavetracker_output"),
     config: ConfigOpt = None,
     start: Annotated[
-        float, typer.Option(help="Start of the analysed range [s].")
+        float, typer.Option(help="Start of the analysed range \\[s].")
     ] = 0.0,
     duration: Annotated[
-        float | None, typer.Option(help="Duration of the analysed range [s].")
+        float | None, typer.Option(help="Duration of the analysed range \\[s].")
     ] = None,
     device: Annotated[
         str, typer.Option(help="Torch device: auto, cuda, cuda:1, cpu, ...")
@@ -279,10 +279,11 @@ def summary(
 def harmonics(
     results_dir: Annotated[Path, typer.Argument(exists=True, file_okay=False)],
     timescale: Annotated[
-        float, typer.Option(help="Only modulations faster than this are compared [s].")
+        float,
+        typer.Option(help="Only modulations faster than this are compared \\[s]."),
     ] = 30.0,
     min_overlap: Annotated[
-        float, typer.Option(help="Minimum common time of two identities [s].")
+        float, typer.Option(help="Minimum common time of two identities \\[s].")
     ] = 10.0,
     min_amp_corr: Annotated[
         float | None,
@@ -398,7 +399,7 @@ def plot(
 def synth(
     output: Annotated[Path, typer.Argument(help="Output .wav file.")],
     n_fish: Annotated[int, typer.Option("--fish", "-n")] = 3,
-    duration: Annotated[float, typer.Option(help="[s]")] = 120.0,
+    duration: Annotated[float, typer.Option(help="\\[s]")] = 120.0,
     channels: Annotated[int, typer.Option()] = 8,
     rate: Annotated[float, typer.Option(help="[Hz]")] = 20000.0,
     seed: Annotated[int, typer.Option()] = 0,
@@ -617,7 +618,7 @@ def merge_by_position_cmd(
 def concat(
     day_folders: Annotated[list[Path], typer.Argument(exists=True, file_okay=False)],
     output: Annotated[Path, typer.Option("--output", "-o")],
-    gap: Annotated[float, typer.Option(help="Gap inserted between days [s].")] = 0.0,
+    gap: Annotated[float, typer.Option(help="Gap inserted between days \\[s].")] = 0.0,
 ) -> None:
     """Concatenate results of consecutive recordings into one dataset."""
     from .postprocessing.concat import concatenate_wavetracker_outputs
@@ -638,7 +639,7 @@ def freq_analysis(
     timepoints: Annotated[
         list[str] | None, typer.Option("--timepoint", "-t", help="HH:MM, repeatable.")
     ] = None,
-    window: Annotated[float | None, typer.Option(help="Window [s].")] = None,
+    window: Annotated[float | None, typer.Option(help="Window \\[s].")] = None,
     method: Annotated[str | None, typer.Option(help="occurrence or power")] = None,
     freq_tolerance: Annotated[float | None, typer.Option(help="[Hz]")] = None,
     trace_tol: Annotated[float | None, typer.Option(help="[Hz]")] = None,

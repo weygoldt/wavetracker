@@ -431,7 +431,8 @@ def connect_with_overlap(fund_v, ident_v, valid_v, idx_v, times, time_tol=5*60, 
 
         connections_candidates.append([id0, id1, mean_freq_dist])
 
-    connections_candidates = np.array(connections_candidates)
+    # (n, 3) even when no pair qualifies; np.array([]) would be 1-D.
+    connections_candidates = np.array(connections_candidates, dtype=float).reshape(-1, 3)
 
     for pair_no in np.argsort(connections_candidates[:, 2]):
         id0 = connections_candidates[pair_no, 0]

@@ -26,7 +26,7 @@ It runs at several hundred times realtime on an 11-channel, 20 kHz recording
 
 ## Installation
 
-Requires Python ≥ 3.11. With [uv](https://docs.astral.sh/uv/):
+Requires Python ≥ 3.14. With [uv](https://docs.astral.sh/uv/):
 
 ```bash
 git clone https://github.com/weygoldt/wavetracker.git
@@ -161,7 +161,7 @@ for fish in r.ids():
 from wavetracker.config import Config
 from wavetracker.pipeline import detect, track_results
 
-cfg = Config.load("cfg.yaml")            # or Config()
+cfg = Config.load("cfg.yaml")  # or Config()
 out = detect("/data/rec", "results/rec", cfg, start=0, duration=600)
 track_results(out.results, cfg)
 out.results.save("results/rec")

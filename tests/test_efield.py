@@ -52,7 +52,8 @@ def test_gradient_matches_finite_differences(points, kind, water_depth):
     m = SourceModel(kind=kind, water_depth=water_depth)
     q = np.array([0.3, -0.2, 0.4, 0.7])
     v, g = m.potential_and_gradient(points, *q)
-    np.testing.assert_allclose(v, m.potential(points, *q), rtol=1e-12)
+    # Terms of order one cancel to ~1e-3: compare at their scale, not v's.
+    np.testing.assert_allclose(v, m.potential(points, *q), rtol=1e-12, atol=1e-13)
     eps = 1e-6
     for k in range(4):
         dq = np.zeros(4)
