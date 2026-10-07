@@ -102,3 +102,21 @@ def test_exclude_channels(synthetic_wav, tmp_path):
     res = detect(path, tmp_path, cfg, duration=10.0, device="cpu").results
     assert res.sign_v.shape[1] == 4
     assert res.meta["channels"] == [1, 2, 4, 5]
+
+
+def test_stored_spectrograms_follow_tracked_range(synthetic_wav, tmp_path):
+    """No fixed frequency limit: by default the stored spectrograms cover
+    1.25 x harmonic_groups.max_freq; an explicit limit is respected."""
+    path, _ = synthetic_wav
+    cfg = Config()
+    cfg.output.save_fine_spec = True
+    cfg.harmonic_groups.max_freq = 1600.0
+    detect(path, tmp_path / "auto", cfg, duration=10.0, device="cpu")
+    for name in ("sparse_freq", "fine_freqs"):
+        f = np.load(tmp_path / "auto" / f"{name}.npy")
+        assert 1950 < f.max() <= 2000.0 + 2  # 1.25 * 1600
+    cfg.output.sparse_spec_max_freq = 900.0
+    cfg.output.fine_spec_max_freq = 900.0
+    detect(path, tmp_path / "explicit", cfg, duration=10.0, device="cpu")
+    assert np.load(tmp_path / "explicit" / "fine_freqs.npy").max() <= 900.0
+    assert np.load(tmp_path / "explicit" / "sparse_freq.npy").max() <= 900.0

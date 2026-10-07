@@ -51,7 +51,7 @@ class SpectrumNoiseFloor:
         nfft: int,
         channels: list[int] | None = None,
         quantile: float = 10.0,
-        max_freq: float = 2100.0,
+        max_freq: float | None = None,
         max_frames: int = 400,
     ) -> SpectrumNoiseFloor:
         """Percentile over frames (centred at `frame_times`) of the power
@@ -67,7 +67,12 @@ class SpectrumNoiseFloor:
             rate = float(data.rate)
             scale = 2.0 / (rate * np.sum(win**2))
             freqs = np.fft.rfftfreq(nfft, 1.0 / rate)
-            kmax = int(np.searchsorted(freqs, max_freq)) + 3
+            # None: whole spectrum up to Nyquist
+            kmax = (
+                len(freqs)
+                if max_freq is None
+                else int(np.searchsorted(freqs, max_freq)) + 3
+            )
             spectra = []
             for t in frame_times:
                 s0 = round(t * rate - nfft / 2)

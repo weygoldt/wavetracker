@@ -251,7 +251,9 @@ class CombCanceller:
         if self.last_seen is None:
             self.last_seen = np.full(persistent.shape, -(10**9), dtype=np.int64)
         combs = []
-        fmax_bin = min(len(self.freqs) - 2, int(cfg.max_line_freq / self.df))
+        fmax_bin = len(self.freqs) - 2
+        if cfg.max_line_freq is not None:
+            fmax_bin = min(fmax_bin, int(cfg.max_line_freq / self.df))
         for c in range(power.shape[0]):
             e = excess[c, : fmax_bin + 1]
             peak = (

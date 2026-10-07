@@ -644,6 +644,10 @@ def run(args):
         config['freq_tolerance'] = args.freq_tolerance
     if args.trace_tol is not None:
         config['trace_tolerance'] = args.trace_tol
+    if getattr(args, 'min_freq', None) is not None:
+        config['min_freq'] = args.min_freq
+    if getattr(args, 'max_freq', None) is not None:
+        config['max_freq'] = args.max_freq
     if args.run_analysis is not None:
         config['run_analysis'] = args.run_analysis
     

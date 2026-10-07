@@ -106,3 +106,25 @@ def test_tooth_lifted_by_nearby_fish_is_dropped():
     # frame 0: strong fish 6 Hz away -> tooth dropped; frame 1: the
     # non-tooth detection is weaker -> both kept
     assert keep.tolist() == [True, False, True, True]
+
+
+def test_line_search_reaches_nyquist_by_default():
+    import torch
+
+    from wavetracker.config import InterferenceConfig
+    from wavetracker.interference import CombCanceller
+
+    rate, nfft = 48000.0, 4096
+    freqs = np.fft.rfftfreq(nfft, 1 / rate)
+    t = np.arange(int(4 * rate)) / rate
+    # a comb only above 10 kHz: 12 teeth of a 120 Hz comb at 15-16.4 kHz
+    x = sum(np.sin(2 * np.pi * 120 * k * t) for k in range(125, 137))
+    x = x + 0.01 * np.random.default_rng(0).standard_normal(len(t))
+    from wavetracker.spectrogram import PowerSpectrogram
+
+    power = PowerSpectrogram(nfft, 410, rate, torch.device("cpu"))(
+        x[None].astype(np.float32)
+    )
+    cc = CombCanceller(InterferenceConfig(search_max_freq=20000.0), freqs)
+    cc(power)
+    assert any(abs(c.spacing - 120) < 0.5 for c in cc.combs)

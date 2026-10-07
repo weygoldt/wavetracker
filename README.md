@@ -80,7 +80,7 @@ The most relevant parameters:
 | `spectrogram.exclude_channels` | `[]` | broken/noisy electrodes to ignore (`run -x 8`) |
 | `interference.enabled` | true | remove interference combs (`run --no-interference`) |
 | `interference.level_history_blocks` | 5 | gate-level memory; 2 follows changing hum faster, costs fish detections near teeth |
-| `harmonic_groups.min_freq` / `max_freq` | 400 / 1200 | fundamental frequency range [Hz] |
+| `harmonic_groups.min_freq` / `max_freq` | 400 / 1200 | fundamental frequency range [Hz]; the only default frequency limit (set it for your species) |
 | `harmonic_groups.low_thresh_factor` / `high_thresh_factor` | 6 / 10 | peak thresholds in units of the noise std |
 | `harmonic_groups.min_group_size` | 3 | harmonics 1..n that must all be present |
 | `harmonic_groups.max_harmonics` | none | cap on harmonics per group (needed for wide frequency ranges) |
@@ -94,6 +94,8 @@ The most relevant parameters:
 | `stitching.enabled` | true | join fragments across rises, dropouts and double detections |
 | `stitching.max_dropout` | 900 | longest gap bridged when nothing else is at that frequency [s] |
 | `output.save_fine_spec` | false | also store the full-resolution spectrogram |
+| `output.fine_spec_max_freq` / `sparse_spec_max_freq` | none | upper limit of the stored spectrograms; none = 1.25 × `harmonic_groups.max_freq` |
+| `interference.max_line_freq` | none | upper limit of the hum-line search; none = Nyquist |
 
 ### Output
 

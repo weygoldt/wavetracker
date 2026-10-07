@@ -134,16 +134,22 @@ def detect(
 
         spectrogram = PowerSpectrogram(sc.nfft, step, rate, dev)
         oc = cfg.output
+        # stored spectrograms cover the tracked range unless limited explicitly
+        auto_max = 1.25 * hc.max_freq
+        sparse_max = (
+            auto_max if oc.sparse_spec_max_freq is None else oc.sparse_spec_max_freq
+        )
+        fine_max = auto_max if oc.fine_spec_max_freq is None else oc.fine_spec_max_freq
         sparse = _SparseSpectrogram(
             freqs,
             times,
-            oc.sparse_spec_max_freq,
+            sparse_max,
             oc.sparse_spec_freq_res,
             oc.sparse_spec_time_bins,
         )
         fine = None
         if oc.save_fine_spec:
-            nf_fine = int(np.searchsorted(freqs, oc.fine_spec_max_freq, side="right"))
+            nf_fine = int(np.searchsorted(freqs, fine_max, side="right"))
             fine = np.lib.format.open_memmap(
                 output_dir / "fine_spec.npy",
                 mode="w+",

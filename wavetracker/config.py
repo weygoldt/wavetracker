@@ -115,8 +115,8 @@ class InterferenceConfig:
     search_max_freq: float = 3000.0
     """Combs are searched among lines below this frequency, then extended
     to all lines [Hz]."""
-    max_line_freq: float = 10000.0
-    """Lines above this frequency are ignored [Hz]."""
+    max_line_freq: float | None = None
+    """Lines above this frequency are ignored [Hz]. None: up to Nyquist."""
     min_frames: int = 30
     """Blocks with fewer frames reuse the previous block's combs."""
     frame_stride: int = 4
@@ -195,10 +195,12 @@ class StitchingConfig:
 class OutputConfig:
     save_fine_spec: bool = False
     """Store the full-resolution summed spectrogram (large!)."""
-    fine_spec_max_freq: float = 2000.0
-    """Upper frequency limit of the stored fine spectrogram [Hz]."""
-    sparse_spec_max_freq: float = 2000.0
-    """Upper frequency limit of the overview spectrogram [Hz]."""
+    fine_spec_max_freq: float | None = None
+    """Upper frequency limit of the stored fine spectrogram [Hz]. None: 1.25 x
+    harmonic_groups.max_freq (the tracked range plus room for rises)."""
+    sparse_spec_max_freq: float | None = None
+    """Upper frequency limit of the overview spectrogram [Hz]. None: as for
+    fine_spec_max_freq."""
     sparse_spec_time_bins: int = 4000
     """Approximate number of time bins of the overview spectrogram."""
     sparse_spec_freq_res: float = 2.0

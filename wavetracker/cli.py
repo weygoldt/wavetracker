@@ -565,6 +565,14 @@ def freq_analysis(
     method: Annotated[str | None, typer.Option(help="occurrence or power")] = None,
     freq_tolerance: Annotated[float | None, typer.Option(help="[Hz]")] = None,
     trace_tol: Annotated[float | None, typer.Option(help="[Hz]")] = None,
+    min_freq: Annotated[
+        float | None,
+        typer.Option(help="Ignore frequencies below [Hz] (default: none)."),
+    ] = None,
+    max_freq: Annotated[
+        float | None,
+        typer.Option(help="Ignore frequencies above [Hz] (default: none)."),
+    ] = None,
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
 ) -> None:
     """Extract the N most prominent frequencies at fixed times of day."""
@@ -583,6 +591,8 @@ def freq_analysis(
             method=method,
             freq_tolerance=freq_tolerance,
             trace_tol=trace_tol,
+            min_freq=min_freq,
+            max_freq=max_freq,
             output=output,
         )
     )

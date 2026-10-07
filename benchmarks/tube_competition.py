@@ -44,7 +44,8 @@ def pseudo_truth(
     2 minutes.
     """
     t_det = res.times[res.idx_v]
-    bins = np.arange(400, 1200.5, 0.5)
+    lo, hi = np.floor(res.fund_v.min()) - 5, np.ceil(res.fund_v.max()) + 5
+    bins = np.arange(lo, hi + 0.5, 0.5)  # spans the detections
     dt = res.times[1] - res.times[0]
 
     def peaks_of(f, min_count):

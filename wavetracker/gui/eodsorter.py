@@ -95,6 +95,9 @@ class PlotWidget:
         self.times = None
 
         self.fill_freqs = None
+        # frequency range of self.spectra; files written by the old wavetracker
+        # have no frequency axis and always covered 0-2000 Hz
+        self.spec_flim = (0.0, 2000.0)
         self.fill_times = None
         self.fill_spec_shape = None
         self.fill_spec = None
@@ -1078,8 +1081,8 @@ class MainWindow(QMainWindow):
             extent=[
                 self.times[0],
                 self.times[-1] + (self.times[1] - self.times[0]),
-                0,
-                2000,
+                self.spec_flim[0],
+                self.spec_flim[1],
             ],
             aspect="auto",
             #vmin=-100,
@@ -1222,6 +1225,11 @@ class MainWindow(QMainWindow):
                 self.spectra = np.load(
                     os.path.join(self.folder, "sparse_spectra.npy")
                 )
+                sparse_freq = os.path.join(self.folder, "sparse_freq.npy")
+                if os.path.exists(sparse_freq):
+                    f = np.load(sparse_freq)
+                    half = (f[1] - f[0]) / 2 if len(f) > 1 else 0.0
+                    self.spec_flim = (float(f[0] - half), float(f[-1] + half))
 
             try:
                 self.start_time, self.end_time = np.load(
@@ -1332,8 +1340,8 @@ class MainWindow(QMainWindow):
             extent=[
                 self.times[0],
                 self.times[-1] + (self.times[1] - self.times[0]),
-                0,
-                2000,
+                self.spec_flim[0],
+                self.spec_flim[1],
             ],
             aspect="auto",
             #vmin=-100,
@@ -1345,7 +1353,12 @@ class MainWindow(QMainWindow):
         self.Plot.ax.set_xlabel("time", fontsize=12)
         self.Plot.ax.set_ylabel("frequency [Hz]", fontsize=12)
         self.Plot.ax.set_xlim(self.start_time, self.end_time)
-        self.Plot.ax.set_ylim(400, 1000)
+        fund_v = getattr(self, "fund_v", None)
+        if fund_v is not None and len(fund_v):
+            lo, hi = np.nanpercentile(fund_v, [0.5, 99.5])
+            self.Plot.ax.set_ylim(lo - 20, hi + 20)
+        else:
+            self.Plot.ax.set_ylim(*self.spec_flim)
 
         self.Plot.plot_traces(
             self.ident_v, self.times, self.idx_v, self.fund_v, task="init"
@@ -1780,8 +1793,8 @@ class MainWindow(QMainWindow):
             extent=[
                 self.times[0],
                 self.times[-1] + (self.times[1] - self.times[0]),
-                0,
-                2000,
+                self.spec_flim[0],
+                self.spec_flim[1],
             ],
             aspect="auto",
             #vmin=-100,
