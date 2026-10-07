@@ -1,0 +1,7 @@
+# wavetracker settings for benchmarks/tube_mixture.py mixtures (fish at ~250-1300 Hz)
+harmonic_groups:
+  min_freq: 200.0
+  max_freq: 1400.0
+  min_good_peak_power: null
+output:
+  save_fine_spec: true

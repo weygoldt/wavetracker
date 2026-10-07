@@ -276,6 +276,60 @@ def summary(
 
 
 @app.command()
+def harmonics(
+    results_dir: Annotated[Path, typer.Argument(exists=True, file_okay=False)],
+    timescale: Annotated[
+        float, typer.Option(help="Only modulations faster than this are compared [s].")
+    ] = 30.0,
+    min_overlap: Annotated[
+        float, typer.Option(help="Minimum common time of two identities [s].")
+    ] = 10.0,
+    min_pattern: Annotated[
+        float | None,
+        typer.Option(help="Also accept electrode-pattern similarity >= this (grids)."),
+    ] = None,
+    remove: Annotated[
+        bool, typer.Option(help="Untrack the harmonic identities (ident_v = NaN).")
+    ] = False,
+) -> None:
+    """Find identities that are harmonics of other identities (co-modulation).
+
+    Writes harmonics.csv to the results directory.
+    """
+    import numpy as np
+
+    from .comodulation import ComodulationConfig, find_harmonics
+    from .results import Results
+
+    res = Results.load(results_dir)
+    cfg = ComodulationConfig(
+        timescale=timescale, min_overlap=min_overlap, min_pattern=min_pattern
+    )
+    with Console().status("scoring identity pairs"):
+        found = find_harmonics(res, cfg)
+    found.to_csv(results_dir / "harmonics.csv", index=False)
+    table = Table(title=f"{len(found)} harmonic identities")
+    for col in ("high", "f_high", "low", "f_low", "h", "overlap", "offset", "evidence"):
+        table.add_column(col)
+    for _, r in found.iterrows():
+        table.add_row(
+            f"{r.high:.0f}",
+            f"{r.f_high:.1f}",
+            f"{r.low:.0f}",
+            f"{r.f_low:.1f}",
+            str(r.h),
+            f"{r.overlap:.0f}",
+            f"{r.offset:+.2f}",
+            r.evidence,
+        )
+    Console().print(table)
+    if remove and len(found):
+        res.ident_v[np.isin(res.ident_v, found.high.to_numpy())] = np.nan
+        res.save(results_dir)
+        Console().print(f"untracked {len(found)} identities")
+
+
+@app.command()
 def info(
     inputs: Annotated[list[Path], typer.Argument(exists=True)],
 ) -> None:
