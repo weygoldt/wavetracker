@@ -158,3 +158,13 @@ def test_fundamental_keeps_its_peaks(tone):
     assert np.sum(np.abs(det.freq - LOW) < 0.1) == n_frames
     assert not np.any(np.abs(det.freq - 3 * LOW) < 1.0)
     assert not np.any(np.abs(det.freq - LOW / 2) < 1.0)
+
+
+def test_peak_of_another_fish_counts_as_gap():
+    # a stronger fish at 2f claims the odd fish's 2nd-harmonic slot
+    fish = [(LOW, ODD), (2 * LOW, (2.0, 1.0, 0.6))]
+    det, n_frames = _detect(fish, max_missing_harmonics=1)
+    for f in (LOW, 2 * LOW):
+        assert np.sum(np.abs(det.freq - f) < 0.1) == n_frames
+    det, n_frames = _detect(fish, max_missing_harmonics=1, exclusive_harmonics="all")
+    assert not np.any(np.abs(det.freq - LOW) < 0.1)

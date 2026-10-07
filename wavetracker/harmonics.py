@@ -165,6 +165,15 @@ def _get_group(
 
 
 @njit(cache=True, nogil=True)
+def _claimed(group, assigned, n):
+    """Whether any of the first `n` harmonics of `group` is claimed."""
+    for h in range(n):  # noqa: SIM110 (numba: no generators in any())
+        if group[h] != 0 and assigned[group[h]] != 0:
+            return True
+    return False
+
+
+@njit(cache=True, nogil=True)
 def _assign_with_gaps(
     groups,
     values,
@@ -177,15 +186,18 @@ def _assign_with_gaps(
     n_harmonics,
     n_exclusive,
     n_exclusive_gaps,
+    shared_as_gap,
     out_bins,
 ):
     """Greedy assignment allowing gaps among the first `n_window` harmonics.
 
     A group needs its fundamental and `min_group_size` of its first
     `n_window` harmonics. Good peaks are visited in descending power; a peak
-    first becomes the fundamental of the best unused group starting with it.
-    Only if there is none, it joins a complete group as a higher harmonic
-    (the original rule). Visiting by power keeps a fish's own fundamental
+    first becomes the fundamental of the best group starting with it. Only
+    if there is none, it joins an unclaimed complete group as a higher
+    harmonic (the original rule). Unless `shared_as_gap` is False
+    (exclusive_harmonics "all"), harmonics claimed by other fish count as
+    gaps. Visiting by power keeps a fish's own fundamental
     ahead of its higher harmonics and of noise below it, so neither its 3rd
     harmonic nor a sub-harmonic group takes its peaks. A group with gaps is
     rejected if its fundamental is a harmonic of an accepted fish. Accepted
@@ -220,42 +232,53 @@ def _assign_with_gaps(
         if assigned[search_peak] != 0:
             continue
         accepted = -1
+        acc_gap = False
         for as_fundamental in (True, False):
             for vi in range(n_valid):
                 i = valid[vi]
+                if log_row[groups[i, 0]] < min_good:
+                    continue
                 if as_fundamental:
                     if groups[i, 0] != search_peak:
                         continue
-                    if gapped[i] and harmonic[search_peak] != 0:
-                        continue
-                else:
-                    if gapped[i]:
-                        continue
-                    contains = False
-                    for h in range(1, min_group_size):
-                        if groups[i, h] == search_peak:
-                            contains = True
-                            break
-                    if not contains:
-                        continue
-                if log_row[groups[i, 0]] < min_good:
+                    # complete: its first min_group_size harmonics are free;
+                    # otherwise harmonics claimed by other fish are gaps
+                    free = 0
+                    complete = True
+                    for h in range(n_window):
+                        b = groups[i, h]
+                        if b != 0 and assigned[b] == 0:
+                            free += 1
+                        else:
+                            complete &= h >= min_group_size
+                    gap = not complete
+                    if gap:
+                        if free < min_group_size or harmonic[search_peak] != 0:
+                            continue
+                        if not shared_as_gap and _claimed(
+                            groups[i], assigned, n_exclusive_gaps
+                        ):
+                            continue
+                    accepted = i
+                    acc_gap = gap
+                    break
+                if gapped[i]:
                     continue
-                n_claim = n_exclusive_gaps if gapped[i] else n_exclusive
-                used = False
-                for h in range(n_claim):
-                    b = groups[i, h]
-                    if b != 0 and assigned[b] != 0:
-                        used = True
+                contains = False
+                for h in range(1, min_group_size):
+                    if groups[i, h] == search_peak:
+                        contains = True
                         break
-                if not used:
+                if not contains:
+                    continue
+                if not _claimed(groups[i], assigned, n_exclusive):
                     accepted = i
                     break
             if accepted >= 0:
                 break
         if accepted < 0:
             continue
-        n_claim = n_exclusive_gaps if gapped[accepted] else n_exclusive
-        for h in range(n_claim):
+        for h in range(n_exclusive_gaps if acc_gap else n_exclusive):
             if groups[accepted, h] != 0:
                 assigned[groups[accepted, h]] = 1
         for h in range(n_harmonics):
@@ -339,6 +362,7 @@ def _frame_groups(
             n_harmonics,
             n_exclusive,
             n_exclusive_gaps,
+            n_exclusive_gaps < n_harmonics,
             out_bins,
         )
 
