@@ -284,6 +284,12 @@ def harmonics(
     min_overlap: Annotated[
         float, typer.Option(help="Minimum common time of two identities [s].")
     ] = 10.0,
+    min_amp_corr: Annotated[
+        float | None,
+        typer.Option(
+            help="Also accept amplitude co-modulation >= this (fixed electrodes)."
+        ),
+    ] = None,
     min_pattern: Annotated[
         float | None,
         typer.Option(help="Also accept electrode-pattern similarity >= this (grids)."),
@@ -303,7 +309,10 @@ def harmonics(
 
     res = Results.load(results_dir)
     cfg = ComodulationConfig(
-        timescale=timescale, min_overlap=min_overlap, min_pattern=min_pattern
+        timescale=timescale,
+        min_overlap=min_overlap,
+        min_amp_corr=min_amp_corr,
+        min_pattern=min_pattern,
     )
     with Console().status("scoring identity pairs"):
         found = find_harmonics(res, cfg)

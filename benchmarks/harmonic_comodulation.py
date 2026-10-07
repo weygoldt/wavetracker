@@ -73,7 +73,10 @@ def auc(pos: np.ndarray, neg: np.ndarray) -> float:
         return np.nan
     allv = np.r_[pos, neg]
     ranks = pd.Series(allv).rank().to_numpy()
-    return float((ranks[: len(pos)].sum() - len(pos) * (len(pos) + 1) / 2) / (len(pos) * len(neg)))
+    return float(
+        (ranks[: len(pos)].sum() - len(pos) * (len(pos) + 1) / 2)
+        / (len(pos) * len(neg))
+    )
 
 
 def main():
@@ -91,11 +94,15 @@ def main():
         labels = label_identities(res, truth)
         n_lab = pd.Series([lab for lab in labels.values()]).value_counts()
         harm_ids = sum(1 for k, h in labels.values() if k >= 0 and h > 1)
-        print(f"{d.name}: {len(labels)} identities, {harm_ids} are harmonics of a fish, "
-              f"{sum(1 for k, _ in labels.values() if k < 0)} other")
+        print(
+            f"{d.name}: {len(labels)} identities, {harm_ids} are harmonics of a fish, "
+            f"{sum(1 for k, _ in labels.values() if k < 0)} other"
+        )
         del n_lab
         for ts in args.timescales:
-            cfg = ComodulationConfig(timescale=ts, min_overlap=args.min_overlap, max_offset=None)
+            cfg = ComodulationConfig(
+                timescale=ts, min_overlap=args.min_overlap, max_offset=None
+            )
             p = score_pairs(res, cfg)
             p["class"] = pair_classes(p, labels, truth["source"])
             p["timescale"] = ts
@@ -116,7 +123,10 @@ def main():
             neg = q[q["class"] == neg_name]
             line.append(
                 f"  vs {neg_name}: "
-                + " ".join(f"{f} {auc(pos[f].to_numpy(), neg[f].to_numpy()):.2f}" for f in FEATURES)
+                + " ".join(
+                    f"{f} {auc(pos[f].to_numpy(), neg[f].to_numpy()):.2f}"
+                    for f in FEATURES
+                )
             )
         print("\n".join(line))
     print("wrote", out)

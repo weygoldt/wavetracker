@@ -122,6 +122,7 @@ The most relevant parameters:
 | `tracking.gap_tolerance` / `gap_tolerance_rate` | none / 0 | gap-dependent frequency tolerance `tol + rate * gap` (dense populations) |
 | `tracking.amplitude_feature` | `minmax` | electrode pattern in the link error; `db` (level ratios) for few electrodes |
 | `tracking.min_support` | 0 | only track detections with ≥ n neighbours within `support_window` s and `support_freq` Hz |
+| `wavetracker harmonics --timescale` | 30 | flag harmonics tracked as fish by fast co-modulation (post-processing) |
 | `stitching.enabled` | true | join fragments across rises, dropouts and double detections |
 | `stitching.max_dropout` | 900 | longest gap bridged when nothing else is at that frequency [s] |
 | `output.save_fine_spec` | false | also store the full-resolution spectrogram |
@@ -366,6 +367,60 @@ Observations on a 16 min, 2-channel, ~40-fish recording (Iriri 2026):
 * Recorders that split a take into several files may write the take's start
   time into every file; thunderlab then refuses to read them as one
   recording. Concatenate them first (e.g. with `audioio`).
+
+## Post-processing: harmonics tracked as fish
+
+With few required harmonics (`min_group_size: 2`) and many fish, higher
+harmonics of a fish are often tracked as additional "fish" (23 % of the
+fish-related detections in dense tube mixtures, see below). A harmonic follows
+its fundamental exactly, f_h(t) = h f_1(t), including its fast modulations,
+while two fish near an integer ratio share at most slow drifts (temperature
+changes every fish by the same factor, Q10):
+
+```bash
+wavetracker harmonics DIR             # writes DIR/harmonics.csv
+wavetracker harmonics DIR --remove    # also untracks them (ident_v = NaN)
+```
+
+For every pair of overlapping identities (>= `--min-overlap` 10 s) within
+3 Hz of an integer ratio it computes the offset from the exact ratio and the
+correlation of the fast frequency modulations: each trace minus its running
+median over `--timescale` seconds. A pair is a harmonic if it is within
+0.25 Hz of the exact ratio and the correlation is >= 0.5. Amplitude
+co-modulation (`--min-amp-corr`) and electrode-pattern similarity
+(`--min-pattern`, grids) can be added as alternative evidence; with moving
+electrodes neighbouring fish share amplitude changes, so they are off by
+default.
+
+The timescale matters: below ~10 s the modulations of resting fish are
+mostly estimation noise; above ~100 s slow drifts shared by all fish make
+different fish correlate. On dense tube mixtures (below; 103 harmonic pairs,
+1645 pairs of different fish) the share of harmonic pairs found at 5 %
+false positives was 0.71 (5 s), 0.84 (10 s), **0.90 (30 s)**, 0.88 (60 s),
+0.86 (120 s) and 0.83 (600 s), the threshold needed rising from 0.23 (5 s)
+to 0.89 (600 s). 30 s is the default. On the Iriri recording true harmonics
+correlate with >= 0.94 at 30 s, while independent fish within 0.15 Hz of
+3:1 (e.g. 307.4 / 921.5 Hz) are at -0.11 (30 s) but rise to 0.3 at
+120-600 s.
+
+Results on three tube mixtures (`min_group_size: 2`, 20 min, 16 fish each):
+70 of 79 harmonic identities that overlap their fundamental are found (74
+with amplitude, 78 with electrode pattern as additional evidence), no fish
+identity is flagged. Removing them removes 75 % of the harmonic detections
+and 2 of 293k fish detections. Not covered: octave errors, where the
+fundamental is not detected and its harmonic group is reported instead (no
+simultaneous identity to compare with; 16 % of the harmonic detections with
+`min_group_size: 2`, 65 % with 3).
+
+### Benchmark: dense mixtures of tube recordings
+
+`benchmarks/tube_mixture.py` sums 8 two-fish tube recordings electrode by
+electrode. Each source is time-warped (frequency scale 0.4-1.6, plus a slow
+drift common to all sources, std 0.5 % over ~5 min) so fish spread over
+250-1300 Hz with natural modulations and harmonics land among other fish;
+hum combs are removed first. Ground truth comes from tracking each source
+alone. `benchmarks/harmonic_comodulation.py` scans the timescale,
+`benchmarks/harmonic_rule.py` evaluates the rule per identity.
 
 ## Post-processing: merging by position (moving electrodes)
 

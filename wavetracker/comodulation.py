@@ -49,8 +49,9 @@ class ComodulationConfig:
     """A harmonic is at most this far from h * f_lo [Hz]."""
     min_freq_corr: float = 0.5
     """Fast frequency co-modulation that identifies a harmonic ..."""
-    min_amp_corr: float = 0.5
-    """... or fast amplitude co-modulation ..."""
+    min_amp_corr: float | None = None
+    """... or fast amplitude co-modulation (None: not used; with moving
+    electrodes nearby fish share amplitude changes) ..."""
     min_pattern: float | None = None
     """... or electrode pattern similarity (None: not used; useful with many
     electrodes, e.g. 0.98 for a grid)."""
@@ -178,10 +179,9 @@ def classify(
         pairs["evidence"] = pd.Series(dtype=str)
         return pairs
     close = pairs.offset.abs() <= cfg.harmonic_offset
-    tests = {
-        "frequency": pairs.freq_corr >= cfg.min_freq_corr,
-        "amplitude": pairs.amp_corr >= cfg.min_amp_corr,
-    }
+    tests = {"frequency": pairs.freq_corr >= cfg.min_freq_corr}
+    if cfg.min_amp_corr is not None:
+        tests["amplitude"] = pairs.amp_corr >= cfg.min_amp_corr
     if cfg.min_pattern is not None:
         tests["pattern"] = pairs.pattern >= cfg.min_pattern
     evidence = pd.DataFrame(tests)

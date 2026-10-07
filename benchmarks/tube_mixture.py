@@ -165,7 +165,9 @@ def source_segment(args, source: str, a: float, grid):
     seg0, seg1 = args.start - 5.0, t_end + 5.0
     cache = Path(args.cache) / f"{source}_{seg0:.0f}_{seg1:.0f}"
     if not (cache / "fund_v.npy").exists():
-        cfg = Config.from_dict({"harmonic_groups": {"min_freq": 400.0, "max_freq": 1200.0}})
+        cfg = Config.from_dict(
+            {"harmonic_groups": {"min_freq": 400.0, "max_freq": 1200.0}}
+        )
         detect(RAW / source, cache, cfg, start=seg0, duration=seg1 - seg0)
     res = Results.load(cache)
     truth = pseudo_truth(res)  # (2, frames), source frequency
@@ -179,9 +181,14 @@ def source_segment(args, source: str, a: float, grid):
         x = np.asarray(
             raw_memmap(RAW / source)[int(seg0 * RATE) : int(seg1 * RATE)], np.float64
         )
-        combs = json.loads((cache / "wavetracker.json").read_text())["interference_combs"]
+        combs = json.loads((cache / "wavetracker.json").read_text())[
+            "interference_combs"
+        ]
         bands = [
-            (h * res.fund_v[ok & (k == fish)].min(), h * res.fund_v[ok & (k == fish)].max())
+            (
+                h * res.fund_v[ok & (k == fish)].min(),
+                h * res.fund_v[ok & (k == fish)].max(),
+            )
             for fish in range(2)
             for h in range(1, 6)
         ]

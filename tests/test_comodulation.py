@@ -17,7 +17,12 @@ def _results(seed=0):
 
     f1 = 300 * slow + fast()
     f3 = 902 * slow + 3 * fast()
-    amp1 = 1 + 0.3 * np.convolve(rng.standard_normal(len(times)), np.hanning(30), "same") / 10
+    amp1 = (
+        1
+        + 0.3
+        * np.convolve(rng.standard_normal(len(times)), np.hanning(30), "same")
+        / 10
+    )
     pattern1, pattern3 = np.array([1.0, 0.5, 0.1]), np.array([0.1, 0.6, 1.0])
     rows = [
         (f1, 1.0, amp1[:, None] * pattern1),
@@ -78,7 +83,9 @@ def test_cli_harmonics(tmp_path):
     from wavetracker.cli import app
 
     _results().save(tmp_path)
-    r = CliRunner().invoke(app, ["harmonics", str(tmp_path), "--timescale", "5", "--remove"])
+    r = CliRunner().invoke(
+        app, ["harmonics", str(tmp_path), "--timescale", "5", "--remove"]
+    )
     assert r.exit_code == 0, r.output
     assert (tmp_path / "harmonics.csv").exists()
     assert not np.any(Results.load(tmp_path).ident_v == 2.0)
