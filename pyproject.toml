@@ -49,6 +49,7 @@ Paper = "https://doi.org/10.3389/fnint.2022.965211"
 [dependency-groups]
 dev = [
     "pytest>=9.1",
+    "pytest-cov>=7.1.0",
     "ruff>=0.16",
 ]
 
@@ -75,3 +76,9 @@ extend-exclude = ["wavetracker/gui", "wavetracker/postprocessing", "tests/legacy
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "NPY", "RUF"]
 ignore = ["E501"]
+
+[tool.coverage.run]
+# The legacy PyQt5 EOD sorter needs the gui extra, which CI does not install,
+# and is superseded by audian's wavetracker plugin.  (numba-compiled code is
+# not traced either, so tracking.py and harmonics.py read low.)
+omit = ["wavetracker/gui/*"]

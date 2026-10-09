@@ -1,5 +1,7 @@
 # wavetracker
 
+[![CI](https://github.com/weygoldt/wavetracker/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/weygoldt/wavetracker/actions/workflows/ci.yml?query=branch%3Amaster)
+[![coverage](https://raw.githubusercontent.com/weygoldt/wavetracker/badges/coverage.svg)](https://github.com/weygoldt/wavetracker/actions/workflows/ci.yml?query=branch%3Amaster)
 [![Frontiers in Integrative Neuroscience](https://img.shields.io/badge/Published%20in-Frontiers%20in%20Integrative%20Neuroscience-blue)](https://doi.org/10.3389/fnint.2022.965211)
 
 Detect and track the EOD frequencies of individual **wave-type electric fish**
@@ -31,7 +33,7 @@ Requires Python 3.11–3.14. With [uv](https://docs.astral.sh/uv/):
 ```bash
 git clone https://github.com/weygoldt/wavetracker.git
 cd wavetracker
-uv sync                 # add --extra gui for the EOD sorter GUI
+uv sync                 # add --extra gui for the legacy EOD sorter
 uv run wavetracker --help
 ```
 
@@ -92,7 +94,7 @@ Post-processing and tools:
 | `wavetracker merge-by-position DIR -e electrodes.npz` | group track segments into fish by frequency and position (moving electrodes) |
 | `wavetracker concat DAY1 DAY2 … -o OUT` | concatenate consecutive recordings |
 | `wavetracker freq-analysis DIRS…` | top-N frequencies at fixed times of day |
-| `wavetracker sorter DIR` | GUI for manual track correction (`--extra gui`) |
+| `wavetracker sorter DIR` | legacy PyQt5 track-correction GUI (`--extra gui`); superseded by [audian](#correcting-tracks-interactively) |
 | `wavetracker synth out.wav -n 4` | synthetic recording with ground truth |
 | `wavetracker config [FILE]` | print or write the default configuration |
 
@@ -170,6 +172,32 @@ out.results.save("results/rec")
 `wavetracker.synthetic` generates recordings of fish with known frequency
 traces and `wavetracker.evaluation.evaluate` scores results against them
 (precision, recall, identity coverage and purity).
+
+## Correcting tracks interactively
+
+No tracker is right everywhere: rises split a fish into fragments, crossing
+fish swap identities, harmonics get tracked as fish. The fix is to look and
+correct, in [audian](https://github.com/weygoldt/audian), a recording viewer
+whose wavetracker plugin runs the pipeline and edits its output on the
+spectrogram.
+
+![audian with the wavetracker plugin](docs/images/audian-wavetracker.png)
+
+```bash
+git clone https://github.com/weygoldt/audian.git
+cd audian
+uv sync                     # installs wavetracker into the same environment
+uv run audian recording.wav # then Plugins → Wavetracker
+```
+
+*Track recording* runs wavetracker on the whole file in the background
+(*Track visible* on just the window in view), or open an existing results
+directory. In edit mode, brushes select, erase, cut, merge, assign and add
+tracks (*Add* follows the spectrogram ridge under the brush), with an undo
+history; tracks that are harmonics of another fish are flagged. Saving keeps
+the original identities as `ident_v.tracked.npy` and the directory stays
+readable by `Results.load`. It supersedes the legacy PyQt5 EOD sorter
+(`wavetracker sorter`).
 
 ## Differences to the original implementation
 

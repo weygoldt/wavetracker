@@ -24,3 +24,9 @@ tmp/
 
 # Claude Code worktrees
 .claude/
+
+# coverage.py
+.coverage
+.coverage.*
+coverage.json
+coverage.xml
