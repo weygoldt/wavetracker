@@ -13,17 +13,21 @@ import numpy as np
 import torch
 
 from . import __version__
-from .config import Config
+from .clicks import remove_clicks
+from .config import Config, HarmonicGroupsConfig
 from .harmonics import Detections, absolute_limit_binds, detect_harmonic_groups
 from .interference import CombCanceller, merge_tooth_neighbours
 from .io import FrameLayout, iter_blocks, open_recording, resolve_input
 from .results import Results
 from .spectrogram import (
     PowerSpectrogram,
+    band_noise_std,
     decibel,
     estimate_noise_std,
+    frame_noise_std,
     frequencies,
     get_device,
+    min_noise_std,
     step_size,
 )
 from .stitching import stitch
@@ -74,6 +78,125 @@ class _SparseSpectrogram:
         groups = np.arange(len(t)) // self.tpool
         times = np.bincount(groups, weights=t) / np.bincount(groups)
         return spec, self.freqs, times
+
+
+class DetectionThresholds:
+    """Peak thresholds of every frame, block by block.
+
+    They follow the noise around each frame (`threshold_window`), so that a
+    recording may start long before it has the noise of the water or any fish:
+    results for a fish do not depend on what came before it, and over frequency
+    (`threshold_band`), so that noise common to all electrodes at low frequencies
+    does not make false fish. Values given in the configuration are used as they
+    are.
+    """
+
+    #: Scale of `band_noise_std`, which reads 1.08 to 1.14 of `frame_noise_std` on
+    #: Gaussian noise: bands only raise thresholds, and not where the noise is the
+    #: same over frequency. Measured on real fish at night in a field recording,
+    #: against what is found without bands: 0.6 finds 94 % of it and leaves 0.03 of
+    #: 0.14 other detections per frame; 0.7 finds 88 % and leaves 0.02; 0.85 finds 78 %.
+    BAND_SCALE = 0.6
+
+    def __init__(
+        self,
+        cfg: HarmonicGroupsConfig,
+        n_channels: int,
+        frame_step: float,
+        band_bins: int | None = None,
+        lag: int = 1,
+    ) -> None:
+        self.cfg = cfg
+        self.floor = min_noise_std(n_channels)
+        adaptive = cfg.threshold_window is not None
+        self.band_bins = band_bins if adaptive else None
+        self.lag = lag
+        self.known_bands: np.ndarray | None = None
+        self.width = (
+            None
+            if cfg.threshold_window is None
+            else max(1, round(cfg.threshold_window / frame_step)) | 1
+        )
+        self.known: float | None = None
+        """The latest noise estimate, for blocks without data."""
+        self.blocks: list[float | None] = []
+        """Median noise of each block (None: no data), for the results."""
+
+    def _smooth(self, std: torch.Tensor) -> torch.Tensor:
+        """Median over `width` frames along the last axis, ignoring NaN."""
+        half = self.width // 2
+        padded = torch.nn.functional.pad(std, (half, half), value=torch.nan)
+        return padded.unfold(-1, self.width, 1).nanmedian(-1).values
+
+    def _band_noise(self, log_spec: torch.Tensor) -> np.ndarray:
+        """Scaled noise per band and frame, shape (frames, bands), NaN unknown."""
+        std = band_noise_std(log_spec, self.lag, self.band_bins)
+        std = self.BAND_SCALE * self._smooth(std)
+        std = std.T.cpu().numpy()
+        known = np.isfinite(std).any(0)
+        if known.any():
+            self.known_bands = np.nanmedian(std[:, known], axis=0)
+            if not known.all():
+                full = np.full(std.shape[1], np.nan)
+                full[known] = self.known_bands
+                self.known_bands = full
+        if self.known_bands is not None:
+            std = np.where(np.isfinite(std), std, self.known_bands)
+        return std
+
+    def _frame_noise(self, log_spec: torch.Tensor) -> np.ndarray:
+        n_frames = log_spec.shape[1]
+        if self.width is None:  # frozen at the first block with data
+            if self.known is None:
+                estimate = estimate_noise_std(log_spec)
+                self.known = None if math.isnan(estimate) else estimate
+            self.blocks.append(self.known)
+            return np.full(n_frames, np.nan if self.known is None else self.known)
+        std = self._smooth(frame_noise_std(log_spec)).cpu().numpy()
+        valid = np.isfinite(std)
+        if valid.any():
+            self.known = float(np.median(std[valid]))
+        self.blocks.append(self.known if valid.any() else None)
+        fill = self.floor if self.known is None else self.known
+        return np.maximum(np.where(valid, std, fill), self.floor)
+
+    def __call__(self, log_spec: torch.Tensor) -> tuple[np.ndarray, np.ndarray]:
+        """Low and high threshold of each frame of `log_spec` (freqs, frames),
+        with bands of `band_bins` shape (frames, bands), else (frames,)."""
+        cfg = self.cfg
+        n_frames = log_spec.shape[1]
+        if cfg.low_threshold is not None and cfg.high_threshold is not None:
+            return (
+                np.full(n_frames, float(cfg.low_threshold)),
+                np.full(n_frames, float(cfg.high_threshold)),
+            )
+        std = self._frame_noise(log_spec)
+        if self.band_bins is not None:
+            bands = self._band_noise(log_spec)
+            std = np.fmax(std[:, None], bands)
+        low = cfg.low_thresh_factor * std
+        high = cfg.high_thresh_factor * std
+        if cfg.low_threshold is not None:
+            low = np.full(low.shape, float(cfg.low_threshold))
+        if cfg.high_threshold is not None:
+            high = np.full(high.shape, float(cfg.high_threshold))
+        return low, high
+
+    @property
+    def noise_std(self) -> float | None:
+        """Median noise over the blocks so far (None: no data, or not needed)."""
+        known = [b for b in self.blocks if b is not None]
+        return float(np.median(known)) if known else None
+
+    def summary(self) -> tuple[float | None, float | None]:
+        """One low and high threshold for the recording (None: no data)."""
+        cfg, std = self.cfg, self.noise_std
+        low, high = cfg.low_threshold, cfg.high_threshold
+        if low is None and std is not None:
+            low = cfg.low_thresh_factor * max(std, self.floor)
+        if high is None and std is not None:
+            high = cfg.high_thresh_factor * max(std, self.floor)
+        return low, high
 
 
 @dataclass
@@ -167,8 +290,15 @@ def detect(
             else None
         )
         comb_log: dict[float, dict] = {}
-        low_th, high_th = hc.low_threshold, hc.high_threshold
-        noise_std = None
+        band_bins = (
+            None
+            if hc.threshold_band is None
+            else max(1, round(hc.threshold_band / freqs[1]))
+        )
+        thresholds = DetectionThresholds(
+            hc, n_channels, step / rate, band_bins, max(1, round(sc.nfft / step))
+        )
+        click_blocks: list[float] = []
         noise_floor = None
         funds, idxs, signs, cplxs = [], [], [], []
 
@@ -177,9 +307,12 @@ def detect(
             t0 = time.perf_counter()
             timings.read += t0 - t_read
 
-            stft = spectrogram.stft(
-                torch.from_numpy(block.data).to(dev, non_blocking=True)
-            )
+            traces = torch.from_numpy(block.data).to(dev, non_blocking=True)
+            if cfg.clicks.enabled:
+                traces, fraction = remove_clicks(traces, rate, cfg.clicks)
+                click_blocks.append(round(float(fraction.mean()), 6))
+            stft = spectrogram.stft(traces)
+            del traces
             power = spectrogram.power(stft)
             if canceller is not None:
                 power = canceller(power)
@@ -193,18 +326,14 @@ def detect(
                     entry["max_teeth"] = max(entry["max_teeth"], len(comb.teeth))
             summed = power.sum(0)
             log_spec = decibel(summed)
-            if low_th is None or high_th is None:
-                noise_std = estimate_noise_std(log_spec)
-                low_th = noise_std * hc.low_thresh_factor if low_th is None else low_th
-                high_th = (
-                    noise_std * hc.high_thresh_factor if high_th is None else high_th
-                )
-                log.info(
-                    "Noise std %.2f dB -> thresholds low=%.2f dB, high=%.2f dB",
-                    noise_std,
-                    low_th,
-                    high_th,
-                )
+            low_th, high_th = thresholds(log_spec)
+            log.debug(
+                "Frame %d: noise std %s dB, thresholds low=%.2f dB, high=%.2f dB",
+                block.first_frame,
+                thresholds.blocks[-1] if thresholds.blocks else None,
+                np.median(low_th),
+                np.median(high_th),
+            )
             log_np = log_spec.T.contiguous().cpu().numpy()
             if noise_floor is None:
                 band = (freqs >= hc.min_freq) & (freqs <= hc.max_freq)
@@ -213,14 +342,14 @@ def detect(
                 # Digital silence has no level: use the first block with data.
                 if level.size:
                     noise_floor = float(np.median(level))
-                    if absolute_limit_binds(noise_floor, high_th, hc):
+                    if absolute_limit_binds(noise_floor, np.median(high_th), hc):
                         log.warning(
                             "Median noise floor %.1f dB + high threshold %.1f dB is "
                             "below harmonic_groups.min_good_peak_power (%.1f dB): weak "
                             "fish are removed by this absolute limit. Lower it or set "
                             "it to null.",
                             noise_floor,
-                            high_th,
+                            np.median(high_th),
                             hc.min_good_peak_power,
                         )
             sparse.add(summed)
@@ -231,7 +360,7 @@ def detect(
             t1 = time.perf_counter()
             timings.spectrogram += t1 - t0
 
-            det = detect_harmonic_groups(log_np, freqs, hc, low_th, high_th)
+            det = detect_harmonic_groups(log_np, freqs, hc, low_th, high_th, band_bins)
             if canceller is not None and len(det.frame):
                 keep = merge_tooth_neighbours(
                     det.frame,
@@ -277,6 +406,7 @@ def detect(
         del fine
 
     timings.total = time.perf_counter() - t_start
+    low_summary, high_summary = thresholds.summary()
     meta = {
         "version": __version__,
         "input": (
@@ -292,7 +422,10 @@ def detect(
         "device": str(dev),
         "frame_step": step / rate,
         "freq_resolution": float(freqs[1]),
-        "noise_std": noise_std,
+        "noise_std": thresholds.noise_std,
+        "noise_std_blocks": thresholds.blocks,
+        "click_fraction": float(np.mean(click_blocks)) if click_blocks else 0.0,
+        "click_fraction_blocks": click_blocks,
         "interference_combs": {
             f"{spacing:.1f}": {
                 "blocks": len(e["blocks"]),
@@ -301,8 +434,8 @@ def detect(
             }
             for spacing, e in sorted(comb_log.items())
         },
-        "low_threshold": low_th,
-        "high_threshold": high_th,
+        "low_threshold": low_summary,
+        "high_threshold": high_summary,
         "noise_floor": noise_floor,
         "config": cfg.to_dict(),
         "timings": vars(timings),

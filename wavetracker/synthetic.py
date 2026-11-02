@@ -209,6 +209,32 @@ def synthesize(
     return SyntheticRecording(data, rate, truth_times, truth_f, truth_a)
 
 
+def add_clicks(
+    data: np.ndarray,
+    rate: float,
+    per_second: float = 10.0,
+    amplitude: float = 50.0,
+    rng: np.random.Generator | None = None,
+) -> np.ndarray:
+    """A copy of `data` (samples, channels) with static on every channel.
+
+    Modelled on electrodes out of the water in field recordings: clicks at
+    random times, of broadband noise decaying within milliseconds, with
+    amplitudes around `amplitude` spread over about an order of magnitude.
+    """
+    rng = rng or np.random.default_rng()
+    out = np.array(data, dtype=np.float32)
+    n = out.shape[0]
+    for c in range(out.shape[1]):
+        for start in rng.integers(0, n, rng.poisson(per_second * n / rate)):
+            tau = rng.uniform(0.0003, 0.003) * rate
+            length = min(int(6 * tau) + 1, n - start)
+            size = amplitude * rng.lognormal(0.0, 0.7)
+            decay = np.exp(-np.arange(length) / tau)
+            out[start : start + length, c] += size * decay * rng.standard_normal(length)
+    return out
+
+
 def save_recording(rec: SyntheticRecording, path: str | Path) -> Path:
     """Write the data as wav and the ground truth as ``<name>_truth.npz``."""
     from audioio import write_audio

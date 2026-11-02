@@ -6,6 +6,7 @@ import math
 
 import numpy as np
 import torch
+from scipy.special import polygamma
 
 
 def get_device(name: str = "auto") -> torch.device:
@@ -80,10 +81,11 @@ def decibel(power: torch.Tensor, min_power: float = 1e-20) -> torch.Tensor:
     return db.masked_fill_(power <= min_power, -math.inf)
 
 
-def estimate_noise_std(
+def frame_noise_std(
     log_spec: torch.Tensor, chunk: int = 128, nbins: int = 100
-) -> float:
-    """Noise standard deviation of a dB spectrogram (freqs, frames).
+) -> torch.Tensor:
+    """Noise standard deviation of each frame of a dB spectrogram (freqs, frames),
+    NaN for frames without data (digital silence).
 
     Uses the upper-middle part of the spectrum (bins n/2..3n/4), which is
     assumed to contain no fish. The spectrum is detrended in chunks of
@@ -94,8 +96,9 @@ def estimate_noise_std(
     seg = log_spec[n // 2 : n * 3 // 4].T  # (frames, bins)
     seg = seg[:, : (seg.shape[1] // chunk) * chunk]
     if seg.shape[1] == 0:
-        return float("nan")
+        return torch.full((log_spec.shape[1],), torch.nan, device=log_spec.device)
     seg = torch.nan_to_num(seg, neginf=float("nan"))
+    has_data = seg.isfinite().any(-1)
     chunks = seg.reshape(seg.shape[0], -1, chunk)
     detrended = (
         chunks - chunks.nanmean(-1, keepdim=True) + seg.nanmean(-1)[:, None, None]
@@ -114,4 +117,52 @@ def estimate_noise_std(
     first = torch.where(above, bins, nbins).amin(-1)
     last = torch.where(above, bins, -1).amax(-1)
     std = 0.5 * (last - first + 1) * width.squeeze(-1)
-    return float(std.mean())
+    return torch.where(has_data, std, torch.nan)
+
+
+def estimate_noise_std(
+    log_spec: torch.Tensor, chunk: int = 128, nbins: int = 100
+) -> float:
+    """Mean noise standard deviation of the frames with data, see `frame_noise_std`."""
+    return float(frame_noise_std(log_spec, chunk, nbins).nanmean())
+
+
+def band_noise_std(
+    log_spec: torch.Tensor, lag: int, band_bins: int, stride: int = 4
+) -> torch.Tensor:
+    """Noise standard deviation per band of a dB spectrogram (freqs, frames),
+    shape (bands, frames), NaN where unknown.
+
+    The median change of a band's bins between windows `lag` frames apart, which
+    do not overlap. Fish do not raise it, however many there are, since a fish's
+    bins barely change. It reads 1.08 to 1.14 of `frame_noise_std` on Gaussian
+    noise.
+    """
+    n_bins, n_frames = log_spec.shape
+    n_bands = n_bins // band_bins
+    device = log_spec.device
+    if n_frames <= lag or n_bands == 0:
+        return torch.full((max(n_bands, 1), n_frames), torch.nan, device=device)
+    sub = log_spec[: n_bands * band_bins]
+    first = torch.arange(0, n_frames - lag, stride, device=device)
+    change = (sub[:, first + lag] - sub[:, first]).abs()
+    change = torch.where(change.isfinite(), change, torch.nan)
+    per_band = (change.reshape(n_bands, band_bins, len(first)).nanmedian(1).values) / (
+        0.6745 * math.sqrt(2.0)
+    )
+    # back onto all frames: each value belongs to the middle of its two windows
+    at = (first + lag // 2).clamp_max(n_frames - 1)
+    nearest = torch.searchsorted(at, torch.arange(n_frames, device=device))
+    return per_band[:, nearest.clamp_max(len(first) - 1)]
+
+
+def min_noise_std(n_channels: int) -> float:
+    """Lower bound of the noise estimate of a spectrum summed over `n_channels`.
+
+    The power of noise summed over N channels is chi-square with 2N degrees of
+    freedom, which fixes the spread of its logarithm, and correlated channels only
+    make it wider. `frame_noise_std` reads 0.74 to 0.91 of the analytic value on
+    Gaussian noise, so below 0.7 of it the spectrum is not noise: for example one
+    click dominating the window, whose spectrum is smooth.
+    """
+    return 0.7 * 10.0 / math.log(10.0) * math.sqrt(float(polygamma(1, n_channels)))

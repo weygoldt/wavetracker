@@ -64,6 +64,32 @@ def _amplitude_error_distribution(idx, nsign, frame_start, f0, f1, comp_range):
 
 
 @njit(cache=True)
+def _error_distribution_start(frame_start, start, last, comp_range):
+    """First frame of the window to estimate the amplitude errors from.
+
+    Normally the first detection. But a recording may hold a few stray detections
+    long before the first fish, and errors among those say nothing. So: the first
+    window (from the first detection, in steps of `comp_range`) with detections in
+    at least half of its frames, or else the one with the most detections.
+    """
+    frames = 3 * comp_range
+    best = start
+    best_count = -1
+    for s in range(start, last + 1, comp_range):
+        occupied = 0
+        for f in range(s, s + frames):
+            if frame_start[f + 1] > frame_start[f]:
+                occupied += 1
+        if 2 * occupied >= frames:
+            return s
+        count = frame_start[s + frames] - frame_start[s]
+        if count > best_count:
+            best = s
+            best_count = count
+    return best
+
+
+@njit(cache=True)
 def _connections(
     fund, idx, nsign, frame_start, f0, f1, comp_range, freq_tol, tol0, tol_rate, a_dist
 ):
@@ -273,8 +299,13 @@ def _track(fund, idx, nsign, comp_range, freq_tol, tol0, tol_rate, v6_compat):
     frame_start = np.searchsorted(idx, np.arange(n_frames + 1))
     start = idx[0]
     last = idx[-1]
+    a_start = (
+        start
+        if v6_compat
+        else _error_distribution_start(frame_start, start, last, comp_range)
+    )
     a_dist = _amplitude_error_distribution(
-        idx, nsign, frame_start, start, start + 3 * comp_range, comp_range
+        idx, nsign, frame_start, a_start, a_start + 3 * comp_range, comp_range
     )
     ident = np.full(fund.shape[0], -1, dtype=np.int64)
     next_identity = 0

@@ -167,6 +167,10 @@ def run(
         bool | None,
         typer.Option(help="Remove interference combs (default: from config, on)."),
     ] = None,
+    clicks: Annotated[
+        bool | None,
+        typer.Option(help="Remove static and crackle (default: from config, on)."),
+    ] = None,
     exclude: Annotated[
         list[int] | None,
         typer.Option(
@@ -198,6 +202,8 @@ def run(
         cfg.spectrogram.exclude_channels = sorted(set(exclude))
     if interference is not None:
         cfg.interference.enabled = interference
+    if clicks is not None:
+        cfg.clicks.enabled = clicks
 
     jobs = [
         (p, output if len(inputs) == 1 else output / p.resolve().name) for p in inputs

@@ -9,10 +9,14 @@ The most relevant parameters:
 | `spectrogram.nfft` | 32768 | FFT window (0.61 Hz resolution at 20 kHz) |
 | `spectrogram.overlap_frac` | 0.9 | window overlap (0.16 s frame step) |
 | `spectrogram.exclude_channels` | `[]` | broken/noisy electrodes to ignore (`run -x 8`) |
+| `clicks.enabled` | true | remove static and crackle from the traces (`run --no-clicks`) |
+| `clicks.threshold` | 12 | a click must reach this many standard deviations of the channel's high band |
 | `interference.enabled` | true | remove interference combs (`run --no-interference`) |
 | `interference.level_history_blocks` | 5 | gate-level memory; 2 follows changing hum faster, costs fish detections near teeth |
 | `harmonic_groups.min_freq` / `max_freq` | 80 / 2400 | fundamental frequency range [Hz]; set it for your species (see [Usage](../README.md#usage)) |
 | `harmonic_groups.low_thresh_factor` / `high_thresh_factor` | 6 / 10 | peak thresholds in units of the noise std |
+| `harmonic_groups.threshold_window` | 10 | the noise setting the thresholds is the median over this many seconds around a frame; `null` estimates once from the first block, as in the original |
+| `harmonic_groups.threshold_band` | 100 | thresholds also follow the noise over frequency, in bands of this width [Hz]; `null`: one value per frame |
 | `harmonic_groups.min_group_size` | 3 | harmonics 1..n that must all be present |
 | `harmonic_groups.max_missing_harmonics` | 0 | gaps allowed: fundamental + `min_group_size` of the first `min_group_size + n` harmonics (odd-harmonic fish) |
 | `harmonic_groups.min_good_peak_power` | -100 | absolute power limit for fundamentals [dB]; `null` for quiet audio recordings (a warning says when it binds) |
@@ -45,4 +49,4 @@ post-processing tools and [audian](../README.md#correcting-tracks-interactively)
 | `times.npy` | time of each frame, relative to the recording start [s] |
 | `sparse_spectra.npy`, `sparse_freq.npy`, `sparse_time.npy` | overview spectrogram (freq × time, power) |
 | `fine_spec.npy`, `fine_freqs.npy`, `fine_times.npy` | optional full spectrogram (time × freq, `np.load(..., mmap_mode="r")`) |
-| `wavetracker.json` | input, config, estimated thresholds, timings, version |
+| `wavetracker.json` | input, config, median thresholds, noise of each block (`noise_std_blocks`), fraction of samples repaired (`click_fraction`, `click_fraction_blocks`), timings, version |

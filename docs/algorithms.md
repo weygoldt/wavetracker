@@ -110,15 +110,72 @@ pattern check is available (`max_pattern_distance`) but off by default: in
 the tube recordings it did not separate the two fish. With many fish close in
 frequency (field recordings) lower `max_dropout`, e.g. to 60 s.
 
+## Recordings without fish
+
+Field loggers start on the boat. For minutes the electrodes are out of the water,
+then in empty water, and fish may come hours later, at dusk. Nothing estimated from
+the start of a recording may be trusted, and noise must not make fish. Four things
+went wrong here, each found on real deployments.
+
+**Static is clicks.** Electrodes out of the water pick up clicks of a few
+milliseconds, up to 40000 times the noise, about ten per second. One click in an FFT
+window gives a smooth spectrum, so the noise estimate collapses (0.02 dB), and two
+give an evenly spaced ripple, which is a harmonic series to the detector.
+`wavetracker.clicks` removes them from the traces before the spectrogram:
+
+1. Each channel is split by its spectrum over the block. Clicks are searched in the
+   band above 20 % of the sampling rate, which fish do not reach, so that even a
+   chirp right at an electrode does not look like one.
+2. A click must reach 12 robust standard deviations of that band and lasts for as
+   long as it stays above 8. Events longer than 0.5 s are real signals (a boat, rain).
+3. Clicks are bridged by straight lines, but only in the part of the signal that does
+   not stand out of the spectral floor. A hole in a loud fish is itself a click, of
+   the fish's amplitude. In a hole, what stands out is scaled to what the samples
+   around it hold, or a fish arriving later in the block would appear before it did.
+
+Channels without clicks stay exactly as they are. `click_fraction` in
+`wavetracker.json` tells how much was repaired, and the stored spectrograms show the
+repaired traces. On 60 s of static 0.6 % of the samples change:
+
+![Real static before and after click removal](images/static_click_removal.png)
+
+**Thresholds were frozen** from the first block. They now follow the median noise of
+the 10 s around each frame (`threshold_window`), and cannot fall below what noise on
+that many channels has, 0.77 dB on 16 channels. A frozen threshold could be wrong
+either way: too low for the water if estimated in the air, too high for the rest of a
+recording if estimated during crackle.
+
+**Noise at low frequencies is not the noise of the high band.** Below about 1 kHz the
+noise in the water is often common to all electrodes: 16 of them spread like one,
+4.7 dB against 1.1 dB. Thresholds therefore also follow the noise over frequency
+(`threshold_band`). It is measured as how much a bin changes between windows that do
+not overlap, so that fish, which are stable, do not raise it even in a chorus. Bands
+only ever raise thresholds, and not where the noise is the same over frequency.
+
+**One stray detection could ruin the tracker.** The amplitude error distribution came
+from the 30 s after the first detection. A lone false detection left it empty, which
+removed the electrode pattern from every link of the recording: two crossing fish
+became 23 identities with 118 swaps. It now comes from the first window with
+detections in at least half of its frames. `track(..., v6_compat=True)` keeps the
+original.
+
+Results on real field recordings are in
+[Benchmarks](benchmarks.md#recordings-that-start-without-fish): what a recording
+starts with no longer changes what is found. This has a price. On clean lab recordings
+fish lose about 0.5 % of their frames (up to 5 % after `cleanup` on one trial), and
+where the water is noisy at low frequencies a fish near 150 Hz needs up to 10 dB more
+than before; above about 650 Hz little changes. To reproduce results of earlier
+versions, set `clicks.enabled: false`, `harmonic_groups.threshold_window: null` and
+`harmonic_groups.threshold_band: null`.
+
 ## Known limitations / next steps
 
-* The amplitude-error distribution used for tracking is estimated once from
-  the first `3 * max_dt` seconds only.
-* Detection thresholds are estimated once from the first block and frozen
-  (as in the original), so slow changes in noise over days are not followed.
-  Digital silence in the first block lowers them (from 11.9 to 6.3 dB on a
-  synthetic recording, with ~9× the detections away from the silence); silence
-  in later blocks does no harm.
+* The amplitude-error distribution used for tracking is estimated once, from the
+  first window of `3 * max_dt` seconds with detections in half of its frames.
+* The default threshold factors keep empty recordings clean, but miss weak fish in
+  noisy water: on a 16-channel field grid they found 35 % of the fish of a night. Lower
+  them for such recordings, see [field recordings](field-recordings.md).
+* Static that lasts longer than `clicks.max_duration` without a pause stays.
 * Fish within ±1 Hz of a mains harmonic (multiples of 50 Hz) are not detected
   (set `mains_freq: 0` if there is no mains).
 * A fish needs harmonics 1..`min_group_size` unless

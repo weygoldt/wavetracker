@@ -566,7 +566,9 @@ def assign_leftovers(
     with k and its baseline frequency (10th percentile; rises only go up)
     continues k's baseline before and/or after it within
     ``freq_tol + drift_per_minute * gap``. If several fish fit about equally
-    well (cost ratio < 2) the leftover stays unassigned.
+    well (cost ratio < 2) the leftover stays unassigned. Baselines are taken over
+    `baseline_window` seconds' worth of detections, not of clock time, so that a
+    scrap at the edge of a track, such as the top of a rise, does not decide them.
 
     Returns a copy of `ident_v` with assigned leftovers relabelled.
     """
@@ -576,6 +578,7 @@ def assign_leftovers(
     ids, counts = np.unique(ident_v[~np.isnan(ident_v)], return_counts=True)
     leftovers = [i for i in ids[np.argsort(counts)[::-1]] if i not in kept_ids]
     min_count = min_minutes * 60 / dt
+    worth = max(1, round(baseline_window / dt))
 
     def baseline(f):
         return np.quantile(f, 0.1)
@@ -598,8 +601,8 @@ def assign_leftovers(
                 tb = kt[before][-1]
                 gap = lt[0] - tb
                 if gap <= max_gap_minutes * 60:
-                    ref = baseline(kf[before & (kt >= tb - baseline_window)])
-                    own = baseline(lf[lt <= lt[0] + 2 * baseline_window])
+                    ref = baseline(kf[before][-worth:])
+                    own = baseline(lf[: 2 * worth])
                     sides.append(
                         abs(own - ref) / (freq_tol + drift_per_minute * gap / 60)
                     )
@@ -608,8 +611,8 @@ def assign_leftovers(
                 ta = kt[after][0]
                 gap = ta - lt[-1]
                 if gap <= max_gap_minutes * 60:
-                    ref = baseline(kf[after & (kt <= ta + 2 * baseline_window)])
-                    own = baseline(lf[lt >= lt[-1] - baseline_window])
+                    ref = baseline(kf[after][: 2 * worth])
+                    own = baseline(lf[-worth:])
                     sides.append(
                         abs(own - ref) / (freq_tol + drift_per_minute * gap / 60)
                     )

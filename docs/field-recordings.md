@@ -37,6 +37,22 @@ output:
   fine_spec_max_freq: 2050.0
 ```
 
+The threshold factors are in units of the noise, and the noise depends on the number
+of electrodes: about 3.3 dB on 2 channels, but 1 to 2 dB on 16. So 3 and 5 are 10 and
+16 dB here, but far less on a 16-channel grid. There the factors decide between missed
+fish and false ones. On a real grid with `min_group_size: 2`, for the fish of a night,
+and for the 8 h of empty day and 10 min of static before it:
+
+| factors | fish found | false detections per frame, day / static |
+|---|---|---|
+| 6 and 10 (default) | 35 % | 0.02 / 0.02 |
+| 4 and 7 | 76 % | 0.17 / 0.27 |
+| 3 and 5 | 92 % | 1.4 / 5.5 |
+
+4 and 7 are a good start for grids. False detections do not last: at these factors
+all tracks of 30 s or more on that grid were fish (see the figure in
+[Benchmarks](benchmarks.md#recordings-that-start-without-fish)).
+
 The tracking and stitching settings matter when neighbouring fish are only
 a few Hz apart. On the Iriri recording (identities ≥ 30 s; shift of the
 10th-percentile frequency in 20 s windows) they reduced identities that

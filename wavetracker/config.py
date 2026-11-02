@@ -38,9 +38,19 @@ class HarmonicGroupsConfig:
     max_freq: float = 2400.0
     """Highest fundamental frequency considered [Hz]."""
     low_threshold: float | None = None
-    """Peak detection threshold [dB]; estimated from the noise floor if None."""
+    """Peak detection threshold [dB]; follows the noise of the recording if None."""
     high_threshold: float | None = None
-    """Threshold for 'good' peaks [dB]; estimated from the noise floor if None."""
+    """Threshold for 'good' peaks [dB]; follows the noise of the recording if None."""
+    threshold_window: float | None = 10.0
+    """The noise that sets the thresholds is the median over this many seconds
+    around a frame, so that they follow changes such as electrodes going into
+    the water. None: estimate once from the first block and keep them for the
+    whole recording (as in the original)."""
+    threshold_band: float | None = 100.0
+    """Thresholds also follow the noise over frequency, in bands of this width
+    [Hz]. Noise at low frequencies is often common to all electrodes, and then
+    has several times the spread of the high band the thresholds are based on.
+    None: one value per frame (requires `threshold_window`)."""
     low_thresh_factor: float = 6.0
     """Multiple of the noise std used for the low threshold."""
     high_thresh_factor: float = 10.0
@@ -85,6 +95,51 @@ class HarmonicGroupsConfig:
     """Upper bound on fish detected in a single spectrum."""
     refine_frequency: bool = True
     """Refine fundamentals with parabolic interpolation (sub-bin precision)."""
+
+
+@dataclass
+class ClickConfig:
+    """Removal of impulsive noise before the spectrogram (see wavetracker.clicks)."""
+
+    enabled: bool = True
+    threshold: float = 12.0
+    """A click must reach this many robust standard deviations of the channel's high
+    band, which Gaussian noise never does. Crackle in the water that stays below it
+    raises the noise estimate, and with it the thresholds. Measured on real fish at
+    night and on lab recordings: 24 found few of the fish; 8 found the most, but
+    broke the tracks of 2 of 16 lab fish apart."""
+    extent_threshold: float = 8.0
+    """A click lasts for as long as it stays above this many standard deviations."""
+    high_band: float = 0.2
+    """Clicks are searched above this fraction of the sampling rate, ..."""
+    high_band_edge: float = 0.05
+    """... reached over this further fraction. Fish must not reach it; the noise
+    estimate of the thresholds relies on fish-free spectra above 0.25 too."""
+    max_duration: float = 0.5
+    """Events longer than this [s] are real signals (a boat, rain), not clicks."""
+    guard: float = 0.002
+    """Also repaired on both sides of a click: its decay below the threshold [s]."""
+    resolution: float = 0.001
+    """Time resolution of the search [s]."""
+    edge: float = 0.005
+    """Not searched at the very ends of a block [s]: see wavetracker.clicks."""
+    line_margin: float = 15.0
+    """What stands this far above the spectral floor of a block counts as
+    narrowband (fish, their chirps, hum), which is never repaired [dB]."""
+    line_width: float = 10.0
+    """Frequency resolution of the spectral floor [Hz]."""
+    floor_width: float = 1000.0
+    """Range the spectral floor is the `floor_quantile` of [Hz]: wider than a
+    fish's harmonics sweep in a block, including chirps."""
+    floor_quantile: float = 0.2
+    """Quantile over that range: low, because a loud fish can fill most of it."""
+    local_window: float = 0.05
+    """Window over which the narrowband part in a hole is scaled to what the good
+    samples around it hold [s]: long enough for some periods of the lowest fish."""
+    fade: float = 0.5
+    """Length of the fade that makes a block periodic for the spectral split [s]."""
+    sample_stride: int = 16
+    """Use every n-th sample to estimate the noise of the high band."""
 
 
 @dataclass
@@ -353,6 +408,7 @@ YAML_HEADER = """\
 @dataclass
 class Config:
     spectrogram: SpectrogramConfig = field(default_factory=SpectrogramConfig)
+    clicks: ClickConfig = field(default_factory=ClickConfig)
     interference: InterferenceConfig = field(default_factory=InterferenceConfig)
     harmonic_groups: HarmonicGroupsConfig = field(default_factory=HarmonicGroupsConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)

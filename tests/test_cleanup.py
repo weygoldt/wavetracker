@@ -59,6 +59,19 @@ def test_small_leftovers_are_ignored():
     assert np.all(out[ident == 2] == 2)
 
 
+def test_a_stray_tail_does_not_decide_the_baseline():
+    """A fragment at the end of a leftover, from the top of a rise: its last minute
+    of clock time holds nothing else, but the fish is where its detections are."""
+    fund, idx, ident, times = _join(
+        _track(0, 300, 700.0, 0),
+        _track(680, 1500, 700.0, 1),  # the kept fish, from its second half
+        _track(300, 600, 700.2, 2),  # the leftover continues it ...
+        _track(670, 673, 703.5, 2),  # ... up to a scrap, 3.5 Hz above it
+    )
+    out = assign_leftovers(fund, idx, ident, times, kept_ids=[1])
+    assert np.all(out[ident == 2] == 1)
+
+
 def test_frequency_kde_matches_dense_gaussians():
     from wavetracker.postprocessing.cleanup import frequency_kde
 

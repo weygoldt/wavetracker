@@ -36,9 +36,23 @@ from .config import HarmonicGroupsConfig
 
 @njit(cache=True, nogil=True)
 def _detect_peaks(
-    data, freqs, low_th, high_th, min_freq, max_freq, mains, mains_tol, min_good, peaks
+    data,
+    freqs,
+    low_th,
+    high_th,
+    band_bins,
+    min_freq,
+    max_freq,
+    mains,
+    mains_tol,
+    min_good,
+    peaks,
 ):
-    """Mark peaks (1) and good peaks (2) of one dB spectrum in `peaks`."""
+    """Mark peaks (1) and good peaks (2) of one dB spectrum in `peaks`.
+
+    The thresholds hold one value per band of `band_bins` bins; bins beyond the
+    last band use the last band's value."""
+    last_band = low_th.shape[0] - 1
     direction = 0
     min_inx = 0
     max_inx = 0
@@ -52,11 +66,12 @@ def _detect_peaks(
     t = 0
     for i in range(data.shape[0]):
         v = data[i]
+        low = low_th[min(i // band_bins, last_band)]
         if direction > 0:
             if v > max_value:
                 max_inx = i
                 max_value = v
-            if v <= max_value - low_th:
+            if v <= max_value - low:
                 peaks[max_inx] = 1
                 p = 1
                 last_max_idx = max_inx
@@ -68,7 +83,7 @@ def _detect_peaks(
             if v < min_value:
                 min_inx = i
                 min_value = v
-            if v >= min_value + low_th:
+            if v >= min_value + low:
                 t = 1
                 last_min_idx = min_inx
                 trough_count += 1
@@ -76,9 +91,9 @@ def _detect_peaks(
                 max_inx = i
                 max_value = v
         if direction == 0:
-            if v <= max_value - low_th:
+            if v <= max_value - low:
                 direction = -1
-            if v >= min_value + low_th:
+            if v >= min_value + low:
                 direction = 1
             if v > max_value:
                 max_inx = i
@@ -89,7 +104,8 @@ def _detect_peaks(
         if p != 0 and t != 0:
             p = 0
             t = 0
-            if not data[last_max_idx] - data[last_min_idx] > high_th:
+            high = high_th[min(last_max_idx // band_bins, last_band)]
+            if not data[last_max_idx] - data[last_min_idx] > high:
                 continue
             f = freqs[last_max_idx]
             if f < min_freq or f > max_freq:
@@ -295,6 +311,7 @@ def _frame_groups(
     freqs,
     low_th,
     high_th,
+    band_bins,
     min_freq,
     max_freq,
     mains,
@@ -317,6 +334,7 @@ def _frame_groups(
         freqs,
         low_th,
         high_th,
+        band_bins,
         min_freq,
         max_freq,
         mains,
@@ -421,6 +439,7 @@ def _detect_groups(
     freqs,
     low_th,
     high_th,
+    band_bins,
     min_freq,
     max_freq,
     mains,
@@ -442,8 +461,9 @@ def _detect_groups(
         counts[t] = _frame_groups(
             log_spec[t],
             freqs,
-            low_th,
-            high_th,
+            low_th[t],
+            high_th[t],
+            band_bins,
             min_freq,
             max_freq,
             mains,
@@ -507,10 +527,15 @@ def detect_harmonic_groups(
     log_spec: np.ndarray,
     freqs: np.ndarray,
     cfg: HarmonicGroupsConfig,
-    low_threshold: float,
-    high_threshold: float,
+    low_threshold: float | np.ndarray,
+    high_threshold: float | np.ndarray,
+    band_bins: int | None = None,
 ) -> Detections:
-    """Detect fish in a dB spectrogram of shape (frames, freqs)."""
+    """Detect fish in a dB spectrogram of shape (frames, freqs).
+
+    The thresholds are one value, one per frame, or one per frame and band of
+    `band_bins` bins, shape (frames, bands).
+    """
     if cfg.max_missing_harmonics < 0:
         raise ValueError("max_missing_harmonics must be >= 0")
     if cfg.exclusive_harmonics == "all":
@@ -524,11 +549,20 @@ def detect_harmonic_groups(
         )
     log_spec = np.ascontiguousarray(log_spec, dtype=np.float32)
     freqs = np.ascontiguousarray(freqs, dtype=np.float64)
+
+    def by_frame_and_band(threshold):
+        t = np.asarray(threshold, dtype=np.float64)
+        t = t[:, None] if t.ndim == 1 else t
+        return np.ascontiguousarray(
+            np.broadcast_to(t, (log_spec.shape[0], t.shape[-1] if t.ndim else 1))
+        )
+
     bins, counts = _detect_groups(
         log_spec,
         freqs,
-        float(low_threshold),
-        float(high_threshold),
+        by_frame_and_band(low_threshold),
+        by_frame_and_band(high_threshold),
+        log_spec.shape[1] if band_bins is None else int(band_bins),
         float(cfg.min_freq),
         float(cfg.max_freq),
         float(cfg.mains_freq),

@@ -10,9 +10,10 @@ in long, multi-electrode recordings.
 
 The pipeline:
 
-1. **Spectrogram** – one-sided power spectral densities of every electrode,
-   computed block-wise on the GPU with PyTorch (CPU works too).
-   Stationary interference combs are detected and removed per electrode.
+1. **Spectrogram** – static is removed from the traces, then one-sided power
+   spectral densities of every electrode are computed block-wise on the GPU
+   with PyTorch (CPU works too). Stationary interference combs are detected
+   and removed per electrode.
 2. **Harmonic groups** – peaks of the electrode-summed spectrum are grouped
    into harmonic series; each group is one fish (parallel numba code).
 3. **Tracking** – detections are linked into identities using their
@@ -23,6 +24,10 @@ The pipeline:
 
 Set the frequency range of your fish (see [Usage](#usage)); the default
 range is a broad catch-all.
+
+A recording may start long before there is a fish in it, with the electrodes
+still out of the water or in empty water, for seconds or for hours: results for
+a fish [do not depend on what came before](docs/algorithms.md#recordings-without-fish).
 
 It runs at several hundred times realtime on an 11-channel, 20 kHz recording
 (a 4 h recording takes about a minute on an RTX 4080, mostly disk IO).
