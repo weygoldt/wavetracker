@@ -36,9 +36,6 @@ dependencies = [
     "typer>=0.27",
 ]
 
-[project.optional-dependencies]
-gui = ["pyqt5>=5.15"]
-
 [project.scripts]
 wavetracker = "wavetracker.cli:app"
 
@@ -70,15 +67,9 @@ markers = [
 [tool.ruff]
 line-length = 88
 target-version = "py311"
-# Legacy GUI and contributed post-processing scripts are kept as-is for now.
-extend-exclude = ["wavetracker/gui", "wavetracker/postprocessing", "tests/legacy_tracking.py"]
+# The original tracker, kept frozen as the reference of the equivalence tests.
+extend-exclude = ["tests/legacy_tracking.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "NPY", "RUF"]
 ignore = ["E501"]
-
-[tool.coverage.run]
-# The legacy PyQt5 EOD sorter needs the gui extra, which CI does not install,
-# and is superseded by audian's wavetracker plugin.  (numba-compiled code is
-# not traced either, so tracking.py and harmonics.py read low.)
-omit = ["wavetracker/gui/*"]

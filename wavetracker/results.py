@@ -1,7 +1,7 @@
 """On-disk format of wavetracker results.
 
 A result directory contains plain ``.npy`` files (compatible with the
-post-processing tools and the EOD sorter GUI):
+post-processing tools and audian's wavetracker plugin):
 
 =================== ==========================================================
 ``fund_v.npy``      fundamental frequency of each detection [Hz]

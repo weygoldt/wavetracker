@@ -303,8 +303,6 @@ def harmonics(
 
     Writes harmonics.csv to the results directory.
     """
-    import numpy as np
-
     from .comodulation import ComodulationConfig, find_harmonics
     from .results import Results
 
@@ -654,42 +652,22 @@ def freq_analysis(
     output: Annotated[Path | None, typer.Option("--output", "-o")] = None,
 ) -> None:
     """Extract the N most prominent frequencies at fixed times of day."""
-    from types import SimpleNamespace
-
     from .postprocessing.frequency_analysis import run as fa_run
 
     fa_run(
-        SimpleNamespace(
-            folders=folders,
-            config=config,
-            run_analysis=analyze,
-            n_fish=n_fish,
-            timepoints=timepoints,
-            window=window,
-            method=method,
-            freq_tolerance=freq_tolerance,
-            trace_tol=trace_tol,
-            min_freq=min_freq,
-            max_freq=max_freq,
-            output=output,
-        )
+        folders,
+        config_path=config,
+        run_analysis=analyze,
+        n_fish=n_fish,
+        timepoints=timepoints,
+        window=window,
+        method=method,
+        freq_tolerance=freq_tolerance,
+        trace_tol=trace_tol,
+        min_freq=min_freq,
+        max_freq=max_freq,
+        output=output,
     )
-
-
-@app.command()
-def sorter(
-    results_dir: Annotated[Path | None, typer.Argument(file_okay=False)] = None,
-) -> None:
-    """Open the EOD sorter GUI for manual track correction (needs the \\[gui] extra)."""
-    import sys
-
-    try:
-        from .gui import eodsorter
-    except ImportError as e:  # pragma: no cover
-        console.print(f"[red]{e}. Install with: uv sync --extra gui")
-        raise typer.Exit(1) from e
-    sys.argv = [sys.argv[0]] + ([str(results_dir)] if results_dir else [])
-    eodsorter.main()
 
 
 if __name__ == "__main__":

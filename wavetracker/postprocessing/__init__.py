@@ -1,1 +1,1 @@
-"""Post-processing of tracking results (contributed scripts)."""
+"""Post-processing of tracking results."""

@@ -338,7 +338,8 @@ class PositionMergingConfig:
 
 
 YAML_HEADER = """\
-# wavetracker configuration (see README.md).
+# wavetracker configuration, see
+# https://github.com/weygoldt/wavetracker/blob/master/docs/configuration.md
 #
 # IMPORTANT: set harmonic_groups.min_freq / max_freq to the frequency band of
 # your fish, as narrow as you can (with some margin for drift and rises),

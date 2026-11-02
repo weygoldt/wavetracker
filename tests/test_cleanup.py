@@ -59,12 +59,13 @@ def test_small_leftovers_are_ignored():
 
 
 def test_frequency_kde_matches_dense_gaussians():
-    from wavetracker.postprocessing.cleanup import frequency_kde, gauss
+    from wavetracker.postprocessing.cleanup import frequency_kde
 
     rng = np.random.default_rng(0)
     ff = np.concatenate([rng.normal(640, 1, 300), rng.normal(790, 1, 400)])
     grid = np.arange(np.floor(ff.min() - 25), np.ceil(ff.max() + 25), 0.1)
-    dense = gauss(grid, ff, sigma=5.0, size=1, norm=True)
+    dense = np.exp(-(((grid - ff[:, np.newaxis]) / 5.0) ** 2) / 2)
+    dense /= dense.sum(axis=1, keepdims=True)
     kde, g_max = frequency_kde(ff, grid, 5.0)
     np.testing.assert_allclose(kde, dense.sum(0), atol=1e-3 * dense.sum(0).max())
     assert abs(g_max - dense.max()) < 1e-6
@@ -84,13 +85,6 @@ def test_frequency_kde_memory_is_linear():
     peak = tracemalloc.get_traced_memory()[1]
     tracemalloc.stop()
     assert peak < 50e6
-
-
-def test_gauss_rows_outside_grid_are_zero_not_nan():
-    from wavetracker.postprocessing.cleanup import gauss
-
-    g = gauss(np.arange(400, 1200, 0.1), np.array([600.0, 1900.0]), 5.0, 1, norm=True)
-    assert np.all(np.isfinite(g)) and g[1].sum() == 0
 
 
 def test_window_without_detections_returns_empty_table():
@@ -142,3 +136,33 @@ def test_main_reports_monotonic_progress_to_completion(synthetic_wav, tmp_path):
     assert any(s.startswith("window ") for s in stages)
     assert "joining overlapping tracks" in stages
     assert (tmp_path / "res" / "ident_v_cleaned_n3.npy").exists()
+
+
+def test_quiet_identity_keeps_only_its_stretches_above_the_power_limit():
+    from wavetracker.postprocessing.cleanup import power_density_filter
+
+    n = 7200  # 1 h at 2 Hz, loud (-90 dB) in the first half, then quiet (-115 dB)
+    times = np.arange(n) * 0.5
+    idx = np.arange(n)
+    ident = np.zeros(n)
+    sign = np.where(idx < n // 2, -90.0, -115.0)[:, np.newaxis]
+    valid = np.ones(n)
+
+    valid = power_density_filter(valid, sign, ident, idx, times)
+
+    assert np.nanmax(ident) == 1.0
+    new = ident == 1.0
+    # the new identity is the loud stretch, up to the smoothing of the power
+    assert abs(idx[new][-1] - n // 2) < 120 and idx[new][0] == 0
+    np.testing.assert_array_equal(valid, new.astype(float))
+
+
+def test_sparse_identity_is_invalidated():
+    from wavetracker.postprocessing.cleanup import power_density_filter
+
+    times = np.arange(1000) * 0.5
+    idx = np.concatenate([np.arange(0, 1000, 20), np.arange(1000)])
+    ident = np.concatenate([np.zeros(50), np.ones(1000)])
+    sign = np.full((len(idx), 2), -70.0)
+    valid = power_density_filter(np.ones(len(idx)), sign, ident, idx, times)
+    np.testing.assert_array_equal(valid, np.concatenate([np.zeros(50), np.ones(1000)]))

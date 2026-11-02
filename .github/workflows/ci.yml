@@ -16,20 +16,22 @@ jobs:
         # The ends of the supported range: numpy and scipy fork at 3.12.
         python-version: ["3.11", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@v7
+      # setup-uv publishes no major tags since v8.
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync
-      - run: uv run ruff check wavetracker tests scripts
-      - run: uv run ruff format --check wavetracker tests scripts
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
       - if: matrix.python-version != '3.14'
         run: uv run pytest -q
-      # One leg measures coverage, so the other runs at full speed.
+      # One leg measures coverage, so the other runs at full speed.  (numba-compiled
+      # code is not traced, so tracking.py and harmonics.py read low.)
       - if: matrix.python-version == '3.14'
         run: uv run pytest -q --cov=wavetracker --cov-report=term --cov-report=json
       - if: matrix.python-version == '3.14'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage
           path: coverage.json
@@ -50,10 +52,10 @@ jobs:
       group: coverage-badge
       cancel-in-progress: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: coverage
       - name: Publish badge
