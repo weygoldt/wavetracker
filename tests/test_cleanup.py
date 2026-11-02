@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from wavetracker.postprocessing.cleanup import assign_leftovers, connect_with_overlap
 
@@ -166,3 +167,48 @@ def test_sparse_identity_is_invalidated():
     sign = np.full((len(idx), 2), -70.0)
     valid = power_density_filter(np.ones(len(idx)), sign, ident, idx, times)
     np.testing.assert_array_equal(valid, np.concatenate([np.zeros(50), np.ones(1000)]))
+
+
+def test_window_with_a_single_integer_frequency():
+    """The grid around it is then shorter than the KDE's Gaussian kernel."""
+    from wavetracker.postprocessing.cleanup import get_valid_ids_by_freq_dist
+
+    times = np.arange(1000) * 0.5
+    fund = np.full(1000, 700.0)
+    valid = np.zeros(1000)
+    _, table = get_valid_ids_by_freq_dist(
+        times,
+        np.arange(1000),
+        np.zeros(1000),
+        fund,
+        valid,
+        np.array([]),
+        0.0,
+        600.0,
+        2.5,
+        None,
+    )
+    assert table.shape == (1, 3) and table[0, 1] == 700.0
+    assert valid.all()
+
+
+@pytest.mark.parametrize("freq", [150.3, 350.3, 1500.3, 2200.3])
+def test_valid_frequencies_are_not_limited_to_a_fixed_band(freq):
+    from wavetracker.postprocessing.cleanup import get_valid_ids_by_freq_dist
+
+    times = np.arange(1000) * 0.5
+    fund = np.full(1000, freq)
+    valid = np.zeros(1000)
+    _, table = get_valid_ids_by_freq_dist(
+        times,
+        np.arange(1000),
+        np.zeros(1000),
+        fund,
+        valid,
+        np.array([]),
+        0.0,
+        600.0,
+        2.5,
+        None,
+    )
+    assert table.shape == (1, 3) and valid.all()

@@ -116,7 +116,10 @@ def frequency_kde(ff, convolve_f, sigma):
     half = int(np.ceil(5 * sigma / df))
     kernel = np.exp(-((np.arange(-half, half + 1) * df / sigma) ** 2) / 2)
     kernel /= kernel.sum()
-    return np.convolve(counts, kernel, mode="same"), kernel.max()
+    # "full" cropped to the grid: "same" has the length of the longer input, and
+    # the kernel is longer than the grid around a single integer frequency.
+    kde = np.convolve(counts, kernel, mode="full")[half : half + len(counts)]
+    return kde, kernel.max()
 
 
 def get_valid_ids_by_freq_dist(

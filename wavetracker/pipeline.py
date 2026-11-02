@@ -209,16 +209,20 @@ def detect(
             if noise_floor is None:
                 band = (freqs >= hc.min_freq) & (freqs <= hc.max_freq)
                 level = log_np[:, band]
-                noise_floor = float(np.median(level[np.isfinite(level)]))
-                if absolute_limit_binds(noise_floor, high_th, hc):
-                    log.warning(
-                        "Median noise floor %.1f dB + high threshold %.1f dB is below "
-                        "harmonic_groups.min_good_peak_power (%.1f dB): weak fish are "
-                        "removed by this absolute limit. Lower it or set it to null.",
-                        noise_floor,
-                        high_th,
-                        hc.min_good_peak_power,
-                    )
+                level = level[np.isfinite(level)]
+                # Digital silence has no level: use the first block with data.
+                if level.size:
+                    noise_floor = float(np.median(level))
+                    if absolute_limit_binds(noise_floor, high_th, hc):
+                        log.warning(
+                            "Median noise floor %.1f dB + high threshold %.1f dB is "
+                            "below harmonic_groups.min_good_peak_power (%.1f dB): weak "
+                            "fish are removed by this absolute limit. Lower it or set "
+                            "it to null.",
+                            noise_floor,
+                            high_th,
+                            hc.min_good_peak_power,
+                        )
             sparse.add(summed)
             if fine is not None:
                 fine[block.first_frame : block.first_frame + block.n_frames] = (

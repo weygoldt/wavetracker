@@ -140,3 +140,20 @@ def test_warns_when_absolute_power_limit_binds(synthetic_wav, tmp_path, caplog):
     with caplog.at_level("WARNING", logger="wavetracker"):
         detect(path, tmp_path, cfg, duration=5.0, device="cpu")
     assert "min_good_peak_power" in caplog.text
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_silent_recording_gives_empty_results(tmp_path, device):
+    from audioio import write_audio
+
+    wav = tmp_path / "silence.wav"
+    write_audio(str(wav), np.zeros((40 * 20000, 2), dtype=np.float32), 20000.0)
+    cfg = Config()
+    out = detect(wav, tmp_path / "res", cfg, device=device)
+    track_results(out.results, cfg)
+    out.results.save(tmp_path / "res")
+    results = Results.load(tmp_path / "res")
+    assert len(results.fund_v) == 0 and results.n_ids == 0
+    # strict JSON: a noise floor of NaN would break other parsers
+    assert results.meta["noise_floor"] is None
+    assert "NaN" not in (tmp_path / "res" / "wavetracker.json").read_text()

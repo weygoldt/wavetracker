@@ -116,6 +116,9 @@ frequency (field recordings) lower `max_dropout`, e.g. to 60 s.
   the first `3 * max_dt` seconds only.
 * Detection thresholds are estimated once from the first block and frozen
   (as in the original), so slow changes in noise over days are not followed.
+  Digital silence in the first block lowers them (from 11.9 to 6.3 dB on a
+  synthetic recording, with ~9× the detections away from the silence); silence
+  in later blocks does no harm.
 * Fish within ±1 Hz of a mains harmonic (multiples of 50 Hz) are not detected
   (set `mains_freq: 0` if there is no mains).
 * A fish needs harmonics 1..`min_group_size` unless

@@ -185,3 +185,11 @@ def test_absolute_power_limit_can_be_disabled():
     det = detect_harmonic_groups(log, *args)
     assert np.sum(np.abs(det.freq - 523.3) < 0.1) == log.shape[0]
     assert not absolute_limit_binds(floor, 10 * std, cfg)
+
+
+@pytest.mark.parametrize("n_frames", [0, 8])
+def test_spectra_without_peaks_give_no_detections(n_frames):
+    freqs = frequencies(NFFT, RATE)
+    log_spec = np.full((n_frames, len(freqs)), -100.0)
+    det = detect_harmonic_groups(log_spec, freqs, HarmonicGroupsConfig(), 6.0, 10.0)
+    assert len(det.frame) == len(det.bin) == len(det.freq) == 0
