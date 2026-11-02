@@ -199,6 +199,9 @@ the original identities as `ident_v.tracked.npy` and the directory stays
 readable by `Results.load`. It supersedes the legacy PyQt5 EOD sorter
 (`wavetracker sorter`).
 
+New to it? The [quickstart](https://github.com/weygoldt/audian/blob/master/docs/wavetracker-quickstart.md)
+walks through tracking and correcting a demo recording in about 15 minutes.
+
 ## Differences to the original implementation
 
 The detection and tracking algorithms follow Raab et al. (2022). The tracker
