@@ -110,6 +110,47 @@ pattern check is available (`max_pattern_distance`) but off by default: in
 the tube recordings it did not separate the two fish. With many fish close in
 frequency (field recordings) lower `max_dropout`, e.g. to 60 s.
 
+## Learned linking
+
+In dense populations the tracker's fragments are almost always pure (one
+fish), but each fish is spread over many of them: it breaks at rises, where a
+fish is not detected for longer than `max_dt`, and next to close neighbours.
+On the [dense-mixture benchmark](benchmarks.md#learned-fragment-linking),
+joining every fragment to its true fish would raise IDF1 from 0.56 (the
+rule-based stitching above) to 0.69 (lab noise); the linker reaches 0.64 at
+the same purity. With
+`linking.enabled: true`, `wavetracker.linking` replaces the stitching:
+
+1. **Fragments**: every tracker identity with at least 10 detections,
+   summarised at its start and end: frequency, slope and scatter, baseline
+   (10th percentile), median, the electrode power pattern (short and long
+   window, with its own scatter from split halves), the relative signs between
+   electrodes (`cplx_v`) and the level.
+2. **Candidates**: pairs (A, B) with B starting at most `max_gap` (180 s)
+   after A ends, or overlapping it, whose junction frequencies, baselines or
+   medians agree within `max_df` (5 Hz).
+3. **Score**: a small neural network (2 hidden layers, 64 and 32 units)
+   gives the probability that A and B are one fish, from 40 features of the
+   pair: gap, overlap and shared frames, frequency jump and extrapolation
+   errors, baseline and median differences, pattern distances and relative
+   sign agreement, level change, how crowded the frequency is between them,
+   the nearest other detection at both ends, and how the pair ranks among the
+   competing candidates of A and of B. The weights
+   (`wavetracker/models/linker.npz`) were trained on the benchmark's training
+   mixtures (`benchmarks/dense/linker.py`), whose truth says which fragments
+   belong to one fish.
+4. **Association**: pairs are accepted most probable first, down to
+   `threshold` (0.9), into identities (union-find), unless the two identities
+   would share more than 5 % of their frames, or run at the same time (within
+   0.3 s) at frequencies more than 3 Hz apart for more than 30 % of those
+   detections (a fish is never at two frequencies at once).
+
+The threshold sets the balance: higher thresholds keep identities purer and
+leave more fragments. The features are measured in seconds and Hz, not in
+frames or detections, and the model was trained on 9 and 2 electrodes and on
+0.61 and 1.22 Hz resolution. The tube fish of the benchmark do not move, so
+their electrode patterns are more stable than those of free-swimming fish.
+
 ## Recordings without fish
 
 Field loggers start on the boat. For minutes the electrodes are out of the water,

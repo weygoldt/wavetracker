@@ -18,6 +18,7 @@ from .config import Config, HarmonicGroupsConfig
 from .harmonics import Detections, absolute_limit_binds, detect_harmonic_groups
 from .interference import CombCanceller, merge_tooth_neighbours
 from .io import FrameLayout, iter_blocks, open_recording, resolve_input
+from .linking import link
 from .results import Results
 from .spectrogram import (
     PowerSpectrogram,
@@ -459,16 +460,28 @@ def track_results(results: Results, cfg: Config) -> float:
         min_freq=cfg.harmonic_groups.min_freq,
         max_freq=cfg.harmonic_groups.max_freq,
     )
-    results.ident_v = stitch(
-        results.fund_v,
-        results.idx_v,
-        results.sign_v,
-        results.ident_v,
-        results.times,
-        cfg.stitching,
-    )
+    if cfg.linking.enabled:
+        results.ident_v = link(
+            results.fund_v,
+            results.idx_v,
+            results.sign_v,
+            results.cplx_v,
+            results.ident_v,
+            results.times,
+            cfg.linking,
+        )
+    else:
+        results.ident_v = stitch(
+            results.fund_v,
+            results.idx_v,
+            results.sign_v,
+            results.ident_v,
+            results.times,
+            cfg.stitching,
+        )
     dt = time.perf_counter() - t0
     results.meta.setdefault("timings", {})["tracking"] = dt
     results.meta["tracking_config"] = vars(cfg.tracking)
     results.meta["stitching_config"] = vars(cfg.stitching)
+    results.meta["linking_config"] = vars(cfg.linking)
     return dt

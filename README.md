@@ -20,7 +20,9 @@ The pipeline:
    frequency and their amplitude pattern across electrodes
    ([Raab et al. 2022](https://doi.org/10.3389/fnint.2022.965211)).
 4. **Stitching** – track fragments are joined across rises, dropouts and
-   short double detections.
+   short double detections. For dense populations, a learned linker
+   (`linking.enabled: true`) joins them better
+   ([Learned linking](docs/algorithms.md#learned-linking)).
 
 Set the frequency range of your fish (see [Usage](#usage)); the default
 range is a broad catch-all.

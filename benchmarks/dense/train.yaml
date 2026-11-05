@@ -1,0 +1,93 @@
+# Training mixtures for learned components (e.g. the fragment linker).
+#
+# Same generator and families as suite.yaml, but split `train`: sources from
+# the dev pool (mixture.POOL), seeds of their own, other densities and bands,
+# so that the dev suite stays a validation set and the test pool unseen.
+# Field-noise variants (noise.py derive) reuse the dev hours shifted by one
+# file.
+#
+#   python benchmarks/dense/mixture.py --suite benchmarks/dense/train.yaml --worker 0/2
+#   python benchmarks/dense/noise.py derive
+
+defaults:
+  duration: 600.0
+  drift: 0.005
+  drift_timescale: 300.0
+  noise_db: 0.0
+  splits: [train]
+
+scenarios:
+  - name: density-16
+    n_fish: 16
+    band: [400, 1100]
+    seeds: [100, 101]
+  - name: density-24
+    n_fish: 24
+    band: [400, 1100]
+    seeds: [100, 101]
+  - name: density-30
+    n_fish: 30
+    band: [400, 1100]
+    seeds: [100, 101]
+  - name: crowded-30
+    n_fish: 30
+    band: [500, 800]
+    seeds: [100, 101]
+  - name: lowonly-14
+    n_fish: 14
+    band: [70, 350]
+    placement: log
+    seeds: [100]
+  - name: lowfreq-30
+    n_fish: 30
+    band: [60, 1300]
+    placement: log
+    seeds: [100, 101]
+  - name: atten-fish-30
+    n_fish: 30
+    band: [150, 1300]
+    placement: log
+    seeds: [100, 101]
+    gain:
+      per: fish
+      static_db: [-40, 0]
+      wander_db: 3.0
+      wander_tau: 60.0
+      fades: {rate: 1.0, depth_db: [10, 40], duration_s: [20, 120]}
+      channel_db: 3.0
+      channel_tau: 90.0
+  - name: atten-fish-20
+    n_fish: 20
+    band: [300, 1100]
+    seeds: [100]
+    gain:
+      per: fish
+      static_db: [-30, 0]
+      wander_db: 4.0
+      wander_tau: 40.0
+      fades: {rate: 2.0, depth_db: [10, 40], duration_s: [10, 90]}
+      channel_db: 4.0
+      channel_tau: 60.0
+  - name: atten-dyad-30
+    n_fish: 30
+    band: [150, 1300]
+    placement: log
+    seeds: [100, 101]
+    gain:
+      per: dyad
+      fraction: 0.5
+      static_db: [-45, -15]
+      wander_db: 3.0
+      fades: {rate: 1.0, depth_db: [10, 30], duration_s: [30, 180]}
+      channel_db: 3.0
+  - name: ladder-16
+    n_fish: 16
+    band: [300, 1300]
+    seeds: [100]
+    gain: {ramp_db: 60.0, channel_db: 2.0}
+  - name: ladder-30
+    n_fish: 30
+    band: [150, 1300]
+    placement: log
+    seeds: [100, 101]
+    gain: {ramp_db: 60.0, channel_db: 2.0}

@@ -1,0 +1,12 @@
+# dense.yaml with the learned fragment linker (wavetracker.linking) instead of
+# the rule-based stitching.
+harmonic_groups:
+  low_thresh_factor: 4.0
+  high_thresh_factor: 7.0
+  min_group_size: 2
+tracking:
+  min_support: 3
+  gap_tolerance: 0.5
+  gap_tolerance_rate: 0.1
+linking:
+  enabled: true

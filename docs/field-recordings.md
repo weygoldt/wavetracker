@@ -63,6 +63,15 @@ identities as track segments and merge them into fish with additional
 information, e.g. position
 ([`merge-by-position`](post-processing.md#merging-by-position-moving-electrodes)).
 
+On the [dense-mixture benchmark](benchmarks.md#learned-fragment-linking),
+the learned linker (`linking: {enabled: true}`, replacing `stitching`) joins
+fragments far better than the stitching settings above: IDF1 0.56 → 0.64
+(lab noise) and 0.52 → 0.61 (field noise) with 4-30 fish, at the same purity;
+a fish needs 1.4 identities instead of 2.4. With two electrodes its
+identities are slightly less pure (0.3-0.8 %), and it has not been validated
+on fish that move across the electrodes; check its output before relying on
+it there.
+
 Observations on a 16 min, 2-channel, ~40-fish recording (Iriri 2026):
 
 * Detections follow the visible fish lines from 350 Hz to 2 kHz; harmonics

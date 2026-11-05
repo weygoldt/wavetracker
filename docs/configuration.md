@@ -30,6 +30,10 @@ The most relevant parameters:
 | `tracking.min_support` | 0 | only track detections with ≥ n neighbours within `support_window` s and `support_freq` Hz |
 | `stitching.enabled` | true | join fragments across rises, dropouts and double detections |
 | `stitching.max_dropout` | 900 | longest gap bridged when nothing else is at that frequency [s] |
+| `linking.enabled` | false | join fragments with the learned linker instead of the stitching (see [Learned linking](algorithms.md#learned-linking)) |
+| `linking.threshold` | 0.9 | minimum link probability; higher: purer identities, more fragments (0.5: IDF1 +0.02, purity -0.3 %) |
+| `linking.max_gap` / `max_df` | 180 / 5 | longest gap [s] and largest frequency mismatch [Hz] of a candidate link |
+| `linking.parallel_df` | 3 | identities running at the same time this far apart [Hz] are two fish |
 | `output.save_fine_spec` | false | also store the full-resolution spectrogram |
 | `output.fine_spec_max_freq` / `sparse_spec_max_freq` | none | upper limit of the stored spectrograms; none = 1.25 × `harmonic_groups.max_freq` |
 | `interference.max_line_freq` | none | upper limit of the hum-line search; none = Nyquist |

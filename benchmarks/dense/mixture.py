@@ -54,6 +54,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from common import DATA, MIX_CHANNELS, RATE, Trial, Warp, common_drift
 
 SUITE = Path(__file__).with_name("suite.yaml")
+TRAIN_SUITE = Path(__file__).with_name("train.yaml")
+POOL = {"train": "dev"}  # training mixtures draw on the dev sources
 MIXTURES = DATA / "mixtures"
 TRUTH_RATE = 10.0  # Hz
 GAIN_RATE = 1.0  # Hz, grid of the gain processes
@@ -513,7 +515,7 @@ def generate(name: str, design: dict, library: list[dict], device: str = "auto")
     split = name.split("/")[0]
     seed = int(design["seed"])
     rng = np.random.default_rng([seed, *map(ord, name)])
-    pool = [e for e in library if e["ok"] and e["split"] == split]
+    pool = [e for e in library if e["ok"] and e["split"] == POOL.get(split, split)]
     sources = place_sources(design, pool, rng)
     duration = float(design["duration"])
     grid = common_drift(
@@ -662,10 +664,11 @@ def trial_cfg_source(library: list[dict]) -> str:
 def expand_suite(path: Path = SUITE) -> dict[str, dict]:
     """{name: design}; names are <split>/<scenario>-s<seed>."""
     suite = yaml.safe_load(path.read_text())
-    defaults = suite.get("defaults", {})
+    defaults = dict(suite.get("defaults", {}))
+    splits = defaults.pop("splits", ["dev", "test"])
     out = {}
     for sc in suite["scenarios"]:
-        for split in sc.get("splits", ["dev", "test"]):
+        for split in sc.get("splits", splits):
             for seed in sc.get("seeds", [0]):
                 d = defaults | {
                     k: v for k, v in sc.items() if k not in ("seeds", "splits")
@@ -679,7 +682,7 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--only", nargs="*", help="mixture names (split/scenario-sSEED)")
     p.add_argument("--suite", type=Path, default=SUITE)
-    p.add_argument("--split", help="dev or test (default both)")
+    p.add_argument("--split", help="dev, test or train (default: all of the suite)")
     p.add_argument("--device", default="auto")
     p.add_argument("--worker", default="0/1", help="i/n: every n-th mixture from i")
     args = p.parse_args(argv)

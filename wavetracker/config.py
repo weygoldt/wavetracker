@@ -268,6 +268,46 @@ class StitchingConfig:
 
 
 @dataclass
+class LinkingConfig:
+    """Joining fragments with a learned link score (see wavetracker.linking);
+    replaces `stitching` when enabled."""
+
+    enabled: bool = False
+    """Join the tracker's fragments with the learned linker instead of the
+    rule-based stitching."""
+    threshold: float = 0.9
+    """Minimum probability of a link (0-1). Higher: purer identities, more
+    fragments. 0.9 keeps identities as pure as the stitching on the
+    benchmark; 0.5 joins more (IDF1 +0.02) at a purity cost of ~0.3 %."""
+    max_gap: float = 180.0
+    """Longest time between two fragments that may be joined [s]."""
+    max_df: float = 5.0
+    """Candidate links: the frequencies at the junction, the baselines or the
+    medians of the two fragments differ by at most this [Hz]."""
+    rise_df: float = 0.0
+    """Also consider jumps up to this [Hz] across gaps up to rise_gap (rise
+    onsets). 0: off; they were rarely needed and joined different fish on
+    field data."""
+    rise_gap: float = 30.0
+    """See rise_df [s]."""
+    max_shared: float = 0.05
+    """Two identities may share at most this fraction of the smaller one's
+    frames (one fish is detected once per frame)."""
+    parallel_df: float = 3.0
+    """Two identities that run at the same time (detections within
+    parallel_dt) at frequencies more than this apart [Hz] are two fish ..."""
+    parallel_dt: float = 0.3
+    """... [s] ..."""
+    max_parallel: float = 0.3
+    """... if that holds for more than this fraction of their simultaneous
+    detections (and at least 3): they are not joined."""
+    min_detections: int = 10
+    """Fragments with fewer detections are not joined."""
+    model: str | None = None
+    """Path to model weights (.npz); None: the model shipped with wavetracker."""
+
+
+@dataclass
 class OutputConfig:
     save_fine_spec: bool = False
     """Store the full-resolution summed spectrogram (large!)."""
@@ -413,6 +453,7 @@ class Config:
     harmonic_groups: HarmonicGroupsConfig = field(default_factory=HarmonicGroupsConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
     stitching: StitchingConfig = field(default_factory=StitchingConfig)
+    linking: LinkingConfig = field(default_factory=LinkingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     position_merging: PositionMergingConfig = field(
         default_factory=PositionMergingConfig

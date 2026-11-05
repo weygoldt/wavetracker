@@ -38,7 +38,7 @@ from scipy.signal import resample_poly
 
 sys.path.insert(0, str(Path(__file__).parent))
 from common import DATA, MIX_CHANNELS, RATE
-from mixture import MIXTURES, SNR_NFFT, _device, expand_suite
+from mixture import MIXTURES, SNR_NFFT, TRAIN_SUITE, _device, expand_suite
 
 FIELD = Path(
     os.environ.get(
@@ -54,6 +54,7 @@ NOISE = DATA / "noise"
 # files of 5 min from 11:18:37: the empty day, split into dev and test hours
 DAY_DEV = (8, 46)  # 11:58-15:08
 DAY_TEST = (46, 84)  # 15:08-18:18
+DAY_TRAIN = (1, 47)  # 11:23-15:13, the dev hours shifted by one file (see noise_plan)
 NIGHT = (96, 4)  # first file, number of files: 19:18-19:38, fish
 # 3x3 blocks of the 4x4 grid (row-major channel order assumed)
 BLOCKS = [
@@ -284,8 +285,16 @@ def noise_plan() -> dict[str, dict]:
     """Field-noise segment (2 files) and electrode block for every mixture;
     dev and test from their own hours, no segment used twice in a split."""
     plan = {}
-    for split, (f0, f1) in (("dev", DAY_DEV), ("test", DAY_TEST)):
-        names = sorted(n for n in expand_suite() if n.startswith(split + "/"))
+    # The training mixtures (train.yaml) reuse the dev hours, shifted by one
+    # file: the noise is a condition there, not what is evaluated, and the
+    # test hours stay unseen.
+    suites = {"dev": expand_suite(), "test": expand_suite()}
+    if TRAIN_SUITE.exists():
+        suites["train"] = expand_suite(TRAIN_SUITE)
+    for split, (f0, f1) in (("dev", DAY_DEV), ("test", DAY_TEST), ("train", DAY_TRAIN)):
+        if split not in suites:
+            continue
+        names = sorted(n for n in suites[split] if n.startswith(split + "/"))
         starts = list(range(f0, f1 - 1, 2))
         if len(names) > len(starts):
             raise ValueError(f"{len(names)} mixtures, {len(starts)} noise segments")

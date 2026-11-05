@@ -299,6 +299,99 @@ What limits tracking, in field noise:
 * Harmonics of strong fish tracked as fish are the main false detections
   (1.5-4 per frame in the attenuated and low-frequency scenarios, dense).
 
+## Learned fragment linking
+
+On the dense mixtures, identities break much more often than detections
+fail. The tracker's fragments are almost all pure (98.7-99 % of the matched
+detections of a fragment are on one fish), so the loss is in joining them:
+assigning every tracker fragment to its true fish would raise IDF1 on the dev
+mixtures from 0.56 (dense settings, with stitching) to 0.69, and fragments
+shorter than 10 detections hold almost none of that. The learned linker
+(`linking.enabled: true`, see [Learned linking](algorithms.md#learned-linking))
+replaces the stitching with a link classifier and a constrained greedy
+association.
+
+**Training data.** `benchmarks/dense/train.yaml` adds a third split, `train`:
+the same generator and scenario families, other seeds, densities (16, 24 fish)
+and bands, drawn from the dev sources (so the dev suite stays a validation
+set and the test pool unseen), 19 mixtures and their field-noise variants
+(the dev hours of the noise recording shifted by one file). Candidate links
+and their features are computed on the tracker's fragments of four detection
+settings, so that the model does not depend on one resolution or electrode
+count: the dense settings (`configs/dense.yaml`), the defaults, the dense
+settings at half the frequency resolution (`dense-nfft14.yaml`, 1.22 Hz,
+82 ms frames) and with only two of the nine electrodes (`dense-2ch.yaml`):
+48,000 labelled pairs. A pair is labelled "same fish" if the majority
+fish of both fragments is the same, and weighted by the square root of the
+smaller fragment's detections (what a wrong decision costs).
+
+```bash
+python benchmarks/dense/mixture.py --suite benchmarks/dense/train.yaml --worker 0/2  # and 1/2
+python benchmarks/dense/noise.py derive
+python benchmarks/dense/run.py track --tag dense -c benchmarks/dense/configs/dense.yaml --split train   # and train-field, other configs
+python benchmarks/dense/linker.py build --base dense            # pairs, features, labels (all splits)
+python benchmarks/dense/linker.py train --base dense --extra-bases default dense-nfft14 dense-2ch
+python benchmarks/dense/linker.py sweep --models <model.npz>     # dev: thresholds, against the oracle
+python benchmarks/dense/linker.py tradeoff --model wavetracker/models/linker.npz
+```
+
+**Results** (dev suite, means over the mixtures; oracle: every candidate
+link decided by the truth, the bound of candidates and association):
+
+| detections | noise | stitching IDF1 / purity | linker, threshold 0.9 (default) | linker, 0.5 | oracle IDF1 |
+|---|---|---|---|---|---|
+| dense settings | lab | 0.560 / 0.986 | **0.641 / 0.986** | 0.659 / 0.983 | 0.667 |
+| | field | 0.517 / 0.988 | **0.613 / 0.989** | 0.627 / 0.983 | 0.638 |
+| defaults | lab | 0.572 / 0.983 | 0.610 / 0.984 | 0.620 / 0.982 | 0.622 |
+| | field | 0.472 / 0.985 | 0.505 / 0.988 | 0.516 / 0.984 | 0.520 |
+| dense, 1.22 Hz | lab | 0.533 / 0.984 | 0.614 / 0.983 | 0.625 / 0.982 | 0.628 |
+| | field | 0.476 / 0.984 | 0.551 / 0.983 | 0.561 / 0.980 | 0.566 |
+| dense, 2 electrodes | lab | 0.489 / 0.985 | 0.563 / 0.982 | 0.584 / 0.978 | 0.592 |
+| | field | 0.342 / 0.985 | 0.421 / 0.977 | 0.432 / 0.973 | 0.443 |
+
+With the dense settings and 10 or more fish, a fish needs 1.4 identities for
+90 % of its detections instead of 2.4 (lab) and 1.5 instead of 2.7 (field),
+it changes identity 0.40 instead of 0.55 times per minute, and the purity
+stays the same (0.985 / 0.988). The threshold trades the two:
+
+![IDF1 against purity for stitching, the linker and the oracle](images/linker_tradeoff.png)
+
+* The default threshold 0.9 keeps identities as pure as the stitching with
+  the dense settings and the defaults; with two electrodes they are 0.3-0.8 %
+  less pure (the electrode pattern says little there).
+* Without the electrode pattern features the linker reaches the same IDF1
+  at 0.1-0.2 points less purity (threshold 0.5; 0.7 points with an earlier,
+  smaller feature set). The tube fish do not move, so their patterns are more
+  stable than those of free-swimming fish; the model has not been checked on
+  moving fish.
+* Joins across rises (jumps of up to 60 Hz within 30 s) add 0.0002 to the
+  oracle, and joined different fish on field data, so they are off
+  (`linking.rise_df: 0`). Candidates are limited to 5 Hz (the oracle loses
+  0.003 against 10 Hz).
+* A model trained on one detection setting transfers to the others within
+  0.003 IDF1; a larger network or twice the data changed the results by less
+  than the spread between seeds (0.003).
+* The test suite has not been scored yet.
+
+**Spectrogram evidence between fragments (tried, not used).** Linking by eye,
+one follows the faint ridge of a fish through the gap and checks its
+harmonics. A ridge spectrogram (electrode-summed power in dB above the local
+floor, stacked over harmonics 1-3, stored during detection) gave the linker
+11 more features per candidate: the strength and visible fraction of the
+best path through the gap, where a free path and a ridge tracer with
+momentum lead from either end, and whether the two traces meet. On the same
+detections (dense settings, two seeds each) they changed IDF1 and purity by
+at most 0.003, the spread between seeds, with and without the electrode
+pattern features. Where the breaks are explains it: in a gap the fish is
+either too faint for a ridge (17 % of the breaks in lab noise, 46 % in
+field noise) or within 3 Hz of another fish's line (48 % / 31 %), where its
+ridge and harmonics merge with the neighbour's; where it is visible and alone
+(26 % / 20 %) frequency continuity already links it. The code is kept as
+`$WT_BENCHMARK_DATA/linker/ridge-evidence.patch` (`git apply`), the runs with
+ridge spectrograms as `runs/dense-r`.
+
+![Gap contents and ridge evidence](images/linker_ridge_evidence.png)
+
 ## Low-frequency fish without a 2nd harmonic
 
 `benchmarks/low_frequency.py` synthesizes odd-harmonic fish (no even

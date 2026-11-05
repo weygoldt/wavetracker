@@ -26,7 +26,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
 from common import DATA
-from mixture import MIXTURES, expand_suite
+from mixture import MIXTURES, TRAIN_SUITE, expand_suite
 from score import TOL, binned, score
 
 from wavetracker.config import Config
@@ -55,8 +55,10 @@ def merge(a: dict, b: dict) -> dict:
 def mixtures(split: str | None, only=None) -> list[str]:
     """Complete mixtures of a split: dev, test (lab noise) or dev-field,
     test-field (the same fish in field noise, see noise.py)."""
-    suite = expand_suite()
-    names = list(suite) + [n.replace("/", "-field/", 1) for n in suite]
+    suite = list(expand_suite())
+    if TRAIN_SUITE.exists():
+        suite += list(expand_suite(TRAIN_SUITE))
+    names = suite + [n.replace("/", "-field/", 1) for n in suite]
     # band.yaml is written last: the mixture is complete
     names = [n for n in names if (MIXTURES / n / "band.yaml").exists()]
     if split:
