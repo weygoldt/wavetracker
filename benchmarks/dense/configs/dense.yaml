@@ -1,0 +1,17 @@
+# Settings for dense populations (docs/field-recordings.md), adapted to a
+# 9-electrode grid at 20 kHz: grid threshold factors 4/7, fish with only two
+# harmonics, stricter links and stitching for neighbours a few Hz apart.
+harmonic_groups:
+  low_thresh_factor: 4.0
+  high_thresh_factor: 7.0
+  min_group_size: 2
+tracking:
+  min_support: 3
+  gap_tolerance: 0.5
+  gap_tolerance_rate: 0.1
+stitching:
+  max_dropout: 60.0
+  baseline_tolerance: 1.0
+  rise_baseline_tolerance: 2.0
+  dropout_tolerance: 0.5
+  overlap_tolerance: 1.0

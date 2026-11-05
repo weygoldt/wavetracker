@@ -95,13 +95,209 @@ lost 6 points of what is found without bands, and gained 0.01 per frame.
 
 ## Dense mixtures of tube recordings
 
-`benchmarks/tube_mixture.py` sums 8 two-fish tube recordings electrode by
-electrode. Each source is time-warped (frequency scale 0.4-1.6, plus a slow
+`benchmarks/tube_mixture.py` (superseded by the
+[dense mixtures](#dense-mixtures-with-power-augmentation) below) sums 8
+two-fish tube recordings electrode by electrode. Each source is time-warped (frequency scale 0.4-1.6, plus a slow
 drift common to all sources, std 0.5 % over ~5 min) so fish spread over
 250-1300 Hz with natural modulations and harmonics land among other fish;
 hum combs are removed first. Ground truth comes from tracking each source
 alone. `benchmarks/harmonic_comodulation.py` scans the timescale,
 `benchmarks/harmonic_rule.py` evaluates the rule per identity.
+
+## Dense mixtures with power augmentation
+
+`benchmarks/dense/` builds a benchmark of up to 30 fish from the two-fish
+tube-competition recordings of 2019/20 (3x3 and 5x3 grids) and 2022 (1x11),
+with ground truth, and lowers the power of single fish or of whole dyads to
+emulate fish that are far from the electrodes. The data live outside the
+repository, in `$WT_BENCHMARK_DATA` (default `~/wrk/data/wavetracker_benchmark`),
+so that every worktree uses the same files.
+
+```bash
+python benchmarks/dense/library.py --plot        # 1. sources: track each trial alone
+python benchmarks/dense/mixture.py --worker 0/2  # 2. lab mixtures (and --worker 1/2)
+python benchmarks/dense/noise.py calibrate       # 3. field noise: level from real fish
+python benchmarks/dense/noise.py derive          #    field-noise variants of every mixture
+python benchmarks/dense/run.py track --tag mine -c my_config.yaml --split dev
+python benchmarks/dense/run.py track --tag mine -c my_config.yaml --split dev-field
+python benchmarks/dense/run.py report --tags default mine   # 4. figures, dev and dev-field
+python benchmarks/dense/specs.py                 # table and figure of all mixtures
+python benchmarks/dense/gallery.py               # spectrograms with the truth
+```
+
+A 30-fish mixture needs about 6.5 GB of memory to generate (and a GPU); run
+each worker under a memory cap, e.g. `systemd-run --user --scope -p
+MemoryMax=10G uv run python ...`, and not more workers than memory allows.
+
+**Sources.** Every trial with two fish at least 20 Hz apart is analysed
+alone for 20 min with the species range (400-1200 Hz), which is the reliable
+case. Detections are assigned to the lower and the upper fish by two coarse
+traces (dominant frequency peaks in 10 s windows); identities carry the
+assignment through rises; isolated detections (fewer than 3 of the same fish
+within 1 s and 2 Hz: hum, noise) are dropped.
+
+**Complete truth.** Detections are not the fish: on lab recordings the
+tracker leaves 6 % of the frames of a fish empty on average and up to 40 %
+for single fish, mostly during rises and where a fish sits on a mains
+harmonic (which detection excludes). Every gap of a fish's detections is
+therefore bridged by following its ridge in the electrode-summed spectrogram
+(wavetracker's frames and resolution) with dynamic programming, from the last
+to the next detection, in a band from 6 Hz below to 40 Hz above the
+interpolated track (rises), never within 4 Hz of the other fish and not on
+hum teeth or stationary lines away from the fish. A frame is kept if the
+ridge is at least 6 dB above the local floor and within 25 dB of the
+detections around the gap, and if the path is continuous there. The truth
+then covers 99.9 % of the frames (worst fish 97 %), so that completeness,
+the fraction of a fish's frames with a detection, can be scored.
+
+A source is kept if the ratio of its two fish frequencies matches the trial
+metadata within 3 % (the metadata EODfs are temperature corrected, their
+ratio is not), the two traces are closer than 3 Hz in less than 1 % of the
+frames (not two traces on one fish), and at least half of each fish was
+detected (completion follows hum as readily as a fish where there is little
+to anchor it): 52 of 56 trials. Trials are split by fish group: 2019 groups 5
+and 6 and the 2022 pairings 5 and 6 are the **test** pool (22 sources), all
+others **dev** (30), so no individual of the test mixtures is seen while
+developing. Contact sheets of all sources, detected and completed truth:
+`$WT_BENCHMARK_DATA/figures/library_*.png`.
+
+**Splitting a source into its fish.** In a short-time Fourier transform
+(0.82 s, 75 % overlap) the bins within a few Hz of every harmonic of a fish's
+trace belong to that fish (wider where the trace moves fast or is unknown).
+In the masks a fish takes only what stands out of the noise (spectral
+subtraction with over-subtraction 4), and the residual is filled with noise
+of the local level there: the transform of white noise, shaped by the noise
+spectrum away from the fish and by its changes over time in 200 Hz bands.
+Stationary lines (hum teeth, crosstalk lines 4 dB above their surroundings)
+are replaced by that noise. Near a fish, power in the residual more than
+7.8 dB above the noise (chirp smears, a fish line off its trace) moves to the
+fish. The parts add up to the source exactly (except at the lines), the noise
+under a fish stays in the residual (where it is scaled like all noise), and a
+fish attenuated to nothing leaves the noise of the recording, not a hole and
+not a ghost (leakage is 44 dB below the fish).
+
+**Mixing.** Every source is time-warped, `tau(t) = start + a (t + D(t))`:
+the scale `a` places its two fish in the band of the scenario (dyad centres
+stratified over the band, so density is controlled), `D` is a slow drift
+common to all sources. Fish keep their natural frequency modulations, rises,
+chirps, waveforms and electrode patterns; for low fish (a down to 0.09) all
+of these are slowed by 1/a. Each source's 9 best electrodes are mapped onto
+the 9 mixture electrodes in random order. The residual of each source is
+scaled by `sqrt(a / n_sources)`, which keeps the noise floor of the mixture
+at that of one recording for any number of sources and any scale.
+
+**Augmentation.** Per fish (or per dyad), in dB: a static offset, a linear
+ramp (`ramp_db`), a slow Ornstein-Uhlenbeck wander, fades of a fish that
+swims away and comes back, and a slow independent gain per electrode (the
+pattern changes as the fish moves). `fraction` limits it to some fish or
+dyads.
+
+**Noise: lab and field.** Every mixture exists twice. The *lab* mixtures
+(`dev/`, `test/`) keep the noise of the lab recordings, against which the fish
+have 40-60 dB: what tracking can do when noise is not the problem. The *field*
+mixtures (`dev-field/`, `test-field/`) add real fish-free noise from the empty
+day of a 16-electrode logger grid in the Iriri (iriri01-grid01-dev03, fish
+come at dusk): 10 min per mixture, none used twice, dev and test from
+different hours, resampled to 20 kHz on a 3x3 block of the 4x4 grid, so that
+the noise keeps its spectrum (rising towards low frequencies), its
+correlation across electrodes (|r| about 0.7) and its events (clicks, bursts).
+Its level is set by the EOD amplitude of a fish next to an electrode in both
+systems: wavetracker's power at the fundamental on the best electrode, the
+median of the lab fish against the 95th percentile of the 7 fish tracked in
+20 min of the same deployment's night. A lab fish at 0 dB gain is then as far
+above the field noise as a field fish next to an electrode, and the
+attenuation of the scenarios is distance. The absolute numbers are those of
+the field mixtures. Calibration: `figures/field_noise_calibration.png`.
+Not included yet: the night of that deployment is 10-20 dB above the day
+floor below 1.2 kHz, a chorus of many unresolved fish.
+
+**Truth.** Per fish, on a 10 Hz grid: frequency (NaN where unknown), the
+gain applied, and the SNR of its fundamental in the mixture (power at the
+truth frequency over the noise floor at that frequency, both summed over
+electrodes, at wavetracker's default resolution of 0.61 Hz). The noise floor
+comes from mixing the residuals alone as well, and the fish and noise power
+are stored, so that other floors can be put under the same fish. Full-power
+fish have a median SNR of 44-52 dB in the lab mixtures and about 20 dB in the
+field mixtures (10 % of their frames below 7 dB).
+
+**Scenarios** (`benchmarks/dense/suite.yaml`, 10 min each, dev and test):
+
+| scenario | fish | band [Hz] | augmentation |
+|---|---|---|---|
+| density-04/10/20/30 | 4-30 | 400-1100 | none |
+| crowded-30 | 30 | 550-850 (nearest neighbour 4 Hz, median) | none |
+| lowonly-10 | 10 | 70-300 | none |
+| lowfreq-30 | 30 | 60-1300, log | none |
+| atten-fish-30 | 30 | 150-1300, log | every fish: static 0 to -40 dB, wander, fades 10-40 dB, electrode drift |
+| atten-dyad-30 | 30 | 150-1300, log | half the dyads at -15 to -45 dB, fades, electrode drift |
+| ladder-10/30 | 10, 30 | 300-1300 / 150-1300 | every fish ramps by 60 dB, in or out |
+
+**Scoring** (`benchmarks/dense/score.py`). Detections are matched one to one
+per frame to the truth (within 2 Hz). *Completeness* (recall) counts the
+frames of a fish with a matched detection, also only over the frames on which
+the fish is at least 6 dB above the floor of the mixture (*visible*);
+coverage counts those of its dominant identity, IDF1 assigns identities one
+to one to fish (what a user wants: one identity per fish).
+Unmatched detections are *harmonic* (on a harmonic or subharmonic of a fish)
+or *false*; near a fish whose truth is unknown they are ignored. Every
+(fish, frame) is saved with its SNR, gain, frequency and the distance to the
+nearest line of another fish, for the curves in the report.
+
+Spectrograms and truth of a lab mixture, the same fish in field noise, and a
+ladder (every fish ramps by 60 dB; light: low SNR):
+
+![Lab and field mixture, ladder](images/dense_benchmark_gallery.png)
+
+**Baseline** (wavetracker defaults, and the dense-population settings of
+`benchmarks/dense/configs/dense.yaml`: grid factors 4/7, `min_group_size: 2`,
+stricter links and stitching), dev split, field noise, means over seeds:
+
+| scenario | completeness, default / dense | ... of visible frames, dense | IDF1, default / dense | precision, dense | switches per fish and min, dense |
+|---|---|---|---|---|---|
+| density-04 | 0.99 / 0.99 | 0.99 | 0.99 / 0.99 | 0.98 | 0.25 |
+| density-10 | 0.76 / 0.92 | 0.92 | 0.63 / 0.70 | 0.99 | 1.0 |
+| density-20 | 0.67 / 0.86 | 0.92 | 0.68 / 0.70 | 0.98 | 1.3 |
+| density-30 | 0.58 / 0.74 | 0.80 | 0.61 / 0.61 | 0.96 | 0.8 |
+| crowded-30 | 0.53 / 0.71 | 0.76 | 0.53 / 0.59 | 1.00 | 1.0 |
+| lowonly-10 | 0.47 / 0.79 | 0.83 | 0.64 / 0.76 | 0.97 | 0.13 |
+| lowfreq-30 | 0.42 / 0.67 | 0.75 | 0.53 / 0.63 | 0.83 | 0.42 |
+| atten-fish-30 | 0.13 / 0.22 | 0.73 | 0.18 / 0.22 | 0.74 | 0.44 |
+| atten-dyad-30 | 0.29 / 0.40 | 0.79 | 0.40 / 0.37 | 0.84 | 0.42 |
+| ladder-10 | 0.14 / 0.22 | 0.83 | 0.23 / 0.31 | 0.85 | 0.35 |
+| ladder-30 | 0.11 / 0.20 | 0.74 | 0.19 / 0.25 | 0.79 | 0.33 |
+
+In lab noise the dense settings reach 0.83 completeness and IDF1 0.68 on
+density-30 (defaults 0.69 and 0.70), but their thresholds then pick up
+harmonics: 14 harmonic detections per frame on lowfreq-30 (precision 0.62).
+What limits tracking, in field noise:
+
+![Summary per mixture](images/dense_benchmark_summary.png)
+
+![Completeness against SNR, attenuation, frequency and neighbours](images/dense_benchmark_curves.png)
+
+* **Density, not noise, costs completeness first.** Already at lab SNR
+  completeness falls from 0.99 with 4 fish to 0.69 (defaults) or 0.83 (dense)
+  with 30, although every fish is 40-60 dB above the noise. Strong fish
+  within 1 Hz of another fish's line are found in under half of their frames,
+  within 1-3 Hz in two thirds, farther away in all of them (two fish that
+  close make one spectral peak at 0.61 Hz resolution).
+* **Identities break more than detections fail.** With 10 or more fish, a
+  fish's frames on its one identity (dashed) are 10-25 points below its
+  detected frames; fish change identity about once per minute with the
+  dense settings, mostly at rises and at close neighbours.
+* **SNR**: half of a fish's frames are found at about 8 dB SNR of the
+  fundamental with the dense settings and about 15 dB with the defaults.
+  Moved away from a near-electrode position, a fish has lost half of its
+  detected frames at 14 dB attenuation (dense, 0.80 to 0.40; defaults at
+  11 dB, 0.57 to 0.28) and four fifths at 19 dB. Of the frames still visible
+  (>= 6 dB), the dense settings find 73-83 % in the attenuation scenarios.
+* **Low frequencies**: in field noise, fish below 150 Hz are found in a
+  median 63 % of their frames with the dense settings (quartiles 37-81 %)
+  and 12 % with the defaults, fish at 150-300 Hz in 87 % and 38 %, above
+  300 Hz in 88 % and 78 %. Half of the fish in lowfreq-30 have another fish's
+  line (a harmonic) within 1.4 Hz.
+* Harmonics of strong fish tracked as fish are the main false detections
+  (1.5-4 per frame in the attenuated and low-frequency scenarios, dense).
 
 ## Low-frequency fish without a 2nd harmonic
 

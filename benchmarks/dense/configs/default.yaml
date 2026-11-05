@@ -1,0 +1,3 @@
+# wavetracker defaults; each mixture's band.yaml sets the fish range,
+# mains_freq: 0 and min_good_peak_power: null.
+{}
