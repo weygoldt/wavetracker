@@ -28,9 +28,9 @@ The most relevant parameters:
 | `tracking.gap_tolerance` / `gap_tolerance_rate` | none / 0 | gap-dependent frequency tolerance `tol + rate * gap` (dense populations) |
 | `tracking.amplitude_feature` | `minmax` | electrode pattern in the link error; `db` (level ratios) for few electrodes |
 | `tracking.min_support` | 0 | only track detections with ≥ n neighbours within `support_window` s and `support_freq` Hz |
-| `stitching.enabled` | true | join fragments across rises, dropouts and double detections |
+| `stitching.enabled` | true | rule-based joining of fragments across rises, dropouts and double detections; only used with `linking.enabled: false` |
 | `stitching.max_dropout` | 900 | longest gap bridged when nothing else is at that frequency [s] |
-| `linking.enabled` | false | join fragments with the learned linker instead of the stitching (see [Learned linking](algorithms.md#learned-linking)) |
+| `linking.enabled` | true | join fragments with the learned linker instead of the stitching (see [Learned linking](algorithms.md#learned-linking)) |
 | `linking.threshold` | 0.9 | minimum link probability; higher: purer identities, more fragments (0.5: IDF1 +0.02, purity -0.3 %) |
 | `linking.max_gap` / `max_df` | 180 / 5 | longest gap [s] and largest frequency mismatch [Hz] of a candidate link |
 | `linking.parallel_df` | 3 | identities running at the same time this far apart [Hz] are two fish |

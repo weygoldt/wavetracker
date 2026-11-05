@@ -92,6 +92,8 @@ is kept; restrict the fish range to remove it.
 
 ## Stitching
 
+The rule-based stitching joins fragments when the learned linker is off
+(`linking.enabled: false`, see [Learned linking](#learned-linking)).
 The tracker breaks a track at every rise: the onset jump exceeds
 `freq_tolerance` and, by the time the frequency has decayed back, the gap
 exceeds `max_dt`. `wavetracker.stitching` joins fragment A to a later
@@ -118,8 +120,8 @@ fish is not detected for longer than `max_dt`, and next to close neighbours.
 On the [dense-mixture benchmark](benchmarks.md#learned-fragment-linking),
 joining every fragment to its true fish would raise IDF1 from 0.56 (the
 rule-based stitching above) to 0.69 (lab noise); the linker reaches 0.64 at
-the same purity. With
-`linking.enabled: true`, `wavetracker.linking` replaces the stitching:
+the same purity. By default (`linking.enabled: true`), `wavetracker.linking`
+replaces the stitching:
 
 1. **Fragments**: every tracker identity with at least 10 detections,
    summarised at its start and end: frequency, slope and scatter, baseline

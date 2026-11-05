@@ -309,7 +309,10 @@ mixtures from 0.56 (dense settings, with stitching) to 0.69, and fragments
 shorter than 10 detections hold almost none of that. The learned linker
 (`linking.enabled: true`, see [Learned linking](algorithms.md#learned-linking))
 replaces the stitching with a link classifier and a constrained greedy
-association.
+association; it is on by default. The baselines of this benchmark
+(`configs/default.yaml`, `dense.yaml` and their variants) keep the stitching
+(`linking: {enabled: false}`) so that their numbers stay as documented;
+`dense-linked.yaml` is the dense settings with the linker.
 
 **Training data.** `benchmarks/dense/train.yaml` adds a third split, `train`:
 the same generator and scenario families, other seeds, densities (16, 24 fish)

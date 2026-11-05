@@ -64,8 +64,9 @@ information, e.g. position
 ([`merge-by-position`](post-processing.md#merging-by-position-moving-electrodes)).
 
 On the [dense-mixture benchmark](benchmarks.md#learned-fragment-linking),
-the learned linker (`linking: {enabled: true}`, replacing `stitching`) joins
-fragments far better than the stitching settings above: IDF1 0.56 → 0.64
+the learned linker (the default; it replaces the `stitching`
+settings above, which apply with `linking: {enabled: false}`) joins
+fragments far better than those settings: IDF1 0.56 → 0.64
 (lab noise) and 0.52 → 0.61 (field noise) with 4-30 fish, at the same purity;
 a fish needs 1.4 identities instead of 2.4. With two electrodes its
 identities are slightly less pure (0.3-0.8 %), and it has not been validated

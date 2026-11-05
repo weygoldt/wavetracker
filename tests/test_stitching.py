@@ -98,6 +98,7 @@ def test_stitching_reduces_fragmentation_without_mixing(tmp_path):
     scores = {}
     for enabled in (False, True):
         cfg = Config()
+        cfg.linking.enabled = False  # the rule-based stitching
         cfg.stitching.enabled = enabled
         track_results(res, cfg)
         scores[enabled] = evaluate(res, rec.truth_times, rec.truth_freqs, tol=60)

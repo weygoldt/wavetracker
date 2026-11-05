@@ -226,7 +226,8 @@ class TrackingConfig:
 
 @dataclass
 class StitchingConfig:
-    """Joining track fragments across rises (see wavetracker.stitching)."""
+    """Joining track fragments across rises (see wavetracker.stitching);
+    only used with linking.enabled: false."""
 
     enabled: bool = True
     max_gap: float = 30.0
@@ -270,11 +271,11 @@ class StitchingConfig:
 @dataclass
 class LinkingConfig:
     """Joining fragments with a learned link score (see wavetracker.linking);
-    replaces `stitching` when enabled."""
+    replaces `stitching` when enabled (the default)."""
 
-    enabled: bool = False
+    enabled: bool = True
     """Join the tracker's fragments with the learned linker instead of the
-    rule-based stitching."""
+    rule-based stitching (`stitching`, used when this is false)."""
     threshold: float = 0.9
     """Minimum probability of a link (0-1). Higher: purer identities, more
     fragments. 0.9 keeps identities as pure as the stitching on the

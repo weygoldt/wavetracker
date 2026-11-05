@@ -15,3 +15,5 @@ stitching:
   rise_baseline_tolerance: 2.0
   dropout_tolerance: 0.5
   overlap_tolerance: 1.0
+linking:
+  enabled: false  # the rule-based stitching below (the baseline)

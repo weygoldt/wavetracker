@@ -19,10 +19,10 @@ The pipeline:
 3. **Tracking** – detections are linked into identities using their
    frequency and their amplitude pattern across electrodes
    ([Raab et al. 2022](https://doi.org/10.3389/fnint.2022.965211)).
-4. **Stitching** – track fragments are joined across rises, dropouts and
-   short double detections. For dense populations, a learned linker
-   (`linking.enabled: true`) joins them better
-   ([Learned linking](docs/algorithms.md#learned-linking)).
+4. **Linking** – a learned linker joins the track fragments of a fish across
+   rises, dropouts and close neighbours
+   ([Learned linking](docs/algorithms.md#learned-linking)); the earlier
+   rule-based stitching is available with `linking.enabled: false`.
 
 Set the frequency range of your fish (see [Usage](#usage)); the default
 range is a broad catch-all.
