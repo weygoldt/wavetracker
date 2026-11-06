@@ -1,0 +1,14 @@
+# dense-nfft16.yaml (0.31 Hz, 0.16 s frames) with the learned fragment linker.
+harmonic_groups:
+  low_thresh_factor: 4.0
+  high_thresh_factor: 7.0
+  min_group_size: 2
+spectrogram:
+  freq_resolution: 0.30517578125
+  overlap_frac: 0.95
+tracking:
+  min_support: 3
+  gap_tolerance: 0.5
+  gap_tolerance_rate: 0.1
+linking:
+  enabled: true

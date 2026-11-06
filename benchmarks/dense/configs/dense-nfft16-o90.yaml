@@ -1,0 +1,21 @@
+# dense.yaml at twice the frequency resolution (0.31 Hz, nfft 65536 at 20 kHz),
+# overlap 0.9: 0.33 s frames.
+harmonic_groups:
+  low_thresh_factor: 4.0
+  high_thresh_factor: 7.0
+  min_group_size: 2
+spectrogram:
+  freq_resolution: 0.30517578125
+  overlap_frac: 0.9
+tracking:
+  min_support: 3
+  gap_tolerance: 0.5
+  gap_tolerance_rate: 0.1
+stitching:
+  max_dropout: 60.0
+  baseline_tolerance: 1.0
+  rise_baseline_tolerance: 2.0
+  dropout_tolerance: 0.5
+  overlap_tolerance: 1.0
+linking:
+  enabled: false  # the rule-based stitching below (the baseline)

@@ -425,6 +425,54 @@ ridge spectrograms as `runs/dense-r`.
 
 ![Gap contents and ridge evidence](images/linker_ridge_evidence.png)
 
+## Completeness: frequency resolution and faint peaks
+
+With the linker, the remaining IDF1 is mostly completeness (dev, dense
+settings: recall 0.67 lab, 0.57 field). Of the frames the tracker misses,
+56 % (lab) / 72 % (field) have the fish less than 6 dB above the noise
+(including the 15 % / 27 % of all frames where augmentation attenuated it
+below the noise, which nothing can detect), 32 % / 20 % are visible but
+within 3 Hz of another fish's line, and 12 % / 8 % are visible and isolated.
+`score.py` also reports recall on the frames the tracker detected in the
+source alone (`recall_detected`) and on the frames completed by ridge
+following (`recall_completed`), where a detector that follows ridges is
+rewarded by construction.
+
+**Frequency resolution 0.31 Hz** (`configs/dense-nfft16.yaml`: 3.3 s windows,
+overlap 0.95 for 0.16 s frames; 0.9 overlap loses on rises) raises recall by
+0.053 (lab) and 0.061 (field), the same on detected-only frames: fish 1-3 Hz
+from another line 0.67 -> 0.81, faint isolated fish (6-15 dB) 0.40 -> 0.66 (a
+tone gains 3 dB per doubling), and at every rate of frequency change, rises
+included, so detection at two resolutions is not needed. But false
+detections double (1.1 -> 2.0 per frame lab, 0.16 -> 0.45 field), precision
+drops by 0.05, and the tracker splits fish more often (`density-10`, field:
+75 -> 174 identities). The oracle joins of these fragments reach 0.671 / 0.661
+(0.667 / 0.638 at 0.61 Hz), the packaged linker 0.616 / 0.609, a linker
+retrained with them (`linker/v5-s0.npz`, not packaged) 0.638 / 0.625: about
+the same as 0.61 Hz in lab, +0.012 in field. The default stays 0.61 Hz.
+
+**Faint peaks along tracks** (prototype, `benchmarks/dense/faint_peaks.py`, not
+in wavetracker yet): a second detection pass at weaker thresholds (3 and 4
+noise std, single peaks allowed) gives candidates; after linking, every
+identity is extended frame by frame from each of its edges, into its gaps
+and past its ends, through the candidate within 0.4 Hz of the predicted
+frequency (slope of its last 8 detections), and stops after 2 frames without
+one (or 30 s). A candidate within 1.5 Hz of another identity, or on one of
+its harmonics or subharmonics, is not taken. At 0.61 Hz: recall +0.041 /
++0.059 (+0.039 / +0.058 on detected-only frames, so not an artefact of the
+completed truth), IDF1 0.641 -> 0.646 (lab) and 0.613 -> 0.649 (field),
+precision -0.022 / +0.005, purity -0.001. Of the detections added to fish
+identities 98 % / 99 % are on the right fish; the false ones extend
+identities that are false lines already (lab: 52,000 of 120,000 added, 83 %
+false), some of them lines the truth does not know (a 1066 Hz line 28 dB
+below the fish runs through all of `density-04-s0`). An electrode-pattern
+check removed more true than false candidates (faint patterns are noisy),
+and filling before linking gained nothing. At 0.31 Hz, with more false
+lines to extend, it costs IDF1 in lab (0.638 -> 0.627) and gains in field
+(0.625 -> 0.641).
+
+![Completeness and identities for resolution and faint peaks](images/completeness_dev.png)
+
 ## Low-frequency fish without a 2nd harmonic
 
 `benchmarks/low_frequency.py` synthesizes odd-harmonic fish (no even
