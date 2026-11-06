@@ -364,9 +364,17 @@ stays the same (0.985 / 0.988). The threshold trades the two:
   less pure (the electrode pattern says little there).
 * Without the electrode pattern features the linker reaches the same IDF1
   at 0.1-0.2 points less purity (threshold 0.5; 0.7 points with an earlier,
-  smaller feature set). The tube fish do not move, so their patterns are more
-  stable than those of free-swimming fish; the model has not been checked on
-  moving fish.
+  smaller feature set). The tube fish move, and the mixtures keep their
+  electrode patterns, so the linker is trained and scored on moving fish: in
+  10 s windows a fish's pattern changes by 2.7 dB rms within 10 s (median
+  over the 104 fish; about the scatter of the estimate itself), 4.5 dB within
+  a minute and 6.3 dB within 15 min, and for the median fish 20 % of the
+  windows are more than 6 dB from its own median pattern (the most mobile
+  tenth: half). Some fish hardly move (0.5-1.5 dB at any lag, in the tube);
+  the 2022 fish (1x11 electrodes) change more than those of 2019/20 (6.5 vs
+  3.5 dB within a minute). `benchmarks/dense/patterns.py`:
+
+  ![Electrode pattern change of the tube fish](images/tube_pattern_motion.png)
 * Joins across rises (jumps of up to 60 Hz within 30 s) add 0.0002 to the
   oracle, and joined different fish on field data, so they are off
   (`linking.rise_df: 0`). Candidates are limited to 5 Hz (the oracle loses

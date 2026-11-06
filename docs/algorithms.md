@@ -150,8 +150,9 @@ replaces the stitching:
 The threshold sets the balance: higher thresholds keep identities purer and
 leave more fragments. The features are measured in seconds and Hz, not in
 frames or detections, and the model was trained on 9 and 2 electrodes and on
-0.61 and 1.22 Hz resolution. The tube fish of the benchmark do not move, so
-their electrode patterns are more stable than those of free-swimming fish.
+0.61 and 1.22 Hz resolution, on fish that move (their electrode patterns
+change by about 4.5 dB rms within a minute, see
+[benchmarks](benchmarks.md#learned-fragment-linking)).
 
 ## Recordings without fish
 
