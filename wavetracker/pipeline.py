@@ -206,6 +206,14 @@ class DetectionOutput:
     timings: Timings = field(default_factory=Timings)
 
 
+def _config_used(cfg: Config, nfft: int) -> dict:
+    """The config for wavetracker.json, with the nfft that was used (readers
+    of the results need the window length, which depends on the rate)."""
+    d = cfg.to_dict()
+    d["spectrogram"]["nfft"] = int(nfft)
+    return d
+
+
 def detect(
     input_path: str | Path | Sequence[str | Path],
     output_dir: str | Path,
@@ -237,14 +245,15 @@ def detect(
         n_total = len(data)
         s0 = min(n_total, max(0, round(start * rate)))
         s1 = n_total if duration is None else min(n_total, s0 + round(duration * rate))
-        step = step_size(sc.nfft, sc.overlap_frac)
-        layout = FrameLayout(s0, s1, sc.nfft, step, rate)
+        nfft = sc.resolve_nfft(rate)
+        step = step_size(nfft, sc.overlap_frac)
+        layout = FrameLayout(s0, s1, nfft, step, rate)
         times = layout.times()
         n_frames = layout.n_frames
         if n_frames < 2:
             raise ValueError("Selected data is shorter than two FFT windows.")
         frames_per_block = max(1, round(sc.block_duration * rate / step))
-        freqs = frequencies(sc.nfft, rate)
+        freqs = frequencies(nfft, rate)
         log.info(
             "%s: %d channels @ %.0f Hz, %.1f s analysed (%d frames, df=%.3f Hz, "
             "dt=%.3f s) on %s",
@@ -258,7 +267,7 @@ def detect(
             dev,
         )
 
-        spectrogram = PowerSpectrogram(sc.nfft, step, rate, dev)
+        spectrogram = PowerSpectrogram(nfft, step, rate, dev)
         oc = cfg.output
         # stored spectrograms cover the tracked range unless limited explicitly
         auto_max = 1.25 * hc.max_freq
@@ -297,7 +306,7 @@ def detect(
             else max(1, round(hc.threshold_band / freqs[1]))
         )
         thresholds = DetectionThresholds(
-            hc, n_channels, step / rate, band_bins, max(1, round(sc.nfft / step))
+            hc, n_channels, step / rate, band_bins, max(1, round(nfft / step))
         )
         click_blocks: list[float] = []
         noise_floor = None
@@ -438,7 +447,7 @@ def detect(
         "low_threshold": low_summary,
         "high_threshold": high_summary,
         "noise_floor": noise_floor,
-        "config": cfg.to_dict(),
+        "config": _config_used(cfg, nfft),
         "timings": vars(timings),
     }
     results = Results(

@@ -10,6 +10,7 @@ from wavetracker.config import Config
 from wavetracker.evaluation import evaluate
 from wavetracker.pipeline import detect, track_results
 from wavetracker.results import Results
+from wavetracker.synthetic import Fish, save_recording, synthesize
 
 from .conftest import REAL_RECORDING
 
@@ -42,6 +43,21 @@ def test_synthetic_end_to_end(synthetic_wav, tmp_path, device):
         len(np.load(tmp_path / "fine_freqs.npy")),
     )
     assert (tmp_path / "sparse_spectra.npy").exists()
+
+
+@pytest.mark.parametrize("rate", [20000.0, 48000.0])
+def test_resolution_and_frame_step_do_not_depend_on_the_rate(tmp_path, rate):
+    rec = synthesize([Fish(600.0)], 8.0, rate=rate, channels=2)
+    save_recording(rec, tmp_path / "rec.wav")
+    res = detect(tmp_path / "rec.wav", tmp_path, Config(), device="cpu").results
+    sc = Config().spectrogram
+    assert res.meta["freq_resolution"] == pytest.approx(sc.freq_resolution, rel=0.01)
+    assert np.diff(res.times).mean() == pytest.approx(
+        (1 - sc.overlap_frac) / sc.freq_resolution, rel=0.01
+    )
+    # consumers read the window length actually used from the stored config
+    nfft = res.meta["config"]["spectrogram"]["nfft"]
+    assert nfft == sc.resolve_nfft(rate)
 
 
 def test_time_window(synthetic_wav, tmp_path):

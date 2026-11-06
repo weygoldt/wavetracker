@@ -6,7 +6,7 @@ chorus, battery powered) a reasonable starting point is:
 
 ```yaml
 spectrogram:
-  nfft: 65536            # 0.73 Hz at 48 kHz: resolves fish a few Hz apart
+  freq_resolution: 0.73  # 1.37 s windows (nfft 65536 at 48 kHz): resolve fish a few Hz apart
   overlap_frac: 0.9
 interference:
   enabled: false         # no mains/hum on battery; avoids any risk to resting low fish

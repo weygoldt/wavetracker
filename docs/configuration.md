@@ -6,7 +6,8 @@ The most relevant parameters:
 
 | parameter | default | meaning |
 |---|---|---|
-| `spectrogram.nfft` | 32768 | FFT window (0.61 Hz resolution at 20 kHz) |
+| `spectrogram.freq_resolution` | 0.61 | frequency resolution [Hz] at any sampling rate (1.64 s FFT window; nfft 32768 at 20 kHz, 78732 at 48 kHz) |
+| `spectrogram.nfft` | `null` | FFT window in samples; overrides `freq_resolution` (the results' `wavetracker.json` holds the nfft used) |
 | `spectrogram.overlap_frac` | 0.9 | window overlap (0.16 s frame step) |
 | `spectrogram.exclude_channels` | `[]` | broken/noisy electrodes to ignore (`run -x 8`) |
 | `clicks.enabled` | true | remove static and crackle from the traces (`run --no-clicks`) |

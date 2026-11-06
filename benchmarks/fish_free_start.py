@@ -192,8 +192,8 @@ def main() -> None:
             cfg.clicks.enabled = change["clicks"]
             cfg.harmonic_groups.threshold_window = change["window"]
             cfg.harmonic_groups.threshold_band = change["band"]
-        step = step_size(cfg.spectrogram.nfft, cfg.spectrogram.overlap_frac)
         rate = probe(fish[0][0])[0]
+        step = step_size(cfg.spectrogram.resolve_nfft(rate), cfg.spectrogram.overlap_frac)
         reference = run(fish, cfg, args.output / label / "alone")
         for spec in args.prefix:
             name, rest = spec.split("=", 1)

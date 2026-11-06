@@ -14,16 +14,46 @@ from typing import Any
 import yaml
 
 
+def _fast_fft_size(target: float) -> int:
+    """The even number without prime factors above 5 closest to `target`."""
+    best, top = 2, 2.0 * max(target, 2.0)
+    p2 = 2
+    while p2 <= top:
+        p3 = p2
+        while p3 <= top:
+            p5 = p3
+            while p5 <= top:
+                if abs(p5 - target) < abs(best - target):
+                    best = p5
+                p5 *= 5
+            p3 *= 3
+        p2 *= 2
+    return best
+
+
 @dataclass
 class SpectrogramConfig:
-    nfft: int = 2**15
-    """Samples per FFT window (frequency resolution = rate / nfft)."""
+    freq_resolution: float = 20000.0 / 2**15
+    """Frequency resolution [Hz], the same at any sampling rate: the FFT window
+    lasts 1 / freq_resolution (1.64 s) and nfft is the fast FFT size closest to
+    rate / freq_resolution (2**15 at 20 kHz, 78732 at 48 kHz)."""
+    nfft: int | None = None
+    """Samples per FFT window; overrides `freq_resolution` when set. The
+    config stored with the results (wavetracker.json) holds the nfft used."""
     overlap_frac: float = 0.9
     """Overlap of consecutive FFT windows (0-1)."""
     block_duration: float = 60.0
     """Seconds of data processed per block on the device."""
     exclude_channels: list[int] = field(default_factory=list)
     """Electrodes to ignore (e.g. broken ones picking up interference)."""
+
+    def resolve_nfft(self, rate: float) -> int:
+        """Samples per FFT window at sampling rate `rate`."""
+        if self.nfft is not None:
+            return int(self.nfft)
+        if not self.freq_resolution > 0:
+            raise ValueError("spectrogram.freq_resolution must be positive")
+        return _fast_fft_size(rate / self.freq_resolution)
 
 
 @dataclass

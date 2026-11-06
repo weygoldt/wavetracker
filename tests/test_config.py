@@ -22,3 +22,29 @@ def test_partial_config_uses_defaults():
 def test_unknown_keys_are_rejected(data):
     with pytest.raises(ValueError, match="Unknown"):
         Config.from_dict(data)
+
+
+def _smooth(n):
+    """True if n has no prime factor above 5 (a fast FFT size)."""
+    for p in (2, 3, 5):
+        while n % p == 0:
+            n //= p
+    return n == 1
+
+
+@pytest.mark.parametrize("rate", [20000.0, 22050.0, 44100.0, 48000.0, 96000.0])
+def test_default_resolution_is_the_same_at_any_rate(rate):
+    sc = Config().spectrogram
+    nfft = sc.resolve_nfft(rate)
+    assert nfft % 2 == 0 and _smooth(nfft)
+    assert rate / nfft == pytest.approx(sc.freq_resolution, rel=0.01)
+
+
+def test_default_resolution_keeps_nfft_2_15_at_20_khz():
+    # the benchmarks (20 kHz grids) keep their numbers
+    assert Config().spectrogram.resolve_nfft(20000.0) == 2**15
+
+
+def test_explicit_nfft_overrides_the_resolution():
+    cfg = Config.from_dict({"spectrogram": {"nfft": 65536}})
+    assert cfg.spectrogram.resolve_nfft(48000.0) == 65536
