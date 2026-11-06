@@ -312,7 +312,8 @@ replaces the stitching with a link classifier and a constrained greedy
 association; it is on by default. The baselines of this benchmark
 (`configs/default.yaml`, `dense.yaml` and their variants) keep the stitching
 (`linking: {enabled: false}`) so that their numbers stay as documented;
-`dense-linked.yaml` is the dense settings with the linker.
+`dense-linked.yaml` is the dense settings with the linker, `default-linked.yaml`
+the defaults as shipped.
 
 **Training data.** `benchmarks/dense/train.yaml` adds a third split, `train`:
 the same generator and scenario families, other seeds, densities (16, 24 fish)
@@ -382,7 +383,28 @@ stays the same (0.985 / 0.988). The threshold trades the two:
 * A model trained on one detection setting transfers to the others within
   0.003 IDF1; a larger network or twice the data changed the results by less
   than the spread between seeds (0.003).
-* The test suite has not been scored yet.
+
+**Test suite** (scored once, on 2026-11-06, after all of the above was fixed
+on dev; nothing is tuned on it): the held-out fish groups and the test hours
+of the noise recording, means over the 17 mixtures of each split.
+
+| detections | noise | stitching IDF1 / purity | linker, threshold 0.9 | gain (dev) |
+|---|---|---|---|---|
+| dense settings | lab | 0.614 / 0.987 | **0.686 / 0.987** | +0.072 (+0.081) |
+| | field | 0.458 / 0.991 | **0.532 / 0.988** | +0.074 (+0.096) |
+| defaults | lab | 0.681 / 0.983 | **0.730 / 0.984** | +0.049 (+0.039) |
+| | field | 0.357 / 0.992 | **0.390 / 0.992** | +0.033 (+0.033) |
+
+The linker's gain carries over, at the same purity (within 0.003). The
+levels differ from dev because the splits do: the test fish are stronger
+(median SNR 40 dB against 28 dB in lab noise) and the test hours of the
+field recording are louder (median SNR 12 dB against 14 dB), so lab test is
+easier and field test harder than dev. GPU detection is not bit-exact from
+run to run (about 0.1 % of the detections differ), which moves these means
+by about 0.001. Configs: `dense.yaml` / `dense-linked.yaml` and `default.yaml` /
+`default-linked.yaml` (the defaults as shipped).
+
+![Test suite: dense settings with stitching and with the linker](images/linker_test_summary.png)
 
 **Spectrogram evidence between fragments (tried, not used).** Linking by eye,
 one follows the faint ridge of a fish through the gap and checks its
