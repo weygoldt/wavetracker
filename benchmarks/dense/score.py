@@ -9,6 +9,10 @@ subharmonic of a fish, and *false* otherwise.
 Per fish:
 
 * recall: frames with a matched detection / frames where the fish is known;
+  also split into the frames on which the tracker detected the fish in its
+  source alone (recall_detected) and those the truth completed by ridge
+  following (recall_completed), where a ridge follower is rewarded by
+  construction;
 * coverage: frames matched by its dominant identity / known frames;
 * switches: changes of identity along its matched detections;
 * fragments: identities needed for 90 % of its matched detections.
@@ -113,6 +117,11 @@ def score(mix_dir: Path, res_dir: Path, tol: float = TOL) -> tuple[dict, dict]:
     cls = classify_unmatched(res, F, Ff, fish, tol)
     known = np.isfinite(F)
     n_known = known.sum(1)
+    if "freqs_detected" in truth:
+        detected = known & np.isfinite(truth_at(truth, res.times, "freqs_detected"))
+    else:  # truth from before the split: all known frames count as detected
+        detected = known
+    completed = known & ~detected
     ident = res.ident_v
     has_id = np.isfinite(ident)
     ids = np.unique(ident[has_id])
@@ -207,6 +216,13 @@ def score(mix_dir: Path, res_dir: Path, tol: float = TOL) -> tuple[dict, dict]:
         if visible.any()
         else np.nan,
         "visible": float(visible.sum() / max(known.sum(), 1)),
+        "recall_detected": float(matched_frame[detected].mean())
+        if detected.any()
+        else np.nan,
+        "recall_completed": float(matched_frame[completed].mean())
+        if completed.any()
+        else np.nan,
+        "completed": float(completed.sum() / max(known.sum(), 1)),
         "coverage": float(dominant_frame[known].mean()),
         "precision": n_match / max(n_det - int((cls == 1).sum()), 1),
         "harmonic_per_frame": n_harm / n_frames,
@@ -235,6 +251,7 @@ def score(mix_dir: Path, res_dir: Path, tol: float = TOL) -> tuple[dict, dict]:
         "matched": matched_frame[kk, jj],
         "dominant": dominant_frame[kk, jj],
         "assigned": assigned_frame[kk, jj],
+        "detected": detected[kk, jj],
         "n_fish": np.full(len(kk), n_fish, np.int16),
     }
     return summary, table

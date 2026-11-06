@@ -399,10 +399,62 @@ def place_sources(design: dict, pool: list[dict], rng) -> list[dict]:
     return out
 
 
-def source_truth(entry: dict):
-    """Source truth (times, (2, frames) with NaN) of a library entry."""
+def source_truth(entry: dict, key: str = "freqs"):
+    """Source truth (times, (2, frames) with NaN) of a library entry: the
+    completed truth (`freqs`) or only what the tracker detected in the source
+    alone (`freqs_detected`)."""
     tr = np.load(DATA / "sources" / entry["name"] / "truth.npz")
-    return tr["times"], tr["freqs"]
+    return tr["times"], tr[key]
+
+
+def _detected_at(st: np.ndarray, sd: np.ndarray, tq: np.ndarray) -> np.ndarray:
+    """Per source time `tq`: was the nearest source frame detected?"""
+    j = np.clip(np.searchsorted(st, tq), 1, len(st) - 1)
+    j -= (tq - st[j - 1]) < (st[j] - tq)
+    return np.isfinite(sd[j])
+
+
+def detected_truth(meta: dict, freqs: np.ndarray, library: list[dict]) -> np.ndarray:
+    """The mixture truth `freqs` on the frames where the tracker detected the
+    fish in its source alone; NaN on frames completed by ridge following.
+    A detector that follows ridges is rewarded on completed frames by
+    construction, so its gain is checked on these frames too."""
+    design = meta["design"]
+    duration = float(design["duration"])
+    grid = common_drift(
+        duration,
+        design.get("drift", 0.005),
+        design.get("drift_timescale", 300.0),
+        int(design["seed"]) + 1,
+    )
+    t_truth = np.arange(0.0, duration, 1 / TRUTH_RATE)
+    by_name = {e["name"]: e for e in library}
+    out = np.full(freqs.shape, np.nan)
+    for s, src in enumerate(meta["sources"]):
+        w = Warp(src["scale"], src["start"], grid[0], grid[1], grid[2])
+        st, sd = source_truth(by_name[src["trial"]], "freqs_detected")
+        tq = w.tau(t_truth)
+        for k in range(2):
+            j = 2 * s + k
+            out[j] = np.where(_detected_at(st, sd[k], tq), freqs[j], np.nan)
+    return out
+
+
+def add_detected(library: list[dict]):
+    """Add `freqs_detected` to the truth of every existing mixture."""
+    for path in sorted(MIXTURES.glob("*/*/truth.npz")):
+        truth = dict(np.load(path))
+        if "freqs_detected" in truth:
+            continue
+        meta = json.loads((path.parent / "mixture.json").read_text())
+        truth["freqs_detected"] = detected_truth(meta, truth["freqs"], library)
+        tmp = path.with_suffix(".tmp")
+        with open(tmp, "wb") as fh:  # atomic: runs may be scoring meanwhile
+            np.savez(fh, **truth)
+        tmp.replace(path)
+        known = np.isfinite(truth["freqs"])
+        frac = np.isfinite(truth["freqs_detected"]).sum() / max(known.sum(), 1)
+        print(f"{path.parent.relative_to(MIXTURES)}: {frac:.3f} detected", flush=True)
 
 
 def _gap_flags(t, f, max_gap):
@@ -607,6 +659,9 @@ def generate(name: str, design: dict, library: list[dict], device: str = "auto")
         times=t_truth,
         freqs=truth,  # (fish, T) NaN where unknown
         freqs_filled=filled,  # through the gaps, for ignoring detections there
+        freqs_detected=detected_truth(  # without the completed frames
+            {"design": design, "sources": sources}, truth, library
+        ),
         source=np.repeat(np.arange(len(sources)), 2),
         gain_db=common,
         channel_gain_db=chan.astype(np.float32),
@@ -685,8 +740,16 @@ def main(argv=None):
     p.add_argument("--split", help="dev, test or train (default: all of the suite)")
     p.add_argument("--device", default="auto")
     p.add_argument("--worker", default="0/1", help="i/n: every n-th mixture from i")
+    p.add_argument(
+        "--add-detected",
+        action="store_true",
+        help="add freqs_detected to the truth of existing mixtures (all splits)",
+    )
     args = p.parse_args(argv)
     library = json.loads((DATA / "library.json").read_text())
+    if args.add_detected:
+        add_detected(library)
+        return
     designs = expand_suite(args.suite)
     names = [
         n

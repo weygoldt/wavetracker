@@ -172,3 +172,49 @@ def test_dyads_too_wide_for_their_stratum_do_not_stack():
     in_window = [np.sum(np.abs(fish - f) <= 1.0) for f in fish]
     assert max(in_window) <= 3
     assert fish.min() >= 550 - 10 and fish.max() <= 850 + 10
+
+
+def test_detected_flags_follow_the_nearest_source_frame():
+    st = np.arange(11) * 1.0
+    sd = np.where(st < 5, 500.0, np.nan)
+    tq = np.array([-0.3, 0.4, 4.4, 4.6, 7.0, 10.2])
+    assert mixture._detected_at(st, sd, tq).tolist() == [
+        True,
+        True,
+        True,
+        False,
+        False,
+        False,
+    ]
+
+
+def test_recall_is_split_into_detected_and_completed_frames(tmp_path):
+    import json
+
+    from wavetracker.results import Results
+
+    times = np.arange(10) * 0.1
+    freqs = np.full((1, 10), 500.0)
+    mix = tmp_path / "mix"
+    mix.mkdir()
+    np.savez(
+        mix / "truth.npz",
+        times=times,
+        freqs=freqs,
+        freqs_filled=freqs,
+        freqs_detected=np.where(np.arange(10) < 5, freqs, np.nan),
+        source=np.array([0]),
+        gain_db=np.zeros((1, 10)),
+        snr_times=times,
+        snr_db=np.full((1, 10), 30.0),
+    )
+    (mix / "mixture.json").write_text(json.dumps({"name": "dev/x"}))
+    idx = np.array([0, 1, 2, 7])
+    res = Results(np.full(4, 500.0), idx, np.ones((4, 1)), np.zeros(4), times)
+    res.save(tmp_path / "res")
+    summary, table = score.score(mix, tmp_path / "res")
+    assert summary["recall"] == pytest.approx(0.4)
+    assert summary["recall_detected"] == pytest.approx(0.6)
+    assert summary["recall_completed"] == pytest.approx(0.2)
+    assert summary["completed"] == pytest.approx(0.5)
+    assert table["detected"].tolist() == [True] * 5 + [False] * 5
