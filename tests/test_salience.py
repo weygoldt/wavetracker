@@ -227,3 +227,25 @@ def test_pipeline_learned_detector_is_block_independent(synthetic_wav, tmp_path)
     assert unmatched(runs[0], runs[1]) + unmatched(runs[1], runs[0]) <= 1e-4 * len(
         runs[0][0]
     )
+
+
+def test_recording_edges_look_like_the_middle():
+    """Where a recording starts or ends there is no context: it is mirrored
+    from the data, so a recording that does not change over time gives the
+    same salience in its first and last frames as in the middle (zeros
+    there gave bursts of false detections in field recordings)."""
+    torch.manual_seed(5)
+    spec = small_spec(dilations=(1, 4, 2))
+    net = SalienceNet(spec).eval()
+    freqs = np.fft.rfftfreq(2**15, 1 / 20000.0)
+    rng = np.random.default_rng(2)
+    K = int(np.searchsorted(freqs, 5000))
+    frame = 10 * np.log10(rng.exponential(1.0, K))
+    frame[1310] += 15
+    log = torch.as_tensor(np.repeat(frame[:, None], 40, axis=1), dtype=torch.float32)
+    s = StreamingSalience(net, spec, freqs, STEP, 400, 1200, 0.05, torch.device("cpu"))
+    ((det, _),) = s.push(s.features(log)) + s.finish()
+    fr, _, fq, sal = det
+    per_frame = [sorted(np.round(fq[fr == j], 6)) for j in range(40)]
+    assert all(p == per_frame[20] for p in per_frame)
+    np.testing.assert_allclose(sal[fr == 0], sal[fr == 20], atol=1e-5)

@@ -426,6 +426,66 @@ know.
 Figures: `figures/strata_learned_v1.png`, `figures/curves_classic-ldev_s5000-t0.6_ldev.png`
 (and `_ldev-field`), `figures/tracks_s5000-t0.6_ldev_ladder-30-s0.png`.
 
+### What limits v1 (step A)
+
+All on `ldev` / `ldev-field` (lab / field noise), same tracker and linker
+unless stated; IDF1 is the mean over the 17 mixtures of each.
+
+**Ceilings** (`benchmarks/dense/oracle.py`; figure `figures/A-ceilings.png`):
+
+| | IDF1 |
+|---|---|
+| classic | 0.639 / 0.597 |
+| classic detections, truth identities | 0.729 / 0.684 |
+| learned v1 | 0.727 / 0.711 |
+| learned v1 detections, truth identities | 0.790 / 0.775 |
+| truth detections >= 0 dB, real tracker + linker | 0.775 / 0.740 |
+| truth detections >= 0 dB, truth identities | 0.887 / 0.843 |
+
+What is left to v1 (0.16 / 0.13 up to what is above the noise) is split
+about evenly: detection 0.07 / 0.05, association 0.09 / 0.08 (average of the
+two orders of fixing). Most of the association loss is the tracker's own
+fragments mixing close fish (purity 0.95 with perfect detections; truth
+detections reach only 0.53 / 0.63 IDF1 on `crowded-30`) and joins the
+linker cannot make; the linker's decisions cost 0.016, tracker parameters
+nothing (12 settings within +-0.005; `max_dt` 5 is as good and 2.6x faster).
+The linker retrained on learned fragments of `ltrain` gives +0.011 at a
+link threshold of 0.7 (model in `$WT_BENCHMARK_DATA/salience/`, not
+packaged).
+
+**Capacity, data and seed** (5000 steps each, best of thresholds 0.5-0.7):
+
+| model | IDF1 |
+|---|---|
+| 32 channels, 26 mixtures (v1) | 0.727 / 0.711 |
+| 32 channels, 26 mixtures, seed 1 | 0.720 / 0.702 |
+| 32 channels, 13 mixtures | 0.714 / 0.699 |
+| 64 channels, 26 mixtures | 0.730 / 0.712 |
+| 64 channels, 13 mixtures | 0.722 / 0.708 |
+
+A different seed moves IDF1 by about 0.008; doubling the mixtures or the
+width adds about as much each. The wider network detects better at the same
+threshold (lab, 0.6: recall 0.700 vs 0.686 at precision 0.965 vs 0.958;
+recall with a line 1.2-3 Hz away 0.849 vs 0.813), but IDF1 hardly follows:
+association limits it as much as detection. The halved data are fewer
+mixtures of the same 20 trials, not fewer fish.
+
+**Recording edges.** Without context at the start and end of a recording,
+v1 padded with zeros and gave bursts of false detections there (46-60
+identities per 5-minute field file); the context is now mirrored from the
+data (precision 0.958 -> 0.964, IDF1 +0.001 on `ldev`; edge identities in
+field files 0-2). With the mirrored edges and the retrained linker, v1
+reaches 0.739 / 0.723.
+
+**Real field recordings** (`benchmarks/field_check.py`, no truth): on four
+night files of the 16-electrode grid `iriri01-grid01-dev03` and the
+2-electrode boat take `DR0000_0209`, the learned detector follows faint
+fish the classic one misses or fragments (identities >= 30 s per grid file
+15/16/13/8 vs 7/11/8/2) and leaves fewer stray detections in noise bursts.
+Open problems seen there: a strong 308 Hz fish on the boat take detected in
+19 % of its frames (classic 60 %), and occasional harmonics reported as a
+second fish. Figures: `figures/field_side_by_side/`.
+
 ## Learned fragment linking
 
 On the dense mixtures, identities break much more often than detections

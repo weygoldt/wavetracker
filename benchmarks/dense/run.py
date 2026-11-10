@@ -12,6 +12,7 @@ Usage::
     python benchmarks/dense/run.py report --tags default dense   # dev and dev-field
     python benchmarks/dense/run.py report --tags default --splits test test-field
     python benchmarks/dense/run.py track  --tag mine -c ... --split ldev   # learned-detector dev
+    python benchmarks/dense/run.py retrack --tag mine-dt20 --source mine -c ... --set tracking.max_dt=20 --split ldev
 """
 
 from __future__ import annotations
@@ -108,6 +109,52 @@ def track(args):
             f"{args.tag} {name}: recall {summary['recall']:.3f} idf1 {summary['idf1']:.3f} "
             f"precision {summary['precision']:.3f} ids {summary['ids_30s']} "
             f"({t_det:.0f} + {t_track:.0f} s)",
+            flush=True,
+        )
+
+
+def overrides(sets) -> dict:
+    """Nested config from ``section.key=value`` strings (values parsed as YAML)."""
+    out: dict = {}
+    for kv in sets or []:
+        key, value = kv.split("=", 1)
+        *path, last = key.split(".")
+        d = out
+        for k in path:
+            d = d.setdefault(k, {})
+        d[last] = yaml.safe_load(value)
+    return out
+
+
+def retrack(args):
+    """Tracking (and linking or stitching) again on the detections of another
+    run, with a config and overrides; detections, spectra and times stay."""
+    from wavetracker.results import Results
+
+    variant = yaml.safe_load(Path(args.config).read_text()) if args.config else {}
+    variant = merge(variant or {}, overrides(args.set))
+    for name in mixtures(args.split, args.only):
+        src = RUNS / args.source / name
+        out = RUNS / args.tag / name
+        if not (src / "fund_v.npy").exists():
+            print(f"{name}: no run {args.source}", flush=True)
+            continue
+        if (out / "score.json").exists() and not args.overwrite:
+            continue
+        band = yaml.safe_load((MIXTURES / name / "band.yaml").read_text())
+        cfg = Config.from_dict(merge(variant, band))
+        res = Results.load(src)
+        t_track = track_results(res, cfg)
+        res.meta["retracked_from"] = args.source
+        res.save(out)
+        summary, table = score(MIXTURES / name, out)
+        summary |= {"tag": args.tag, "source": args.source, "track_s": t_track}
+        (out / "score.json").write_text(json.dumps(summary, indent=1))
+        np.savez_compressed(out / "frames.npz", **table)
+        print(
+            f"{args.tag} {name}: recall {summary['recall']:.3f} idf1 {summary['idf1']:.3f} "
+            f"precision {summary['precision']:.3f} ids {summary['ids_30s']} "
+            f"({t_track:.0f} s)",
             flush=True,
         )
 
@@ -494,6 +541,15 @@ def main(argv=None):
     a.add_argument("--device", default="auto")
     a.add_argument("--overwrite", action="store_true")
     a.set_defaults(func=track)
+    r = sub.add_parser("retrack", help="track the detections of another run again")
+    r.add_argument("--tag", required=True)
+    r.add_argument("--source", required=True, help="run tag with the detections")
+    r.add_argument("-c", "--config")
+    r.add_argument("--set", nargs="*", help="overrides, e.g. tracking.max_dt=20")
+    r.add_argument("--split", default="dev")
+    r.add_argument("--only", nargs="*")
+    r.add_argument("--overwrite", action="store_true")
+    r.set_defaults(func=retrack)
     b = sub.add_parser("rescore")
     b.add_argument("--tag", required=True)
     b.add_argument("--split", default="dev")

@@ -226,6 +226,21 @@ def default_model_path() -> Path:
     return Path(__file__).parent / "models" / "salience.pt"
 
 
+def _mirror(x: torch.Tensor, left: int, right: int) -> torch.Tensor:
+    """Extend frames (frames, bins) by `left` / `right` frames mirrored at
+    the ends (without repeating the end frame), repeating the mirror if the
+    data are shorter than the padding."""
+    while left > 0 or right > 0:
+        n = len(x) - 1
+        if n < 1:
+            reps = [x] * (1 + max(left, 0) + max(right, 0))
+            return torch.cat(reps)
+        a, b = min(max(left, 0), n), min(max(right, 0), n)
+        x = torch.cat([x[1 : a + 1].flip(0), x, x[len(x) - 1 - b : len(x) - 1].flip(0)])
+        left, right = left - a, right - b
+    return x
+
+
 class StreamingSalience:
     """Runs a salience model over consecutive spectrogram blocks.
 
@@ -325,6 +340,12 @@ class StreamingSalience:
         parts = [p for p in (left, z, right) if p is not None and len(p)]
         x = torch.cat(parts)
         n_left = 0 if left is None else len(left)
+        # the recording starts or ends here: mirror the data into the missing
+        # context (the network was trained with real context on both sides)
+        pad_l = self.ctx - n_left
+        pad_r = self.ctx - (0 if right is None else len(right))
+        x = _mirror(x, pad_l, pad_r)
+        n_left += max(pad_l, 0)
         stack = harmonic_stack(x, self.k_lo, self.k_hi, self.spec.harmonics)
         logits, offset = self.model(stack[None])
         sl = slice(n_left, n_left + len(z))

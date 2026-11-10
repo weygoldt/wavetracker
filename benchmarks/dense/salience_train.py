@@ -220,8 +220,18 @@ class Batches:
         dev,
         seed=0,
         limit: int | None = None,
+        fraction: float = 1.0,
     ):
-        self.mixes = [Mixture(p) for p in mixture_dirs(split)[:limit]]
+        paths = mixture_dirs(split)[:limit]
+        if fraction < 1.0:  # evenly spaced, so every scenario family keeps examples
+            n = max(1, round(fraction * len(paths)))
+            paths = [
+                paths[i]
+                for i in np.unique(
+                    np.round(np.linspace(0, len(paths) - 1, n)).astype(int)
+                )
+            ]
+        self.mixes = [Mixture(p) for p in paths]
         if not self.mixes:
             raise SystemExit(f"no mixtures in {MIXTURES / split}")
         self.frames, self.ctx, self.bins = frames, ctx, bins
@@ -320,10 +330,18 @@ def losses(model, batch, ctx):
     return bce, l1
 
 
-def frame_scores(model, data: Batches, examples, ctx, threshold=0.5, tol=1.2):
-    """Recall per SNR band and precision of salience peaks on fixed crops."""
-    hits = {"faint": [0, 0], "visible": [0, 0]}
-    n_det = n_match = 0
+THRESHOLDS = (0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
+
+
+def frame_scores(model, data: Batches, examples, ctx, tol=1.2):
+    """Recall per SNR band and precision of salience peaks on fixed crops, at
+    every threshold in THRESHOLDS; ``best_f1`` is the best F1 (recall over all
+    fish frames at >= 0 dB) over thresholds, so that checkpoints are compared
+    independently of how their salience is calibrated."""
+    th = np.array(THRESHOLDS)
+    hits = {b: np.zeros(len(th)) for b in ("faint", "visible")}
+    tot = {"faint": 0, "visible": 0}
+    n_det, n_match = np.zeros(len(th)), np.zeros(len(th))
     for mix, j0, k_lo, el, gain in examples:
         feats, *_ = data.example(mix, j0, k_lo, el, gain)
         with (
@@ -332,39 +350,53 @@ def frame_scores(model, data: Batches, examples, ctx, threshold=0.5, tol=1.2):
         ):
             logits, offset = model(feats[None])
         sl = slice(ctx, ctx + data.frames)
-        fr, _, f, _ = decode(
-            logits[0, sl].float(), offset[0, sl].float(), threshold, k_lo, DF
+        fr, _, f, sal = decode(
+            logits[0, sl].float(), offset[0, sl].float(), th.min(), k_lo, DF
         )
         rows = slice(j0 + ctx, j0 + ctx + data.frames)
         tf, snr = mix.freqs[:, rows], mix.snr_at(gain)[:, rows]
         lo, hi = k_lo * DF + 1.5, (k_lo + data.bins - 1) * DF - 1.5
         for j in range(data.frames):
-            d = f[fr == j]
+            sel = fr == j
+            d_all, s_all = f[sel], sal[sel]
             t = tf[:, j]
             inb = np.isfinite(t) & (t > lo) & (t < hi)
-            used = np.zeros(len(d), bool)
+            bands = []
             for i in np.flatnonzero(inb):
-                band = (
-                    "visible" if snr[i, j] >= 6 else "faint" if snr[i, j] >= 0 else None
-                )
-                hit = False
-                if len(d):
+                b = "visible" if snr[i, j] >= 6 else "faint" if snr[i, j] >= 0 else None
+                if b:
+                    tot[b] += 1
+                bands.append((i, b))
+            tt = t[np.isfinite(t)]
+            for q, thr in enumerate(th):
+                keep = s_all >= thr
+                d = d_all[keep]
+                used = np.zeros(len(d), bool)
+                for i, b in bands:
+                    if not len(d) or b is None:
+                        continue
                     dist = np.where(used, np.inf, np.abs(d - t[i]))
                     m = int(np.argmin(dist))
                     if dist[m] <= tol:
-                        used[m], hit = True, True
-                if band:
-                    hits[band][0] += hit
-                    hits[band][1] += 1
-            dd = d[(d > lo) & (d < hi)]
-            n_det += len(dd)
-            tt = t[np.isfinite(t)]
-            if len(dd) and len(tt):
-                n_match += int(np.sum(np.abs(dd[:, None] - tt[None, :]).min(1) <= tol))
+                        used[m] = True
+                        hits[b][q] += 1
+                dd = d[(d > lo) & (d < hi)]
+                n_det[q] += len(dd)
+                if len(dd) and len(tt):
+                    n_match[q] += np.sum(
+                        np.abs(dd[:, None] - tt[None, :]).min(1) <= tol
+                    )
+    prec = n_match / np.maximum(n_det, 1)
+    rec = (hits["faint"] + hits["visible"]) / max(tot["faint"] + tot["visible"], 1)
+    f1 = 2 * prec * rec / np.maximum(prec + rec, 1e-9)
+    q5 = int(np.flatnonzero(th == 0.5)[0])
+    best = int(np.argmax(f1))
     return {
-        "recall_visible": hits["visible"][0] / max(hits["visible"][1], 1),
-        "recall_faint": hits["faint"][0] / max(hits["faint"][1], 1),
-        "precision": n_match / max(n_det, 1),
+        "recall_visible": float(hits["visible"][q5] / max(tot["visible"], 1)),
+        "recall_faint": float(hits["faint"][q5] / max(tot["faint"], 1)),
+        "precision": float(prec[q5]),
+        "best_f1": float(f1[best]),
+        "best_thr": float(th[best]),
     }
 
 
@@ -379,6 +411,16 @@ def main(argv=None):
     p.add_argument("--bins", type=int, default=512, help="candidate bins per crop")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--channels", type=int, default=32)
+    p.add_argument(
+        "--dilations", default="1,2,4,8,16,1", help="time dilation per layer"
+    )
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--train-fraction",
+        type=float,
+        default=1.0,
+        help="evenly spaced share of mixtures",
+    )
     p.add_argument("--snr-ignore", type=float, default=-3.0)
     p.add_argument("--val-every", type=int, default=500)
     p.add_argument("--train-split", default="ltrain")
@@ -389,8 +431,13 @@ def main(argv=None):
     )
     args = p.parse_args(argv)
     dev = torch.device(args.device)
-    torch.manual_seed(0)
-    spec = SalienceSpec(freq_resolution=DF, frame_step=FT, channels=args.channels)
+    torch.manual_seed(args.seed)
+    spec = SalienceSpec(
+        freq_resolution=DF,
+        frame_step=FT,
+        channels=args.channels,
+        dilations=tuple(int(d) for d in args.dilations.split(",")),
+    )
     model = SalienceNet(spec).to(dev)
     ctx = model.context_frames
     out = OUT / args.tag
@@ -402,8 +449,9 @@ def main(argv=None):
         args.bins,
         args.snr_ignore,
         dev,
-        1,
+        1 + 10 * args.seed,
         args.limit,
+        args.train_fraction,
     )
     val = Batches(
         args.val_split, args.frames, ctx, args.bins, args.snr_ignore, dev, 2, args.limit
@@ -427,6 +475,12 @@ def main(argv=None):
     sched = torch.optim.lr_scheduler.OneCycleLR(
         opt, max_lr=args.lr, total_steps=args.steps, pct_start=0.05
     )
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+
+        tb = SummaryWriter(str(out / "tb"))
+    except ImportError:
+        tb = None
     log, best, t0 = [], -1.0, time.perf_counter()
     t_mark = t0
     for step in range(1, args.steps + 1):
@@ -448,6 +502,10 @@ def main(argv=None):
                 flush=True,
             )
             t_mark = now
+            if tb is not None:
+                tb.add_scalar("train/bce", bce.item(), step)
+                tb.add_scalar("train/offset_l1", l1.item(), step)
+                tb.add_scalar("train/lr", sched.get_last_lr()[0], step)
         if step % args.val_every == 0 or step == args.steps:
             model.eval()
             sc = {}
@@ -466,7 +524,13 @@ def main(argv=None):
             print(json.dumps(row), flush=True)
             meta = {"tag": args.tag, "step": step, "args": vars(args), "val": sc}
             save_model(out / "last.pt", model, spec, meta)
-            score = sum(sc.values())  # recall faint + visible + precision, lab + field
+            if tb is not None:
+                for k, v in sc.items():
+                    metric, variant = k.rsplit("_", 1)
+                    tb.add_scalar(f"val_{variant}/{metric}", v, step)
+                tb.flush()
+            # threshold-free: the best F1 over thresholds, lab and field
+            score = sc["best_f1_lab"] + sc["best_f1_field"]
             if score > best:
                 best = score
                 save_model(out / "model.pt", model, spec, meta)
