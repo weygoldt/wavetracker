@@ -1,0 +1,97 @@
+# Development suite of the learned detector (benchmarks/dense/mixture.py).
+#
+# The scenarios and seeds of suite.yaml (keep them in sync), split `ldev`:
+# sources from the dev fish groups 2019-g4 and 2022-p4 only (mixture.POOL),
+# none of which are in the training mixtures (learned_train.yaml, `ltrain`),
+# so that a network that memorises fish is caught here. The pool has 10
+# trials, so the 30-fish scenarios (15 sources) use 5 trials twice, each copy
+# with its own frequency scale and offset. Field-noise variants (`ldev-field`,
+# noise.py derive) use the dev hours of the noise recording, as `dev-field`.
+#
+#   python benchmarks/dense/mixture.py --suite benchmarks/dense/learned_dev.yaml
+#   python benchmarks/dense/noise.py derive --splits ldev
+#
+# band: frequency range of the fish (Hz); dyad centres are stratified over it
+#   (placement linear or log), so density = n_fish / band.
+# gain: per-fish power augmentation (all dB, see mixture.gains):
+#   per fish|dyad, fraction of fish/dyads modulated, static_db [lo, hi],
+#   ramp_db (linear ramp over the mixture, random direction), wander_db/tau
+#   (slow OU), fades {rate per 10 min, depth_db, duration_s}: the fish swims
+#   away and comes back, channel_db/tau: electrode pattern drift.
+
+defaults:
+  duration: 600.0
+  drift: 0.005
+  drift_timescale: 300.0
+  noise_db: 0.0
+  splits: [ldev]
+
+scenarios:
+  # --- density: lab power, the band filled with more and more fish ---------
+  - name: density-04
+    n_fish: 4
+    band: [400, 1100]
+  - name: density-10
+    n_fish: 10
+    band: [400, 1100]
+  - name: density-20
+    n_fish: 20
+    band: [400, 1100]
+  - name: density-30
+    n_fish: 30
+    band: [400, 1100]
+    seeds: [0, 1]
+  - name: crowded-30 # ~10 Hz between neighbours
+    n_fish: 30
+    band: [550, 850]
+    seeds: [0, 1]
+
+  # --- low frequencies ----------------------------------------------------
+  - name: lowonly-10 # only low fish: their harmonics are each other's
+    n_fish: 10
+    band: [70, 300]
+    placement: log
+  - name: lowfreq-30 # low fish whose harmonics fall among high fish
+    n_fish: 30
+    band: [60, 1300]
+    placement: log
+    seeds: [0, 1]
+
+  # --- attenuation: fish away from the electrodes ---------------------------
+  - name: atten-fish-30
+    n_fish: 30
+    band: [150, 1300]
+    placement: log
+    seeds: [0, 1]
+    gain:
+      per: fish
+      static_db: [-40, 0]
+      wander_db: 3.0
+      wander_tau: 60.0
+      fades: {rate: 1.0, depth_db: [10, 40], duration_s: [20, 120]}
+      channel_db: 3.0
+      channel_tau: 90.0
+  - name: atten-dyad-30 # some dyads far away, the rest at lab power
+    n_fish: 30
+    band: [150, 1300]
+    placement: log
+    seeds: [0, 1]
+    gain:
+      per: dyad
+      fraction: 0.5
+      static_db: [-45, -15]
+      wander_db: 3.0
+      fades: {rate: 1.0, depth_db: [10, 30], duration_s: [30, 180]}
+      channel_db: 3.0
+  # ramps: every fish fades in or out by 60 dB over the 10 min, which gives
+  # tracking against attenuation (and SNR) per fish
+  - name: ladder-10
+    n_fish: 10
+    band: [300, 1300]
+    gain: {ramp_db: 60.0, channel_db: 2.0}
+  - name: ladder-30
+    n_fish: 30
+    band: [150, 1300]
+    placement: log
+    seeds: [0, 1]
+    gain: {ramp_db: 60.0, channel_db: 2.0}

@@ -29,6 +29,7 @@ The most relevant parameters:
 | `tracking.gap_tolerance` / `gap_tolerance_rate` | none / 0 | gap-dependent frequency tolerance `tol + rate * gap` (dense populations) |
 | `tracking.amplitude_feature` | `minmax` | electrode pattern in the link error; `db` (level ratios) for few electrodes |
 | `tracking.min_support` | 0 | only track detections with ≥ n neighbours within `support_window` s and `support_freq` Hz |
+| `tracking.start_salience` / `start_evidence` | none / 0.5 | new identities need detections of at least this salience (0–1) in `start_evidence` s of frames; weaker ones only extend identities (see [Starting identities from confident detections](algorithms.md#starting-identities-from-confident-detections)) |
 | `stitching.enabled` | true | rule-based joining of fragments across rises, dropouts and double detections; only used with `linking.enabled: false` |
 | `stitching.max_dropout` | 900 | longest gap bridged when nothing else is at that frequency [s] |
 | `linking.enabled` | true | join fragments with the learned linker instead of the stitching (see [Learned linking](algorithms.md#learned-linking)) |

@@ -299,6 +299,133 @@ What limits tracking, in field noise:
 * Harmonics of strong fish tracked as fish are the main false detections
   (1.5-4 per frame in the attenuated and low-frequency scenarios, dense).
 
+### Splits for the learned detector
+
+A network trained on spectrogram crops of the training mixtures could learn
+the individual fish (their harmonic spectra, chirps, rises, electrode
+patterns) instead of what makes a fish, and then score well on mixtures of
+the same fish. `dev` and the `train` split of the
+[linker](#learned-fragment-linking) draw on the same dev sources, which is
+fine for features of tracker fragments but not for a network that sees the
+spectrogram. The learned detector therefore has two splits of its own, drawn
+by fish group from the dev sources (`mixture.POOL`, `library.json`
+unchanged); the test groups stay unseen:
+
+| split | fish groups (dev sources) | trials | mixtures | field noise (`-field`) |
+|---|---|---|---|---|
+| `ltrain` | 2019 group 3, 2022 pairings 1-3 | 20 | 26 (`learned_train.yaml`) | the next day of the noise recording, 10:48-15:08, used by no other split |
+| `ldev` | 2019 group 4, 2022 pairing 4 | 10 | 17 (`learned_dev.yaml`) | the dev hours, as `dev-field` |
+
+`ldev` has the scenarios and seeds of `suite.yaml`. Its 10 trials are fewer
+than the 15 sources of a 30-fish scenario, so a pool smaller than the design
+uses every trial once and as few as needed a second time (5 in each 30-fish
+mixture), each copy with its own frequency scale, offset and electrode
+order; such a fish appears twice, at different frequencies. Splits with
+large enough pools draw exactly as before (the sources of all 53 dev, test
+and train mixtures replay identically). `ltrain` covers the same families at
+other densities and bands (6-30 fish, seeds 200 and 201). Its field noise
+comes from the second day of the noise recording, 2026-09-06, which is as
+empty as the first: in every other file from 09:38 to 16:18 no line stands
+more than 0.4 dB above the floor of the 5-min mean spectrum, while the fish
+of the night stand 7-12 dB above it (before 10:30 the floor is up to 30 dB
+higher, so those hours are not used).
+
+```bash
+python benchmarks/dense/mixture.py --suite benchmarks/dense/learned_dev.yaml
+python benchmarks/dense/mixture.py --suite benchmarks/dense/learned_train.yaml
+python benchmarks/dense/noise.py derive --splits ldev ltrain   # ldev-field, ltrain-field
+python benchmarks/dense/run.py track --tag classic-ldev -c benchmarks/dense/configs/dense-linked.yaml --split ldev   # and ldev-field
+```
+
+**Classic baseline** (run tag `classic-ldev`): the dense settings with the
+linker (`configs/dense-linked.yaml`), wavetracker b833de9, means over seeds,
+lab / field noise:
+
+| scenario | IDF1 | recall | recall, detected frames | false per frame | harmonic per frame | false identities >= 30 s |
+|---|---|---|---|---|---|---|
+| density-04 | 0.87 / 0.86 | 0.80 / 0.79 | 0.79 / 0.78 | 0.03 / 0.03 | 0.0 / 0.0 | 0 / 0 |
+| density-10 | 0.90 / 0.83 | 0.87 / 0.85 | 0.88 / 0.85 | 0.02 / 0.02 | 0.0 / 0.0 | 0 / 0 |
+| density-20 | 0.80 / 0.78 | 0.76 / 0.74 | 0.76 / 0.75 | 0.02 / 0.02 | 0.0 / 0.0 | 0 / 0 |
+| density-30 | 0.83 / 0.78 | 0.80 / 0.74 | 0.80 / 0.74 | 0.12 / 0.16 | 0.1 / 0.5 | 0 / 0 |
+| crowded-30 | 0.62 / 0.60 | 0.63 / 0.62 | 0.63 / 0.62 | 0.03 / 0.03 | 0.0 / 0.0 | 0 / 0 |
+| lowonly-10 | 0.84 / 0.76 | 0.93 / 0.64 | 0.93 / 0.63 | 0.92 / 0.01 | 2.2 / 0.0 | 5 / 0 |
+| lowfreq-30 | 0.71 / 0.67 | 0.77 / 0.70 | 0.77 / 0.69 | 0.33 / 0.27 | 8.6 / 6.6 | 28 / 15 |
+| atten-fish-30 | 0.48 / 0.40 | 0.36 / 0.30 | 0.36 / 0.30 | 0.60 / 0.50 | 2.9 / 2.6 | 8 / 5 |
+| atten-dyad-30 | 0.53 / 0.50 | 0.48 / 0.46 | 0.48 / 0.46 | 0.12 / 0.43 | 5.3 / 5.5 | 17 / 18 |
+| ladder-10 | 0.42 / 0.40 | 0.31 / 0.30 | 0.31 / 0.30 | 0.55 / 0.52 | 1.5 / 1.5 | 2 / 2 |
+| ladder-30 | 0.35 / 0.30 | 0.27 / 0.21 | 0.26 / 0.20 | 0.45 / 0.28 | 3.6 / 3.0 | 12 / 8 |
+| **mean of the 17 mixtures** | **0.639 / 0.597** | **0.605 / 0.551** | 0.604 / 0.549 | 0.28 / 0.23 | 2.6 / 2.2 | 8.1 / 5.5 |
+
+The same settings reach IDF1 0.641 / 0.613 and recall 0.673 / 0.569 on
+`dev`. `ldev` is harder in lab noise because its fish are weaker: six of the
+seven 2019 group 4 recordings put their fish only 20-25 dB above the lab
+noise of a mixture (median SNR of all fish frames 18 dB, against 28 dB on
+`dev` and 40 dB on `test`); in field noise the splits are alike (13 and
+14 dB). The `ltrain` fish are strong (38 dB in lab noise, no unattenuated
+fish below 20 dB, against a third of them in `ldev`), so in training weak
+fish come from the attenuation scenarios and the field noise. The learned
+detector is compared against these numbers, on the same splits.
+Figures: `$WT_BENCHMARK_DATA/figures/summary_classic-ldev_ldev_ldev-field.png`
+and `curves_classic-ldev_ldev*.png` (`run.py report --tags classic-ldev
+--splits ldev ldev-field`).
+
+## Learned detector (v1)
+
+`detector.method: learned` (`wavetracker/salience.py`) replaces peaks and
+harmonic groups with a small convolutional network: the electrode-summed
+spectrogram, normalised per frame in 100 Hz bands, goes in as a harmonic
+stack (channel h at candidate bin k is bin h*k, for h = 1/3, 1/2, 1..5); six
+convolution layers (32 channels, about 81k parameters) with time dilations
+see +-7 Hz and +-5 s; the output is a salience (probability of a
+fundamental) and a sub-bin offset per bin. Peaks above `detector.threshold`
+become detections; tracker and linker are unchanged.
+
+Training (`benchmarks/dense/salience_train.py --tag v1`, 5000 steps of 8
+crops, 78 min on an RTX 4080): crops of the 26 `ltrain` mixtures with their
+field noise mixed in at a random gain (0 = lab, 1 = the field variant, up to
+3; the truth's fish and noise powers give the SNR at any gain), random
+electrode subsets, Gaussian targets (sigma 0.6 Hz) at the truth
+fundamentals; ignored in the loss: fish frames below -3 dB, stretches the
+truth does not know and persistent lines that are no truth fundamental or
+harmonic (found on the lab variant); ridge-completed frames at half weight;
+harmonics of truth fish are negatives. The model is packaged as
+`wavetracker/models/salience.pt`; `configs/learned-linked.yaml` is
+`dense-linked.yaml` with the learned detector.
+
+On `ldev` (17 mixtures each, same tracker and linker; `strata.py`), the
+threshold 0.6 is best for lab and field noise alike (0.4-0.7 tried):
+
+| | IDF1 | recall | precision | harmonic/frame | false ids >= 30 s |
+|---|---|---|---|---|---|
+| classic, lab | 0.639 | 0.605 | 0.832 | 2.65 | 8.1 |
+| learned, lab | **0.727** | 0.686 | 0.958 | 0.31 | 1.8 |
+| classic, field | 0.597 | 0.551 | 0.843 | 2.23 | 5.5 |
+| learned, field | **0.711** | 0.667 | 0.954 | 0.40 | 2.2 |
+
+IDF1 is higher in every one of the 17 mixtures (lab and field); detection
+takes 1.1 s instead of 2.2 s per 10-min, 9-electrode mixture. Recall by
+failure mode (lab / field):
+
+| | classic | learned |
+|---|---|---|
+| fish at 0-6 dB | 0.04 / 0.13 | 0.32 / 0.58 |
+| fish at 6-20 dB | 0.66 / 0.71 | 0.83 / 0.88 |
+| visible fish, nearest line < 1.2 Hz | 0.62 / 0.63 | 0.66 / 0.68 |
+| visible fish, nearest line 1.2-3 Hz | 0.69 / 0.67 | 0.81 / 0.85 |
+
+Faint fish and false lines move most; pairs closer than the window's
+resolution (about 1.2 Hz for 1.64 s Hann windows) barely, as expected for a
+detector that sees only the summed spectrogram. A ByteTrack-style start
+(`tracking.start_salience`) did not help: with detections at 0.4-0.5 and
+starts at 0.7, IDF1 was 0.68-0.70 on lab against 0.72 for a plain 0.7
+threshold, since weak detections still link into existing identities.
+Some remaining "false" identities are long, stationary lines, e.g. near
+810 Hz through `ldev/ladder-30-s0`, probably real lines the truth does not
+know.
+
+Figures: `figures/strata_learned_v1.png`, `figures/curves_classic-ldev_s5000-t0.6_ldev.png`
+(and `_ldev-field`), `figures/tracks_s5000-t0.6_ldev_ladder-30-s0.png`.
+
 ## Learned fragment linking
 
 On the dense mixtures, identities break much more often than detections

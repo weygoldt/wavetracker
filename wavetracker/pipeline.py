@@ -20,6 +20,7 @@ from .interference import CombCanceller, merge_tooth_neighbours
 from .io import FrameLayout, iter_blocks, open_recording, resolve_input
 from .linking import link
 from .results import Results
+from .salience import StreamingSalience
 from .spectrogram import (
     PowerSpectrogram,
     band_noise_std,
@@ -200,6 +201,41 @@ class DetectionThresholds:
         return low, high
 
 
+def classic_salience(
+    log_np: np.ndarray,
+    det: Detections,
+    high_th: np.ndarray,
+    band_bins: int | None,
+    fish_bins: slice,
+) -> np.ndarray:
+    """A salience (0-1) for classic detections, as the learned detector gives.
+
+    The fundamental's level over the local noise floor, `snr` [dB], in units of
+    the high threshold of its frame and band (the prominence a "good" peak
+    needs): ``1 - 2 ** (-snr / high)``. It is 0 at the floor, 0.5 a high
+    threshold above it, 0.75 at twice that, and rises monotonically. The floor
+    is the median of the frame's dB spectrum `log_np` (frames, freqs) over the
+    detection's threshold band, or over the fish range `fish_bins` where the
+    thresholds have no bands (`high_th` of shape (frames,)).
+    """
+    if len(det.frame) == 0:
+        return np.empty(0, np.float32)
+    level = log_np[det.frame, det.bin]
+    if high_th.ndim == 2:
+        band = np.minimum(det.bin // band_bins, high_th.shape[1] - 1)
+        cols = np.minimum(
+            band[:, None] * band_bins + np.arange(band_bins), log_np.shape[1] - 1
+        )
+        floor = np.median(log_np[det.frame[:, None], cols], axis=1)
+        high = high_th[det.frame, band]
+    else:
+        frames, inverse = np.unique(det.frame, return_inverse=True)
+        floor = np.median(log_np[frames, fish_bins], axis=1)[inverse]
+        high = high_th[det.frame]
+    snr = np.maximum(level - floor, 0.0)
+    return (1.0 - 0.5 ** (snr / np.maximum(high, 1e-9))).astype(np.float32)
+
+
 @dataclass
 class DetectionOutput:
     results: Results
@@ -228,6 +264,10 @@ def detect(
     Results (without identities) and spectrograms are written to `output_dir`.
     `input_path` is a file, a recording directory, or a sequence of files that
     together make one recording (see `io.resolve_input`).
+
+    Every detection gets a salience (0-1, `Results.sal_v`): the network's with
+    the learned detector, and with the classic one a stand-in from the
+    fundamental's level over the local noise (see `classic_salience`).
     """
     t_start = time.perf_counter()
     timings = Timings()
@@ -310,7 +350,38 @@ def detect(
         )
         click_blocks: list[float] = []
         noise_floor = None
-        funds, idxs, signs, cplxs = [], [], [], []
+        fish_bins = slice(*np.searchsorted(freqs, [hc.min_freq, hc.max_freq]))
+        funds, idxs, signs, cplxs, sals = [], [], [], [], []
+        streamer = None
+        if cfg.detector.method == "learned":
+            streamer = StreamingSalience.from_config(
+                cfg.detector, freqs, step / rate, hc.min_freq, hc.max_freq, dev
+            )
+            log.info("Learned detector: %s", streamer.model_info["path"])
+
+        def collect(det, sal, first_frame, log_np, power, stft, teeth):
+            """Store detections of one block with their electrode spectra."""
+            if teeth is not None and len(det.frame):
+                keep = merge_tooth_neighbours(
+                    det.frame,
+                    det.freq,
+                    log_np[det.frame, det.bin],
+                    teeth,
+                    cfg.interference.neighbour_distance,
+                    cfg.interference.neighbour_tolerance,
+                    cfg.interference.tooth_neighbour_distance,
+                )
+                det = Detections(det.frame[keep], det.bin[keep], det.freq[keep])
+                sal = None if sal is None else sal[keep]
+            if len(det.frame):
+                b = torch.from_numpy(det.bin).to(dev)
+                fr = torch.from_numpy(det.frame).to(dev)
+                signs.append(power[:, b, fr].T.cpu().numpy())
+                cplxs.append(stft[:, b, fr].T.cpu().numpy())
+                funds.append(det.freq)
+                idxs.append(det.frame + first_frame)
+                if sal is not None:
+                    sals.append(sal)
 
         t_read = time.perf_counter()
         for block in iter_blocks(data, layout, frames_per_block, channels):
@@ -370,32 +441,39 @@ def detect(
             t1 = time.perf_counter()
             timings.spectrogram += t1 - t0
 
-            det = detect_harmonic_groups(log_np, freqs, hc, low_th, high_th, band_bins)
-            if canceller is not None and len(det.frame):
-                keep = merge_tooth_neighbours(
-                    det.frame,
-                    det.freq,
-                    log_np[det.frame, det.bin],
-                    canceller.tooth_frequencies(),
-                    cfg.interference.neighbour_distance,
-                    cfg.interference.neighbour_tolerance,
-                    cfg.interference.tooth_neighbour_distance,
+            teeth = canceller.tooth_frequencies() if canceller is not None else None
+            if streamer is None:
+                det = detect_harmonic_groups(
+                    log_np, freqs, hc, low_th, high_th, band_bins
                 )
-                det = Detections(det.frame[keep], det.bin[keep], det.freq[keep])
-            if len(det.frame):
-                b = torch.from_numpy(det.bin).to(dev)
-                fr = torch.from_numpy(det.frame).to(dev)
-                signs.append(power[:, b, fr].T.cpu().numpy())
-                cplxs.append(stft[:, b, fr].T.cpu().numpy())
-                funds.append(det.freq)
-                idxs.append(det.frame + block.first_frame)
+                sal = classic_salience(log_np, det, high_th, band_bins, fish_bins)
+                collect(det, sal, block.first_frame, log_np, power, stft, teeth)
+            else:
+                # the block is evaluated once the next one gives its context:
+                # keep what the detections need (fundamental bins only)
+                k = streamer.k_hi + 1
+                payload = (
+                    block.first_frame,
+                    log_np,
+                    power[:, :k].clone(),
+                    stft[:, :k].clone(),
+                    teeth,
+                )
+                for (fr, b, f, s), pl in streamer.push(
+                    streamer.features(log_spec), payload
+                ):
+                    collect(Detections(fr, b, f), s, *pl)
             del stft, power, summed, log_spec
             t_read = time.perf_counter()
             timings.detection += t_read - t1
             if progress:
                 progress(block.first_frame + block.n_frames, n_frames)
+        if streamer is not None:
+            for (fr, b, f, s), pl in streamer.finish():
+                collect(Detections(fr, b, f), s, *pl)
 
     fund_v = np.concatenate(funds) if funds else np.empty(0)
+    sal_v = np.concatenate(sals) if sals else np.empty(0, np.float32)
     idx_v = np.concatenate(idxs).astype(np.int64) if idxs else np.empty(0, np.int64)
     sign_v = (
         np.concatenate(signs).astype(np.float32)
@@ -450,8 +528,17 @@ def detect(
         "config": _config_used(cfg, nfft),
         "timings": vars(timings),
     }
+    if streamer is not None:
+        meta["detector_model"] = streamer.model_info
     results = Results(
-        fund_v, idx_v, sign_v, np.full(len(fund_v), np.nan), times, meta, cplx_v=cplx_v
+        fund_v,
+        idx_v,
+        sign_v,
+        np.full(len(fund_v), np.nan),
+        times,
+        meta,
+        cplx_v=cplx_v,
+        sal_v=sal_v,
     )
     results.save(output_dir)
     return DetectionOutput(results, timings)
@@ -468,6 +555,7 @@ def track_results(results: Results, cfg: Config) -> float:
         cfg.tracking,
         min_freq=cfg.harmonic_groups.min_freq,
         max_freq=cfg.harmonic_groups.max_freq,
+        sal_v=results.sal_v,
     )
     if cfg.linking.enabled:
         results.ident_v = link(

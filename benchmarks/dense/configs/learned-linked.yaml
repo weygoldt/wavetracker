@@ -1,0 +1,17 @@
+# dense-linked.yaml with the learned detector (wavetracker.salience) instead
+# of peaks and harmonic groups. The model is v1 (benchmarks/dense/salience_train.py
+# --tag v1, step 5000), packaged as wavetracker/models/salience.pt; the
+# threshold 0.6 is the best on ldev and ldev-field alike (0.4-0.7 tried).
+detector:
+  method: learned
+  threshold: 0.6
+harmonic_groups:
+  low_thresh_factor: 4.0
+  high_thresh_factor: 7.0
+  min_group_size: 2
+tracking:
+  min_support: 3
+  gap_tolerance: 0.5
+  gap_tolerance_rate: 0.1
+linking:
+  enabled: true

@@ -12,6 +12,8 @@ post-processing tools and audian's wavetracker plugin):
                     interference gating). The phase difference between
                     electrodes gives their relative sign:
                     ``np.angle(cplx_v[:, 1] * np.conj(cplx_v[:, 0]))``.
+``sal_v.npy``       salience (0-1) of each detection: the learned detector's,
+                    or a stand-in from the level over the noise (classic)
 ``ident_v.npy``     identity of each detection (NaN = unassigned)
 ``times.npy``       time of each frame relative to recording start [s]
 ``sparse_*.npy``    downsampled overview spectrogram (freq x time, power)
@@ -42,6 +44,9 @@ class Results:
     meta: dict[str, Any] = field(default_factory=dict)
     cplx_v: np.ndarray | None = None
     """Complex spectrum per detection and electrode (optional)."""
+    sal_v: np.ndarray | None = None
+    """Salience (0-1) per detection (optional; older results have none), see
+    `pipeline.detect`."""
 
     @property
     def n_ids(self) -> int:
@@ -57,6 +62,8 @@ class Results:
             np.save(folder / f"{name}.npy", getattr(self, name))
         if self.cplx_v is not None:
             np.save(folder / "cplx_v.npy", self.cplx_v)
+        if self.sal_v is not None:
+            np.save(folder / "sal_v.npy", self.sal_v)
         (folder / META_FILE).write_text(json.dumps(self.meta, indent=2, default=str))
 
     @classmethod
@@ -74,6 +81,8 @@ class Results:
         )
         cplx = folder / "cplx_v.npy"
         arrays["cplx_v"] = np.load(cplx) if cplx.exists() else None
+        sal = folder / "sal_v.npy"
+        arrays["sal_v"] = np.load(sal) if sal.exists() else None
         meta_file = folder / META_FILE
         meta = json.loads(meta_file.read_text()) if meta_file.exists() else {}
         return cls(**arrays, meta=meta)

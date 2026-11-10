@@ -11,6 +11,7 @@ Usage::
     python benchmarks/dense/run.py track  --tag dense -c ... --split dev-field
     python benchmarks/dense/run.py report --tags default dense   # dev and dev-field
     python benchmarks/dense/run.py report --tags default --splits test test-field
+    python benchmarks/dense/run.py track  --tag mine -c ... --split ldev   # learned-detector dev
 """
 
 from __future__ import annotations
@@ -26,7 +27,13 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
 from common import DATA
-from mixture import MIXTURES, TRAIN_SUITE, expand_suite
+from mixture import (
+    LEARNED_DEV_SUITE,
+    LEARNED_TRAIN_SUITE,
+    MIXTURES,
+    TRAIN_SUITE,
+    expand_suite,
+)
 from score import TOL, binned, score
 
 from wavetracker.config import Config
@@ -53,11 +60,13 @@ def merge(a: dict, b: dict) -> dict:
 
 
 def mixtures(split: str | None, only=None) -> list[str]:
-    """Complete mixtures of a split: dev, test (lab noise) or dev-field,
-    test-field (the same fish in field noise, see noise.py)."""
+    """Complete mixtures of a split: dev, test, train, ldev, ltrain (lab
+    noise) or their -field variants (the same fish in field noise, see
+    noise.py)."""
     suite = list(expand_suite())
-    if TRAIN_SUITE.exists():
-        suite += list(expand_suite(TRAIN_SUITE))
+    for path in (TRAIN_SUITE, LEARNED_DEV_SUITE, LEARNED_TRAIN_SUITE):
+        if path.exists():
+            suite += list(expand_suite(path))
     names = suite + [n.replace("/", "-field/", 1) for n in suite]
     # band.yaml is written last: the mixture is complete
     names = [n for n in names if (MIXTURES / n / "band.yaml").exists()]

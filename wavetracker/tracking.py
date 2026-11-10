@@ -8,7 +8,10 @@ their spatial amplitude patterns across electrodes and (1/3) a sigmoid of
 their frequency difference. Tracking proceeds in windows of ``3 * max_dt``:
 within a window, temporary identities are formed by greedily linking the
 lowest-error pairs; the central third of each window is then attached to the
-identities established so far.
+identities established so far. Temporary identities that attach to none
+start a new identity; with ``start_salience`` only those holding enough
+confident detections do (ByteTrack-style: weak detections may extend
+identities, but not start them).
 
 One bug of the original is fixed: when attaching temporary identities, it
 skipped link targets whose *detection offset* within the window was smaller
@@ -201,6 +204,23 @@ def _tmp_identities(idx, fund, ca, cb, lo, hi, n_window_frames, f_lo):
 
 
 @njit(cache=True)
+def _startable(tmp, confident, lo, start_count):
+    """Which temporary identities are present in the window and hold at least
+    `start_count` confident detections, i.e. may start a new identity."""
+    max_tmp = -1
+    for j in range(tmp.shape[0]):
+        max_tmp = max(max_tmp, tmp[j])
+    count = np.zeros(max_tmp + 1, dtype=np.int64)
+    present = np.zeros(max_tmp + 1, dtype=np.bool_)
+    for j in range(tmp.shape[0]):
+        if tmp[j] >= 0:
+            present[tmp[j]] = True
+            if confident[lo + j]:
+                count[tmp[j]] += 1
+    return present & (count >= start_count)
+
+
+@njit(cache=True)
 def _assign(
     ident,
     idx,
@@ -215,9 +235,12 @@ def _assign(
     n_window_frames,
     f_lo,
     v6_compat,
+    confident,
+    start_count,
 ):
     """Attach the central part of the window's temporary identities to the
-    established identities (`ident`, modified in place)."""
+    established identities (`ident`, modified in place); the others start new
+    identities if they hold `start_count` confident detections."""
     w = hi - lo + 1
     c0 = s + comp_range
     c1 = s + 2 * comp_range
@@ -274,18 +297,13 @@ def _assign(
                 open_count -= 1
 
     # Temporary identities without any established identity start a new one.
-    max_tmp = -1
+    startable = _startable(tmp, confident, lo, start_count)
+    has_ident = np.zeros(startable.shape[0], dtype=np.bool_)
     for j in range(w):
-        max_tmp = max(max_tmp, tmp[j])
-    has_ident = np.zeros(max_tmp + 1, dtype=np.bool_)
-    present = np.zeros(max_tmp + 1, dtype=np.bool_)
-    for j in range(w):
-        if tmp[j] >= 0:
-            present[tmp[j]] = True
-            if ident[lo + j] >= 0:
-                has_ident[tmp[j]] = True
-    for t in range(max_tmp + 1):
-        if present[t] and not has_ident[t]:
+        if tmp[j] >= 0 and ident[lo + j] >= 0:
+            has_ident[tmp[j]] = True
+    for t in range(startable.shape[0]):
+        if startable[t] and not has_ident[t]:
             for j in range(w):
                 if tmp[j] == t and central(j):
                     ident[lo + j] = next_identity
@@ -294,7 +312,18 @@ def _assign(
 
 
 @njit(cache=True)
-def _track(fund, idx, nsign, comp_range, freq_tol, tol0, tol_rate, v6_compat):
+def _track(
+    fund,
+    idx,
+    nsign,
+    comp_range,
+    freq_tol,
+    tol0,
+    tol_rate,
+    v6_compat,
+    confident,
+    start_count,
+):
     n_frames = idx[-1] + 4 * comp_range + 2
     frame_start = np.searchsorted(idx, np.arange(n_frames + 1))
     start = idx[0]
@@ -331,15 +360,9 @@ def _track(fund, idx, nsign, comp_range, freq_tol, tol0, tol_rate, v6_compat):
         )
         tmp = _tmp_identities(idx, fund, ca, cb, lo, hi, n_window_frames, s)
         if s == start:
-            max_tmp = -1
-            for j in range(tmp.shape[0]):
-                max_tmp = max(max_tmp, tmp[j])
-            present = np.zeros(max_tmp + 1, dtype=np.bool_)
-            for j in range(tmp.shape[0]):
-                if tmp[j] >= 0:
-                    present[tmp[j]] = True
-            for t in range(max_tmp + 1):
-                if not present[t]:
+            startable = _startable(tmp, confident, lo, start_count)
+            for t in range(startable.shape[0]):
+                if not startable[t]:
                     continue
                 for j in range(tmp.shape[0]):
                     if tmp[j] == t and idx[lo + j] <= s + comp_range:
@@ -372,6 +395,8 @@ def _track(fund, idx, nsign, comp_range, freq_tol, tol0, tol_rate, v6_compat):
             n_window_frames,
             s,
             v6_compat,
+            confident,
+            start_count,
         )
     return ident
 
@@ -437,6 +462,7 @@ def track(
     max_freq: float = np.inf,
     *,
     v6_compat: bool = False,
+    sal_v: np.ndarray | None = None,
 ) -> np.ndarray:
     """Assign identities to detections.
 
@@ -452,12 +478,23 @@ def track(
     v6_compat
         Reproduce the original ``freq_tracking_v6`` exactly, including its
         window-check bug (for verification only).
+    sal_v
+        Salience (0-1) of every detection; needed with
+        ``cfg.start_salience``, which lets only temporary identities with
+        enough confident detections start a new identity (ByteTrack-style).
+        Weak detections still join identities that exist.
 
     Returns
     -------
     ident_v
         Identity of every detection (float, NaN if unassigned).
     """
+    if cfg.start_salience is not None and sal_v is None:
+        raise ValueError(
+            "tracking.start_salience needs a salience per detection (sal_v), but "
+            "these detections have none (results of an older version?): run "
+            "detect again, or set tracking.start_salience to null"
+        )
     ident_v = np.full(len(fund_v), np.nan)
     valid = (fund_v >= min_freq) & (fund_v <= max_freq)
     if valid.sum() < 2 or len(times) < 2:
@@ -471,9 +508,16 @@ def track(
         )
         if valid.sum() < 2:
             return ident_v
-    comp_range = int(np.floor(cfg.max_dt / (times[1] - times[0])))
+    dt = times[1] - times[0]
+    comp_range = int(np.floor(cfg.max_dt / dt))
     if comp_range < 1:
         raise ValueError("max_dt must be larger than the frame interval")
+    if cfg.start_salience is None:  # every temporary identity may start one
+        confident = np.ones(valid.sum(), dtype=np.bool_)
+        start_count = 0
+    else:
+        confident = np.asarray(sal_v)[valid] >= cfg.start_salience
+        start_count = max(1, int(np.round(cfg.start_evidence / dt)))
     ident = _track(
         np.ascontiguousarray(fund_v[valid], dtype=np.float64),
         np.ascontiguousarray(idx_v[valid], dtype=np.int64),
@@ -483,8 +527,10 @@ def track(
         comp_range,
         float(cfg.freq_tolerance),
         np.inf if cfg.gap_tolerance is None else float(cfg.gap_tolerance),
-        float(cfg.gap_tolerance_rate) * (times[1] - times[0]),
+        float(cfg.gap_tolerance_rate) * dt,
         v6_compat,
+        confident,
+        start_count,
     )
     ident_v[valid] = np.where(ident >= 0, ident, np.nan)
     return ident_v

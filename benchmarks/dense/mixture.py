@@ -34,6 +34,12 @@ Usage::
 
     python benchmarks/dense/mixture.py                       # whole suite
     python benchmarks/dense/mixture.py --only dev/density-10-s0
+    python benchmarks/dense/mixture.py --suite benchmarks/dense/learned_dev.yaml
+
+Mixture splits draw on sources by ``POOL``: ``dev`` and ``test`` on their
+library splits, ``train`` on the dev sources, and the splits of the learned
+detector on fish groups of the dev sources, ``ltrain`` (2019 group 3, 2022
+pairings 1-3) and ``ldev`` (2019 group 4, 2022 pairing 4).
 """
 
 from __future__ import annotations
@@ -55,7 +61,19 @@ from common import DATA, MIX_CHANNELS, RATE, Trial, Warp, common_drift
 
 SUITE = Path(__file__).with_name("suite.yaml")
 TRAIN_SUITE = Path(__file__).with_name("train.yaml")
-POOL = {"train": "dev"}  # training mixtures draw on the dev sources
+# splits of the learned detector (ldev, ltrain; see POOL)
+LEARNED_DEV_SUITE = Path(__file__).with_name("learned_dev.yaml")
+LEARNED_TRAIN_SUITE = Path(__file__).with_name("learned_train.yaml")
+# Sources of a mixture split: (library split, fish groups or None for all).
+# Splits not listed draw on the library split of their own name.
+POOL = {
+    "train": ("dev", None),  # training mixtures draw on the dev sources
+    # The learned detector trains on crops of thousands of frames and could
+    # memorise individual fish, so its train and dev mixtures come from
+    # different fish groups of the dev sources (the test groups stay unseen)
+    "ltrain": ("dev", {"2019-g3", "2022-p1", "2022-p2", "2022-p3"}),  # 20 trials
+    "ldev": ("dev", {"2019-g4", "2022-p4"}),  # 10 trials
+}
 MIXTURES = DATA / "mixtures"
 TRUTH_RATE = 10.0  # Hz
 GAIN_RATE = 1.0  # Hz, grid of the gain processes
@@ -342,18 +360,41 @@ def gains(spec: dict | None, n_fish: int, duration: float, rng) -> dict:
 # --- mixture design ----------------------------------------------------------
 
 
+def source_pool(split: str, library: list[dict]) -> list[dict]:
+    """Usable library entries a mixture split draws on (see POOL), in
+    library order."""
+    lib_split, groups = POOL.get(split, (split, None))
+    return [
+        e
+        for e in library
+        if e["ok"]
+        and e["split"] == lib_split
+        and (groups is None or e["group"] in groups)
+    ]
+
+
 def place_sources(design: dict, pool: list[dict], rng) -> list[dict]:
     """Choose sources and frequency scales: dyad centres stratified over the
-    band (linear or log), so the density of fish is controlled."""
+    band (linear or log), so the density of fish is controlled.
+
+    Sources are drawn without replacement. A pool smaller than the design
+    (ldev: 10 trials, 15 sources for 30 fish) uses every trial once and as
+    few as needed a second time (a third, ...); each copy gets its own
+    stratum, frequency scale, offset and electrode order."""
     n_fish = int(design["n_fish"])
     if n_fish % 2:
         raise ValueError("n_fish must be even (two fish per source)")
     n_src = n_fish // 2
-    if n_src > len(pool):
-        raise ValueError(f"{n_src} sources requested, {len(pool)} in the pool")
+    if not pool:
+        raise ValueError("no sources in the pool")
     lo, hi = design["band"]
     log = design.get("placement", "linear") == "log"
-    srcs = [pool[i] for i in rng.choice(len(pool), n_src, replace=False)]
+    if n_src <= len(pool):
+        srcs = [pool[i] for i in rng.choice(len(pool), n_src, replace=False)]
+    else:
+        reps = -(-n_src // len(pool))
+        order = np.concatenate([rng.permutation(len(pool)) for _ in range(reps)])
+        srcs = [pool[i] for i in order[:n_src]]
     edges = np.geomspace(lo, hi, n_src + 1) if log else np.linspace(lo, hi, n_src + 1)
     strata = rng.permutation(n_src)
     duration = design["duration"]
@@ -567,8 +608,15 @@ def generate(name: str, design: dict, library: list[dict], device: str = "auto")
     split = name.split("/")[0]
     seed = int(design["seed"])
     rng = np.random.default_rng([seed, *map(ord, name)])
-    pool = [e for e in library if e["ok"] and e["split"] == POOL.get(split, split)]
+    pool = source_pool(split, library)
     sources = place_sources(design, pool, rng)
+    n_twice = len(sources) - len({s["trial"] for s in sources})
+    if n_twice:
+        print(
+            f"  {name}: {len(sources)} sources from {len(pool)} trials, "
+            f"{n_twice} used twice",
+            flush=True,
+        )
     duration = float(design["duration"])
     grid = common_drift(
         duration,
@@ -737,7 +785,10 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--only", nargs="*", help="mixture names (split/scenario-sSEED)")
     p.add_argument("--suite", type=Path, default=SUITE)
-    p.add_argument("--split", help="dev, test or train (default: all of the suite)")
+    p.add_argument(
+        "--split",
+        help="dev, test, train, ldev or ltrain (default: all of the suite)",
+    )
     p.add_argument("--device", default="auto")
     p.add_argument("--worker", default="0/1", help="i/n: every n-th mixture from i")
     p.add_argument(

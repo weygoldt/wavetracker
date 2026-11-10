@@ -128,6 +128,29 @@ class HarmonicGroupsConfig:
 
 
 @dataclass
+class DetectorConfig:
+    method: str = "classic"
+    """How fundamentals are found in each frame: "classic" (spectral peaks
+    grouped into harmonic series by rules, see `harmonic_groups`) or
+    "learned" (a neural network's salience map, see `wavetracker.salience`).
+    Both use the fish range harmonic_groups.min_freq/max_freq."""
+    model: str | None = None
+    """Learned detector: path to the model file; None uses the packaged model.
+    The spectrogram resolution and frame step must match the model's."""
+    threshold: float = 0.6
+    """Learned detector: minimum salience (0-1) of a detection (0.6 was best
+    for the packaged model on the dense benchmark, lab and field noise)."""
+
+    def __post_init__(self):
+        if self.method not in ("classic", "learned"):
+            raise ValueError(
+                f"detector.method must be 'classic' or 'learned', not {self.method!r}"
+            )
+        if not 0.0 < self.threshold < 1.0:
+            raise ValueError("detector.threshold must be between 0 and 1")
+
+
+@dataclass
 class ClickConfig:
     """Removal of impulsive noise before the spectrogram (see wavetracker.clicks)."""
 
@@ -252,6 +275,18 @@ class TrackingConfig:
     """Time window for min_support [s] (+-)."""
     support_freq: float = 1.0
     """Frequency window for min_support [Hz] (+-)."""
+    start_salience: float | None = None
+    """If set, only detections with at least this salience (0-1, `sal_v`)
+    count as evidence for a new identity; weaker ones may still join existing
+    identities (ByteTrack-style association). None: all detections are alike."""
+    start_evidence: float = 0.5
+    """With start_salience: a new identity needs confident detections in this
+    many seconds of frames (round(start_evidence / frame step), at least 1)
+    of the temporary track it starts from, which spans at most 3 * max_dt [s]."""
+
+    def __post_init__(self):
+        if self.start_salience is not None and not 0.0 <= self.start_salience <= 1.0:
+            raise ValueError("tracking.start_salience must be between 0 and 1")
 
 
 @dataclass
@@ -479,6 +514,7 @@ YAML_HEADER = """\
 @dataclass
 class Config:
     spectrogram: SpectrogramConfig = field(default_factory=SpectrogramConfig)
+    detector: DetectorConfig = field(default_factory=DetectorConfig)
     clicks: ClickConfig = field(default_factory=ClickConfig)
     interference: InterferenceConfig = field(default_factory=InterferenceConfig)
     harmonic_groups: HarmonicGroupsConfig = field(default_factory=HarmonicGroupsConfig)

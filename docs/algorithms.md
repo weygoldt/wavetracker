@@ -34,6 +34,26 @@ linear in recording length. Deliberate changes:
   above the old hand-calibrated scale, which does not affect the
   noise-relative thresholds.
 
+## Learned detector
+
+`detector.method: learned` finds fundamentals with a neural network instead
+of spectral peaks and harmonic rules (`wavetracker/salience.py`). Each frame
+of the electrode-summed log spectrogram is normalised by its median and
+spread in 100 Hz bands, then read as a *harmonic stack*: on a linear axis
+starting at 0 Hz, harmonic h of bin k is bin h*k, so channel h at candidate k
+holds the feature at bin h*k (with a max over the bins an off-centre
+harmonic can move to), for h = 1/3, 1/2, 1, ..., 5. A true fundamental is
+bright from f upward and dark at f/2 and f/3; a harmonic of a lower fish has
+its fundamental there. A fully convolutional network without frequency
+pooling (time dilations give it seconds of context) outputs a salience per
+bin and a sub-bin offset; peaks above `detector.threshold` become
+detections, with their electrode powers read from the spectrogram as for
+classic detections, and the salience is stored as `sal_v`. Blocks are
+evaluated with their neighbours as context, so block boundaries leave no
+trace. The model stores the spectrogram resolution and frame step it was
+trained on; a different resolution is refused. Training and benchmark:
+docs/benchmarks.md, "Learned detector (v1)".
+
 ## Interference removal
 
 Electrical interference often forms a *comb* of persistent lines at
@@ -89,6 +109,38 @@ equal to its fundamental, combs are only searched below
 (72 Hz for the default range, 300 Hz for 400–1200 Hz). A comb spaced wider
 than the lowest fish frequency cannot be told apart from a resting fish and
 is kept; restrict the fish range to remove it.
+
+## Starting identities from confident detections
+
+A detector that finds faint fish also finds more doubtful peaks. If the
+tracker treats all detections alike, a high detection threshold misses faint
+fish and a low one builds false identities out of clutter. With
+`tracking.start_salience` (off by default) the tracker splits the two roles,
+as ByteTrack does (Zhang et al., ECCV 2022): only confident detections may
+start an identity, but any detection may extend one.
+
+Every detection has a salience between 0 and 1 (`sal_v`). The learned
+detector (`detector.method: learned`) gives its network's. The classic
+detector gives a stand-in from the fundamental's level over the local noise
+floor (the median of the frame's spectrum in the detection's threshold band,
+or over the fish range without bands), in units of the high threshold:
+`1 - 2^(-snr / high_threshold)`. It is 0.5 for a fundamental one high
+threshold above the floor, the prominence a "good" peak needs, and 0.75 at
+twice that.
+
+The tracker forms temporary identities in windows of `3 * max_dt` and
+attaches them to the identities it has. A temporary identity that attaches to
+none starts a new identity only if it holds confident detections (salience at
+least `start_salience`) in `start_evidence` seconds of frames (0.5 s: 3
+detections at the default frame step). Weak detections still link into
+temporary identities, so a faint fish is followed throughout once a few
+confident detections have started it, from up to about `2 * max_dt` before
+them. Clutter that is never confident makes no identities. The detections of a
+temporary identity that may not start stay unassigned, even if the identity
+starts in a later window. Links are scored as before, without the salience:
+a weak detection that fits an identity better than a confident one takes the
+link. With `start_salience: null` the tracker is the same as before, also in
+compatibility mode.
 
 ## Stitching
 
