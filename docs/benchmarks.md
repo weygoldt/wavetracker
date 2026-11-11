@@ -315,6 +315,7 @@ unchanged); the test groups stay unseen:
 |---|---|---|---|---|
 | `ltrain` | 2019 group 3, 2022 pairings 1-3 | 20 | 26 (`learned_train.yaml`) | the next day of the noise recording, 10:48-15:08, used by no other split |
 | `ldev` | 2019 group 4, 2022 pairing 4 | 10 | 17 (`learned_dev.yaml`) | the dev hours, as `dev-field` |
+| `ldev2` | 2019 group 4, 2022 pairing 4 | 10 | 34 (`learned_dev2.yaml`): the designs of `ldev`, new seeds ([below](#a-larger-development-set-ldev2)) | the dev hours, also shifted by 5 min |
 
 `ldev` has the scenarios and seeds of `suite.yaml`. Its 10 trials are fewer
 than the 15 sources of a 30-fish scenario, so a pool smaller than the design
@@ -551,7 +552,8 @@ and much cleaner: a third of the harmonic detections, half the false
 identities, at slightly lower recall of faint fish. On the field grid it no
 longer reports the 2nd harmonic of a masked fish as a fish. The seed spread
 (about 0.005) is now as large as the differences: further decisions need
-more seeds or a larger dev split. `configs/learned-b.yaml` is the candidate
+more seeds or a larger dev split ([`ldev2`](#a-larger-development-set-ldev2)).
+`configs/learned-b.yaml` is the candidate
 (augmented model, seed 0, threshold 0.6): 0.752 / 0.741, against classic
 0.639 / 0.597 and v1 at the end of step A 0.739 / 0.723.
 
@@ -658,6 +660,90 @@ of which 0.62 join two fish. A 2.5 s pattern window, which looked better in
 costs, IDF1 change per mixture), `figures/rises_example_ldev_density-10-s0_2.png`,
 `figures/rises_example_ldev-field_density-10-s0_6.png` (ghost tail),
 `figures/strata_rises.png`; notes in `$WT_BENCHMARK_DATA/assoc/B-rise-NOTES.md`.
+
+### A larger development set (`ldev2`)
+
+On 17 mixtures, a difference of 0.005 mean IDF1 between two detectors is
+lost in the spread over mixtures: the paired 95 % CI of `learned-b.yaml`
+against `learned-assoc.yaml` on `ldev` (lab and field) runs from -0.013 to
++0.016. `ldev2` (`learned_dev2.yaml`) has the designs of `ldev` with new
+seeds, two for every `ldev` mixture (seeds 100-101 where `ldev` has seed 0,
+100-103 where it has 0 and 1): 34 mixtures from the same 10 trials (the
+30-fish mixtures use 5 of them twice, as in `ldev`). `ldev` + `ldev2` then
+has 51 mixtures, 3 or 6 per scenario. The field variants (`ldev2-field`)
+also take their noise from the dev hours. Those hold only 19 disjoint 10-min
+segments, which `dev-field` and `ldev-field` already use, so `ldev2` first
+takes the 18 segments shifted by 5 min and then 16 of the disjoint ones. No
+5-min file is in more than two `ldev2` mixtures (the end of one, the start
+of the other), and none comes from the test hours or the `ltrain` day. The
+other splits are unchanged. Each variant takes 15 GB.
+
+```bash
+python benchmarks/dense/mixture.py --suite benchmarks/dense/learned_dev2.yaml
+python benchmarks/dense/noise.py derive --splits ldev2
+python benchmarks/dense/run.py track --tag mine -c my_config.yaml --split ldev2   # and ldev2-field
+python benchmarks/dense/compare.py --a ref-learned-b --b mine   # ldev, ldev2, lab and field
+python benchmarks/dense/compare.py --a classic-ldev --b B-aug-s0-t0.6:ldev,ref-learned-b:ldev2 --plot
+```
+
+`compare.py` pairs two runs mixture by mixture. It reports the mean
+difference of a score (IDF1 by default, `--metric`), a bootstrap 95 % CI,
+and how many mixtures are better or worse (lab and field counted apart):
+overall, per split, for lab and field, and per scenario group. The bootstrap
+resamples mixtures, each with its lab and field variant, because the two
+hold the same fish and are far from independent. `--stratify` resamples
+within scenarios (the designs are fixed, only the seeds vary). That gives
+narrower intervals, but a scenario with a single mixture then adds no
+spread, so it suits only `ldev` + `ldev2`. A run is a tag, or one tag per
+split when a configuration ran under different tags (`tag:split,...`; an
+entry for `ldev` covers `ldev-field` too).
+
+**Reference runs** on `ldev2`: tags `classic-ldev`, `ref-v1-relinked`,
+`ref-v1-assoc` and `ref-learned-b`, plus `ref-learned-b-s1`, which is
+`learned-b.yaml` with the detector of seed 1
+(`salience/B-det-tcn64aug-s1/last.pt`, as in `B-aug-s1-t0.6`). On `ldev`
+the first four configurations reproduce `classic-ldev`, `A-v1m-relinked`,
+`B-assoc-C2` and `B-aug-s0-t0.6` to within 1e-4 IDF1 per mixture (classic
+checked on two mixtures). Mean IDF1, lab / field:
+
+| configuration | `ldev` (17) | `ldev2` (34) | `ldev` + `ldev2` (51) |
+|---|---|---|---|
+| classic, `dense-linked.yaml` | 0.639 / 0.597 | 0.632 / 0.598 | 0.635 / 0.598 |
+| v1, `learned-relinked.yaml` | 0.739 / 0.723 | 0.731 / 0.719 | 0.734 / 0.720 |
+| v1, `learned-assoc.yaml` | 0.750 / 0.737 | 0.737 / 0.726 | 0.742 / 0.730 |
+| `learned-b.yaml` | 0.752 / 0.741 | 0.746 / 0.737 | 0.748 / 0.738 |
+| `learned-b.yaml`, detector seed 1 | 0.748 / 0.739 | 0.749 / 0.742 | 0.749 / 0.741 |
+
+Paired differences (b - a) of the mean IDF1 over lab and field, with 95 %
+CIs over mixtures and, on 51 mixtures, within scenarios:
+
+| a → b | `ldev` (17) | `ldev` + `ldev2` (51) | within scenarios (51) | better / worse (of 102) |
+|---|---|---|---|---|
+| classic → `learned-b` | +0.1286 [+0.1016, +0.1535] | +0.1268 [+0.1110, +0.1426] | [+0.1189, +0.1348] | 98 / 4 |
+| v1-assoc → `learned-b` | +0.0032 [-0.0130, +0.0160] | +0.0074 [+0.0005, +0.0139] | [+0.0034, +0.0112] | 70 / 32 |
+| v1-relinked → v1-assoc | +0.0124 [+0.0089, +0.0163] | +0.0088 [+0.0059, +0.0118] | [+0.0062, +0.0115] | 82 / 20 |
+| `learned-b` seed 0 → seed 1 | -0.0032 [-0.0122, +0.0065] | +0.0017 [-0.0031, +0.0064] | [-0.0024, +0.0058] | 59 / 43 |
+
+* **Intervals shrink by a factor of 0.46-0.61** for a change of detector,
+  from 17 to 51 mixtures (1/sqrt(3) = 0.58 expected). Between similar
+  detectors (v1 and `learned-b`, two seeds) the 95 % CI is now 0.010-0.013
+  wide, against 0.019-0.029 on `ldev`. For a change of association on the
+  same detections it was narrow already (0.0075, now 0.006), because the
+  mixtures agree there. A detector difference of 0.005 is about the
+  half-width: at the limit of what 51 mixtures resolve. Differences from
+  0.007 up are resolved.
+* **`learned-b` against v1-assoc**: +0.0074 [+0.0005, +0.0139], better in
+  70 of the 102 lab and field variants. It gains in the attenuation scenarios (+0.018
+  [+0.013, +0.023]) and at low frequencies (+0.024 [+0.011, +0.037]), but it
+  loses in the density scenarios (-0.015 [-0.029, -0.003]).
+* **The two detector seeds cannot be told apart**: +0.0017 [-0.0031, +0.0064].
+  Seed 0 led by 0.003 on `ldev`, and seed 1 leads by 0.004 on `ldev2`. The
+  "seed spread" of about 0.005 seen on `ldev` was mostly spread over
+  mixtures.
+
+Figures (per mixture and scenario): `$WT_BENCHMARK_DATA/figures/compare_idf1_classic_vs_learned-b_ldev+ldev2.png`,
+`compare_idf1_v1-assoc_vs_learned-b_ldev+ldev2.png`,
+`compare_idf1_learned-b_seed0_vs_seed1_ldev+ldev2.png`.
 
 ## Learned fragment linking
 
