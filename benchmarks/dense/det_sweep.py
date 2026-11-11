@@ -68,6 +68,8 @@ def run(args):
             str(path),
             "--split",
             sp,
+            "--device",
+            args.device,
         ]
         with open(log, "w") as f:
             r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
@@ -184,6 +186,7 @@ def main(argv=None):
     )
     a.add_argument("--splits", nargs="+", default=list(SPLITS))
     a.add_argument("--jobs", type=int, default=6)
+    a.add_argument("--device", default="auto", help="of the runs (cpu: GPU busy)")
     b = sub.add_parser("table")
     b.add_argument("--tags", nargs="+", required=True)
     b.add_argument("--json")

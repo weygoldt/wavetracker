@@ -419,7 +419,8 @@ def decode(
     peak whose pair probability reaches `pair_threshold` (default
     `threshold`) and that has no other peak within ``PAIR_SPACING`` bins
     gets a second detection: at the pair offset farther from the peak's own
-    detection, with the peak's salience and the bin nearest its frequency.
+    detection, with the bin nearest its frequency and the pair probability
+    as its salience (how sure the network is that a second fish is there).
     A peak with a neighbour that close is one fish of a pair the salience
     already resolves."""
     p = torch.sigmoid(logits.float())
@@ -437,7 +438,8 @@ def decode(
         n_near = F.avg_pool1d(
             F.pad(peak.float(), (r, r))[:, None], 2 * r + 1, stride=1
         )[:, 0] * (2 * r + 1)
-        split = (torch.sigmoid(pair_logits.float()[fr, kk]) >= thr) & (
+        q = torch.sigmoid(pair_logits.float()[fr, kk])
+        split = (q >= thr) & (
             n_near[fr, kk] < 1.5
         )
         if bool(split.any()):
@@ -455,7 +457,7 @@ def decode(
             fr = torch.cat([fr, fs])
             bins = torch.cat([bins, b2])
             freq = torch.cat([freq, k2 * df])
-            sal = torch.cat([sal, sal[split]])
+            sal = torch.cat([sal, q[split]])
             order = torch.from_numpy(
                 np.lexsort((freq.cpu().numpy(), fr.cpu().numpy()))
             ).to(fr.device)

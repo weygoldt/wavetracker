@@ -407,7 +407,9 @@ def test_decode_splits_a_pair_peak_into_two_detections():
     np.testing.assert_allclose(f, np.array([109.3, 110.2, 124.9]) * DF)
     assert list(fr) == [0, 0, 0]
     assert list(b) == [109, 110, 125]  # the bin nearest each frequency
-    assert s[0] == s[1] and s[0] > 0.9
+    # the second fish's salience is the pair probability
+    np.testing.assert_allclose(s[0], torch.sigmoid(torch.tensor(2.0)), rtol=1e-6)
+    assert s[1] > 0.9
     # without the pair outputs (or below the pair threshold): one per peak
     one = decode(logits, offset, 0.5, 100, DF)
     np.testing.assert_allclose(one[2], np.array([110.2, 124.9]) * DF)

@@ -632,6 +632,22 @@ class Batches:
         return {k: torch.cat([e[k] for e in ex]) for k in ex[0]}
 
 
+def electrode_window(model: SalienceNet, frames: int) -> tuple[slice | None, int]:
+    """Crop frames whose electrode features a model needs for the loss
+    frames, and the first of them: into the pair branch, the loss frames with
+    the pair branch's and the encoder's context; into the trunk, all."""
+    spec = model.spec
+    if not spec.electrode_channels:
+        return None, 0
+    if spec.electrode_into != "pair":
+        return slice(None), 0
+    ctx = model.context_frames
+    reach = model.electrode_context + sum(
+        d * (spec.kernel_frames // 2) for d in spec.pair_dilations
+    )
+    return slice(ctx - reach, ctx + frames + reach), ctx - reach
+
+
 PAIR_NEAR_BINS = 2.5  # pair-head negatives at full weight this close to a fish
 PAIR_FAR_WEIGHT = 0.1  # ... and elsewhere at this weight (no peaks there)
 
@@ -911,6 +927,11 @@ def main(argv=None):
         help="with --init: train only what the init model does not have",
     )
     p.add_argument("--checkpoint", action="store_true", help="recompute layers")
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help="continue from the last validation step's state.pt, if there is one",
+    )
     p.add_argument("--workers", type=int, default=4, help="reader threads")
     p.add_argument("--val-every", type=int, default=500)
     p.add_argument("--save-every", type=int, default=0, help="keep sSTEP.pt")
@@ -980,18 +1001,7 @@ def main(argv=None):
                 prm.requires_grad_(n not in state)
     model.checkpoint = args.checkpoint
     ctx = model.context_frames
-    # electrode features only where they reach the loss frames: into the pair
-    # branch, its context and the encoder's around them; into the trunk, all
-    el_frames, el_start = None, 0
-    if spec.electrode_channels:
-        if spec.electrode_into == "pair":
-            reach = model.electrode_context + sum(
-                d * (spec.kernel_frames // 2) for d in spec.pair_dilations
-            )
-            el_start = ctx - reach
-            el_frames = slice(el_start, ctx + args.frames + reach)
-        else:
-            el_frames = slice(None)
+    el_frames, el_start = electrode_window(model, args.frames)
     out = OUT / args.tag
     out.mkdir(parents=True, exist_ok=True)
     train = Batches(
@@ -1061,8 +1071,18 @@ def main(argv=None):
     except ImportError:
         tb = None
     log, best, t0 = [], -1.0, time.perf_counter()
+    first = 1
+    state_path = out / "state.pt"
+    if args.resume and state_path.exists():  # continue after a crash
+        st = torch.load(state_path, map_location=dev, weights_only=False)
+        model.load_state_dict(st["model"])
+        opt.load_state_dict(st["opt"])
+        sched.load_state_dict(st["sched"])
+        train.rng = st["rng"]
+        log, best, first = st["log"], st["best"], st["step"] + 1
+        print(f"resumed after step {st['step']}", flush=True)
     t_mark = t0
-    for step in range(1, args.steps + 1):
+    for step in range(first, args.steps + 1):
         model.train()
         if frozen:  # batch norms of the frozen parts keep their statistics
             for name, mod in model.named_modules():
@@ -1130,6 +1150,18 @@ def main(argv=None):
                 best = score
                 save_model(out / "model.pt", model, spec, meta)
             (out / "log.json").write_text(json.dumps(log, indent=1))
+            torch.save(
+                {
+                    "model": model.state_dict(),
+                    "opt": opt.state_dict(),
+                    "sched": sched.state_dict(),
+                    "rng": train.rng,
+                    "log": log,
+                    "best": best,
+                    "step": step,
+                },
+                state_path,
+            )
     print(
         f"done in {(time.perf_counter() - t0) / 60:.1f} min; best model {out / 'model.pt'}"
     )
