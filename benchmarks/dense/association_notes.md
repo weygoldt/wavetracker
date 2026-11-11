@@ -200,9 +200,9 @@ python benchmarks/dense/linker.py build --base B-assoc-lt-motion2 -c benchmarks/
 python benchmarks/dense/linker.py train --base B-assoc-lt-motion2 --train-splits ltrain ltrain-field --val-splits ltrain-field --out $WT_BENCHMARK_DATA/assoc/linker-learned-v1-motion2.npz
 ```
 
-(The runs here used base tags whose split folders link to the `A-learned`
-and `A-v1m-relinked` runs instead of copying them, and validated on `ldev`;
-the validation split does not change the model.)
+(The runs here used base tags whose split folders linked to the `A-learned`
+and `A-v1m-relinked` runs instead of copying them, removed afterwards, and
+validated on `ldev`; the validation split does not change the model.)
 
 ## Result
 
@@ -243,6 +243,24 @@ After C2, the open breaks cost 0.016 / 0.017 (oracle join; was 0.023 /
 0.024): rises 0.008 / 0.009, gaps of 1-10 s 0.005 / 0.006, crossings 0.003 /
 0.002, dropouts 0.003 / 0.004. Switches inside fragments still cost 0.011 /
 0.009 with perfect joining, about half of it where the two fish are one line.
+
+With `tracking.max_dt: 5` instead of 10, C2 is the same within the noise
+(0.748 / 0.736; 6 / 5 mixtures better, 5 / 6 worse) and tracks 2.5 times
+faster, which more than pays for the second pass; the linker was trained on
+fragments of `max_dt` 10, so the config keeps 10.
+
+**Runs and models.** Run tags `B-assoc-*` in `$WT_BENCHMARK_DATA/runs/`
+(about 15 GB): `base` (baseline, reproduces `A-v1m-relinked` bit for bit),
+`lms*`, `l3-*` (linker rules), `iso*` (isolated tolerance), `mot*`, `mos*`,
+`msh*` (motion variants), `m2L*` (retrained linker), `C1`-`C6` and `*-s1`
+(combinations, seeds), `final` (`learned-assoc.yaml`, identical to `C2`),
+`final-dt5`; `-oracle` runs use `A-oracle-snr0` and `dense-linked.yaml`
+(`OC`: rules, `OC2`: motion 2 s + rules). Linkers in
+`$WT_BENCHMARK_DATA/assoc/`: `linker-learned-v1-motion2.npz` (= `linker-msh2`,
+the one in the config), `linker-msh2-s1`, `linker-msh3`, `linker-msh2r` (with
+rise candidates), `linker-v1-s1`, `linker-repro` (= step A's); pairs in
+`$WT_BENCHMARK_DATA/linker/B-assoc-lt-*/`. Diagnoses:
+`$WT_BENCHMARK_DATA/figures/assoc/diag_*.json`.
 
 ## Next
 
