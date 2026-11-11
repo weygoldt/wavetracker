@@ -265,6 +265,8 @@ class Crop:
     r: float = 1.0  # speed: r > 1 plays the source faster (frequencies x r)
     tilt: float = 0.0  # dB per octave on the lab traces (fish), around f_ref
     f_ref: float = 500.0
+    shelf: tuple[float, float, float] | None = None
+    """Noise shelf: (edge [Hz], raise [dB], width [Hz]), see Batches."""
 
 
 class Batches:
@@ -279,7 +281,13 @@ class Batches:
     per octave, which changes the power ratios of the harmonics against the
     field noise; ``harm_weight`` weights the bins at harmonics and
     subharmonics of fish at least ``harm_snr`` dB above the noise as hard
-    negatives."""
+    negatives. ``shelf_p`` adds, to that share of the crops, white noise
+    above a random edge frequency (a smooth step ``shelf_width`` Hz wide)
+    that raises the crop's noise floor there by a random ``shelf_db`` dB: a
+    fish below the edge keeps its fundamental but loses its harmonics under
+    the raised floor, as fish below a dense chorus do in the field; the SNR
+    of every fish (and so which frames are ignored) follows the added noise
+    at its fundamental."""
 
     def __init__(
         self,
@@ -306,6 +314,10 @@ class Batches:
         pair_hz: float = 0.0,
         pair_focus: float = 0.0,
         el_frames: slice | None = None,
+        shelf_p: float = 0.0,
+        shelf_db: tuple[float, float] = (10.0, 30.0),
+        shelf_edge: tuple[float, float] = (150.0, 1200.0),
+        shelf_width: tuple[float, float] = (5.0, 40.0),
     ):
         splits = split.split(",")
         paths = [p for s in splits for p in mixture_dirs(s)[:limit]]
@@ -334,6 +346,8 @@ class Batches:
         self.pair_focus = pair_focus if pair_hz else 0.0
         self.el_frames = el_frames
         """Electrode features of these crop frames (None: no electrodes)."""
+        self.shelf_p, self.shelf_db = shelf_p, shelf_db
+        self.shelf_edge, self.shelf_width = shelf_edge, shelf_width
         self._pairs: dict[str, np.ndarray] = {}
         self.spec = PowerSpectrogram(NFFT, STEP, RATE, dev)
         self.rng = np.random.default_rng(seed)
@@ -387,6 +401,13 @@ class Batches:
         k_los = [int(rng.integers(k0, k1)) for _ in range(self.windows)]
         T = self.frames + 2 * self.ctx
         crop = Crop(mix, 0, electrodes, gain, k_los, r, tilt, f_ref)
+        if self.shelf_p and rng.random() < self.shelf_p:
+            lo, hi = np.log(self.shelf_edge[0]), np.log(self.shelf_edge[1])
+            crop.shelf = (
+                float(np.exp(rng.uniform(lo, hi))),
+                float(rng.uniform(*self.shelf_db)),
+                float(rng.uniform(*self.shelf_width)),
+            )
         # output frames whose source span stays inside the recording
         n_samples = mix.raw.shape[0]
         s0, n_in, *_ = self._span(crop)
@@ -492,6 +513,38 @@ class Batches:
             y = y + crop.gain * (fld - lab[:, a - u0 : a - u0 + N])
         return y
 
+    def add_shelf(self, crop: Crop, x: torch.Tensor):
+        """Traces (channels, N) + the crop's noise shelf, and a function
+        giving the SNR loss [dB] of a fish at frequencies f (any shape):
+        10 log10(1 + added / present noise), both from the crop's own
+        spectrogram (time median of the power in 100-Hz bands)."""
+        edge, raise_db, width = crop.shelf
+        n_el, N = x.shape
+        p0 = summed_power(self.spec, x)  # (bins, frames)
+        nb = round(100.0 / DF)
+        K = (p0.shape[0] // nb) * nb
+        floor = p0[:K].reshape(-1, nb, p0.shape[1]).median(1).values.median(1).values
+        fc = (torch.arange(len(floor), device=self.dev) + 0.5) * nb * DF
+        k_e = min(len(floor) - 1, int((edge + 100.0) / (nb * DF)))
+        add = floor[k_e] * (10.0 ** (raise_db / 10.0) - 1.0)  # summed PSD
+        sigma = torch.sqrt(add * RATE / (2.0 * n_el))
+        w = torch.randn((n_el, N), device=self.dev, generator=None)
+        W = torch.fft.rfft(w)
+        fo = torch.arange(W.shape[-1], device=self.dev, dtype=torch.float32) * (
+            RATE / N
+        )
+        step = torch.sigmoid((fo - edge) / (width / 4.0))
+        noise = torch.fft.irfft(W * step.sqrt(), n=N) * sigma
+
+        def loss(f: torch.Tensor) -> torch.Tensor:
+            s = torch.sigmoid((f - edge) / (width / 4.0))
+            i = torch.clamp(torch.bucketize(f, fc), 1, len(fc) - 1)
+            a = ((f - fc[i - 1]) / (fc[i] - fc[i - 1])).clamp(0, 1)
+            present = floor[i - 1] * (1 - a) + floor[i] * a
+            return 10 * torch.log10(1 + add * s / present.clamp_min(1e-30))
+
+        return x + noise.to(x.dtype), loss
+
     def source_frames(self, crop: Crop, j: np.ndarray) -> tuple[np.ndarray, float]:
         """Fractional source frame of output frames j, and the exact speed."""
         if crop.r == 1.0 and crop.tilt == 0.0:
@@ -507,6 +560,9 @@ class Batches:
         dev = self.dev
         x = self.traces(crop, raw)
         el = None
+        shelf = None
+        if crop.shelf is not None:
+            x, shelf = self.add_shelf(crop, x)
         if self.el_frames is None:
             power = summed_power(self.spec, x)
         else:
@@ -560,6 +616,8 @@ class Batches:
             noise = noise + crop.gain**2 * (g["noise_field"][:, near] - noise_lab)
         snr = 10 * torch.log10(fish_p * tilt / noise)
         snr = torch.nan_to_num(snr, nan=-99.0, neginf=-99.0, posinf=99.0)
+        if shelf is not None:
+            snr = snr - shelf(torch.nan_to_num(f, nan=0.0))
         ok = torch.isfinite(f) & (snr >= self.snr_ignore)  # (fish, frames)
         f0 = torch.where(torch.isfinite(f), f, torch.full_like(f, -1e9))
         gs = torch.where(torch.isfinite(guess), guess, torch.full_like(guess, -1e9))
@@ -871,6 +929,14 @@ def main(argv=None):
     p.add_argument("--tilt-db", type=float, default=0.0, help="max dB per octave")
     p.add_argument("--tilt-p", type=float, default=0.5)
     p.add_argument(
+        "--shelf-p",
+        type=float,
+        default=0.0,
+        help="share of crops with a noise shelf (harmonics under a raised floor)",
+    )
+    p.add_argument("--shelf-db", default="10,30", help="raise of the floor [dB]")
+    p.add_argument("--shelf-edge", default="150,1200", help="edge frequency [Hz]")
+    p.add_argument(
         "--harm-weight",
         type=float,
         default=1.0,
@@ -1030,6 +1096,9 @@ def main(argv=None):
         pair_hz=args.pair_hz if spec.pair_head or args.pair_focus else 0.0,
         pair_focus=args.pair_focus,
         el_frames=el_frames,
+        shelf_p=args.shelf_p,
+        shelf_db=tuple(float(v) for v in args.shelf_db.split(",")),
+        shelf_edge=tuple(float(v) for v in args.shelf_edge.split(",")),
     )
     val = Batches(
         args.val_split,

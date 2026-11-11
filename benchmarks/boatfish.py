@@ -374,6 +374,10 @@ def main():
     p.set_defaults(fn=cmd_ablate)
     p = sub.add_parser("plot")
     p.set_defaults(fn=cmd_plot)
+    p = sub.add_parser("fishsal")
+    p.add_argument("models", nargs="+")
+    p.add_argument("--device", default="cpu")
+    p.set_defaults(fn=cmd_fishsal)
     p = sub.add_parser("coverage")
     p.add_argument("--crops", type=int, default=3)
     p.add_argument("--frames", type=int, default=300)
@@ -869,6 +873,46 @@ def cmd_plot(args):
     fig.savefig(p, dpi=110)
     plt.close(fig)
     print(p)
+
+
+def cmd_fishsal(args):
+    """Salience along the fish for other models (the stored features)."""
+    import torch
+
+    from wavetracker.salience import load_model
+
+    t, f, ex = load_trace()
+    frames = np.flatnonzero((ex >= VISIBLE_DB) & (t >= START))
+    run = OUT / "C-bf-rises"
+    df = json.loads((run / "maps.json").read_text())["df"]
+    Z = np.load(run / "features.npy").astype(np.float32)
+    dev = torch.device(args.device)
+    k0, k1 = round(250 / df), round(420 / df)
+    res = (
+        json.loads((OUT / "fishsal.json").read_text())
+        if (OUT / "fishsal.json").exists()
+        else {}
+    )
+    for path in args.models:
+        model, spec = load_model(path, dev)[:2]
+        if spec.band_hz != 100.0:
+            raise SystemExit("the stored features are for 100-Hz bands")
+        p = salience_crop(model, spec, Z, k0, k1, dev)
+        a = along(p, f, df, k0)
+        name = Path(path).parent.name
+        np.save(OUT / f"along_{name}.npy", a)
+        res[name] = {
+            "median": float(np.median(a[frames])),
+            "frac_0.6": float((a[frames] >= 0.6).mean()),
+            "frac_0.6_per_50s": [
+                float(
+                    (a[frames][(t[frames] >= w) & (t[frames] < w + 50)] >= 0.6).mean()
+                )
+                for w in range(25, 350, 50)
+            ],
+        }
+        print(name, res[name], flush=True)
+    (OUT / "fishsal.json").write_text(json.dumps(res, indent=1))
 
 
 if __name__ == "__main__":
