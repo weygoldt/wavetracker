@@ -650,6 +650,12 @@ def main(argv=None):
         help="time dilations of the temporal stack (empty: none)",
     )
     p.add_argument("--temporal-kernel", type=int, default=3)
+    p.add_argument("--temporal-kernel-bins", type=int, default=1)
+    p.add_argument(
+        "--temporal-bin-dilations",
+        default="",
+        help="frequency dilation per temporal layer (empty: 1)",
+    )
     p.add_argument(
         "--harmonics",
         default="1/3,1/2,1,2,3,4,5",
@@ -711,6 +717,10 @@ def main(argv=None):
             int(d) for d in args.temporal_dilations.split(",") if d
         ),
         temporal_kernel=args.temporal_kernel,
+        temporal_kernel_bins=args.temporal_kernel_bins,
+        temporal_bin_dilations=tuple(
+            int(d) for d in args.temporal_bin_dilations.split(",") if d
+        ),
     )
     model = SalienceNet(spec).to(dev, memory_format=torch.channels_last)
     model.checkpoint = args.checkpoint

@@ -68,6 +68,11 @@ class SalienceSpec:
     bin), weights shared across bins, so each frequency bin gets tens of
     seconds of context at little cost. Empty: no temporal stack (v1)."""
     temporal_kernel: int = 3
+    temporal_kernel_bins: int = 1
+    """Extent of the temporal kernels along frequency (1: per bin). Wider
+    kernels let the temporal stack follow lines that drift across bins."""
+    temporal_bin_dilations: tuple[int, ...] = ()
+    """Frequency dilation of each temporal layer (empty: 1 for all)."""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SalienceSpec:
@@ -162,10 +167,19 @@ class SalienceNet(nn.Module):
             n_in = c
         self.convs = nn.ModuleList(convs)
         self.norms = nn.ModuleList(norms)
-        kt = spec.temporal_kernel
+        kt, kb = spec.temporal_kernel, spec.temporal_kernel_bins
+        bin_dil = spec.temporal_bin_dilations or (1,) * len(spec.temporal_dilations)
+        if len(bin_dil) != len(spec.temporal_dilations):
+            raise ValueError("temporal_bin_dilations needs one entry per layer")
         self.temporal = nn.ModuleList(
-            nn.Conv2d(c, c, (kt, 1), padding=(d * (kt // 2), 0), dilation=(d, 1))
-            for d in spec.temporal_dilations
+            nn.Conv2d(
+                c,
+                c,
+                (kt, kb),
+                padding=(d * (kt // 2), db * (kb // 2)),
+                dilation=(d, db),
+            )
+            for d, db in zip(spec.temporal_dilations, bin_dil, strict=True)
         )
         self.temporal_norms = nn.ModuleList(
             nn.BatchNorm2d(c) for _ in spec.temporal_dilations

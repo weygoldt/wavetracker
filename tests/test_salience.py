@@ -321,3 +321,31 @@ def test_streaming_with_temporal_stack_equals_one_pass():
     assert len(whole[0]) > 0
     for a, b in zip(whole, blocks, strict=True):
         np.testing.assert_allclose(a, b, rtol=1e-4, atol=1e-5)
+
+
+def test_temporal_stack_can_follow_drifting_lines():
+    """Temporal kernels with a frequency extent (and their own dilation along
+    frequency) widen the frequency context by their reach, and leave the time
+    context and streaming exactness as they are."""
+    torch.manual_seed(4)
+    spec = small_spec(
+        temporal_dilations=(1, 4, 8),
+        temporal_kernel_bins=3,
+        temporal_bin_dilations=(1, 1, 2),
+    )
+    net = SalienceNet(spec).eval()
+    assert net.context_frames == (1 + 2 + 1) + (1 + 4 + 8)
+    T, K = 60, 60
+    x = torch.zeros(1, len(spec.harmonics), T, K)
+    with torch.no_grad():
+        a, _ = net(x)
+        x2 = x.clone()
+        x2[0, :, 30, 30] = 5.0
+        b, _ = net(x2)
+    diff = (a - b).abs()[0]
+    rows = torch.nonzero(diff.amax(dim=1) > 0).flatten()
+    cols = torch.nonzero(diff.amax(dim=0) > 0).flatten()
+    assert rows.min() == 30 - net.context_frames
+    assert rows.max() == 30 + net.context_frames
+    reach = 3 * (spec.kernel_bins // 2) + (1 + 1 + 2)
+    assert cols.min() == 30 - reach and cols.max() == 30 + reach
