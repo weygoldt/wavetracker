@@ -20,8 +20,9 @@ rate with the same spectrogram resolution:
   harmonic of a lower fish has its fundamental there.
 
 The network never pools or strides along frequency, so the salience keeps the
-full spectrogram resolution; time dilations give it seconds of context. A
-second output is the sub-bin offset of the fundamental.
+full spectrogram resolution; time dilations give it seconds of context, and
+an optional temporal stack (kernels along time only, per frequency bin) tens
+of seconds more. A second output is the sub-bin offset of the fundamental.
 
 ``StreamingSalience`` runs a model over a recording block by block, with the
 neighbouring blocks as context, so block boundaries leave no trace.
@@ -37,6 +38,7 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torch.utils.checkpoint
 from torch import nn
 
 FORMAT = "wavetracker-salience"
@@ -60,6 +62,12 @@ class SalienceSpec:
     kernel_frames: int = 3
     dilations: tuple[int, ...] = (1, 2, 4, 8, 16, 1)
     """Time dilation of each convolution layer (one layer per entry)."""
+    temporal_dilations: tuple[int, ...] = ()
+    """Time dilation of each layer of the temporal stack after the
+    convolutions: kernels along time only (``temporal_kernel`` frames, one
+    bin), weights shared across bins, so each frequency bin gets tens of
+    seconds of context at little cost. Empty: no temporal stack (v1)."""
+    temporal_kernel: int = 3
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SalienceSpec:
@@ -154,20 +162,46 @@ class SalienceNet(nn.Module):
             n_in = c
         self.convs = nn.ModuleList(convs)
         self.norms = nn.ModuleList(norms)
+        kt = spec.temporal_kernel
+        self.temporal = nn.ModuleList(
+            nn.Conv2d(c, c, (kt, 1), padding=(d * (kt // 2), 0), dilation=(d, 1))
+            for d in spec.temporal_dilations
+        )
+        self.temporal_norms = nn.ModuleList(
+            nn.BatchNorm2d(c) for _ in spec.temporal_dilations
+        )
         self.head = nn.Conv2d(c, 2, 1)
+        self.checkpoint = False
+        """Training only: recompute each layer in the backward pass instead
+        of keeping its activations (long crops of the temporal stack)."""
 
     @property
     def context_frames(self) -> int:
         """Frames on each side that influence an output frame."""
-        return sum(d * (self.spec.kernel_frames // 2) for d in self.spec.dilations)
+        s = self.spec
+        trunk = sum(d * (s.kernel_frames // 2) for d in s.dilations)
+        return trunk + sum(d * (s.temporal_kernel // 2) for d in s.temporal_dilations)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        layers = list(zip(self.convs, self.norms, strict=True)) + list(
+            zip(self.temporal, self.temporal_norms, strict=True)
+        )
         y = None
-        for conv, norm in zip(self.convs, self.norms, strict=True):
-            h = F.relu(norm(conv(x if y is None else y)))
+        for conv, norm in layers:
+            inp = x if y is None else y
+            if self.checkpoint and self.training and torch.is_grad_enabled():
+                h = torch.utils.checkpoint.checkpoint(
+                    _layer, conv, norm, inp, use_reentrant=False
+                )
+            else:
+                h = _layer(conv, norm, inp)
             y = h if y is None else y + h
         o = self.head(y)
         return o[:, 0], 0.5 * torch.tanh(o[:, 1])
+
+
+def _layer(conv: nn.Module, norm: nn.Module, x: torch.Tensor) -> torch.Tensor:
+    return F.relu(norm(conv(x)))
 
 
 def decode(
