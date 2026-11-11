@@ -33,10 +33,15 @@ from wavetracker.results import Results
 PAIR_HZ = 1.2
 
 
-def add_hidden(res: Results, truth: dict, min_snr: float, keep: float, rng) -> int:
-    """Add the hidden fish of close pairs to `res` (in place); returns how many."""
+def add_hidden(
+    res: Results, truth: dict, min_snr: float, keep: float, rng, exact: bool = False
+) -> int:
+    """Add the hidden fish of close pairs to `res` (in place); returns how many.
+    `exact`: the partner's detection moves to its truth frequency as well."""
     F = truth_at(truth, res.times)
-    snr = np.stack([np.interp(res.times, truth["snr_times"], s) for s in truth["snr_db"]])
+    snr = np.stack(
+        [np.interp(res.times, truth["snr_times"], s) for s in truth["snr_db"]]
+    )
     fish = match(res, F)
     n_fish, n_frames = F.shape
     det_of = np.full((n_fish, n_frames), -1)
@@ -55,6 +60,8 @@ def add_hidden(res: Results, truth: dict, min_snr: float, keep: float, rng) -> i
             add_idx.append(fr)
             add_f.append(F[k, fr])
             add_src.append(det_of[j, fr])
+            if exact:
+                res.fund_v[det_of[j, fr]] = F[j, fr]
             miss &= ~close
     idx = np.concatenate(add_idx).astype(res.idx_v.dtype)
     src = np.concatenate(add_src)
@@ -85,6 +92,11 @@ def main(argv=None):
     p.add_argument("--min-snr", type=float, default=0.0)
     p.add_argument("--keep", type=float, default=1.0)
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--exact",
+        action="store_true",
+        help="the partner's detection at its truth frequency too",
+    )
     args = p.parse_args(argv)
     variant = yaml.safe_load(Path(args.config).read_text())
     rng = np.random.default_rng(args.seed)
@@ -97,7 +109,7 @@ def main(argv=None):
         cfg = Config.from_dict(merge(variant, band))
         res = Results.load(src)
         truth = dict(np.load(MIXTURES / name / "truth.npz"))
-        n_add = add_hidden(res, truth, args.min_snr, args.keep, rng)
+        n_add = add_hidden(res, truth, args.min_snr, args.keep, rng, args.exact)
         t_track = track_results(res, cfg)
         res.meta["pair_oracle"] = {"source": args.source, "added": n_add}
         res.save(out)
