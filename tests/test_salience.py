@@ -249,3 +249,103 @@ def test_recording_edges_look_like_the_middle():
     per_frame = [sorted(np.round(fq[fr == j], 6)) for j in range(40)]
     assert all(p == per_frame[20] for p in per_frame)
     np.testing.assert_allclose(sal[fr == 0], sal[fr == 20], atol=1e-5)
+
+
+def test_temporal_stack_extends_the_receptive_field_exactly():
+    """Per-bin temporal layers (kernel along time only) add their dilations
+    to the context, and nothing outside it reaches an output frame; they
+    do not widen the frequency context."""
+    torch.manual_seed(1)
+    spec = small_spec(temporal_dilations=(1, 4, 2))
+    net = SalienceNet(spec).eval()
+    assert net.context_frames == (1 + 2 + 1) + (1 + 4 + 2)
+    T, K = 60, 40
+    x = torch.zeros(1, len(spec.harmonics), T, K)
+    with torch.no_grad():
+        a, _ = net(x)
+        x2 = x.clone()
+        x2[0, :, 30, 20] = 5.0
+        b, _ = net(x2)
+    diff = (a - b).abs()[0]
+    rows = torch.nonzero(diff.amax(dim=1) > 0).flatten()
+    assert rows.min() == 30 - net.context_frames
+    assert rows.max() == 30 + net.context_frames
+    cols = torch.nonzero(diff.amax(dim=0) > 0).flatten()
+    trunk = SalienceNet(small_spec())  # same frequency context as without
+    assert cols.min() >= 20 - 3 * (spec.kernel_bins // 2)
+    assert cols.max() <= 20 + 3 * (spec.kernel_bins // 2)
+    assert len(trunk.temporal) == 0
+
+
+def test_spec_without_temporal_keys_loads_as_before(tmp_path):
+    """Models saved before the temporal stack existed rebuild unchanged."""
+    spec = small_spec()
+    d = {k: v for k, v in spec.__dict__.items() if not k.startswith("temporal")}
+    old = SalienceSpec.from_dict(d)
+    assert old.temporal_dilations == ()
+    net = SalienceNet(old)
+    assert not any(k.startswith("temporal") for k in net.state_dict())
+
+
+def test_streaming_with_temporal_stack_equals_one_pass():
+    torch.manual_seed(2)
+    spec = small_spec(dilations=(1, 2), temporal_dilations=(1, 8, 4))
+    net = SalienceNet(spec).eval()
+    freqs = np.fft.rfftfreq(2**15, 1 / 20000.0)
+    rng = np.random.default_rng(3)
+    K = int(np.searchsorted(freqs, 5000))
+    log = torch.as_tensor(
+        10 * np.log10(rng.exponential(1.0, (K, 90))), dtype=torch.float32
+    )
+    log[1310] += 15
+
+    def run(block_sizes):
+        s = StreamingSalience(
+            net, spec, freqs, STEP, 400, 1200, 0.3, torch.device("cpu")
+        )
+        out, f0 = [], 0
+        for n in block_sizes:
+            for det, payload in s.push(s.features(log[:, f0 : f0 + n]), f0):
+                out.append((det[0] + payload, det[2], det[3]))
+            f0 += n
+        for det, payload in s.finish():
+            out.append((det[0] + payload, det[2], det[3]))
+        fr = np.concatenate([o[0] for o in out])
+        fq = np.concatenate([o[1] for o in out])
+        sl = np.concatenate([o[2] for o in out])
+        order = np.lexsort((fq, fr))
+        return fr[order], fq[order], sl[order]
+
+    whole = run([90])
+    blocks = run([7, 30, 2, 40, 11])
+    assert len(whole[0]) > 0
+    for a, b in zip(whole, blocks, strict=True):
+        np.testing.assert_allclose(a, b, rtol=1e-4, atol=1e-5)
+
+
+def test_temporal_stack_can_follow_drifting_lines():
+    """Temporal kernels with a frequency extent (and their own dilation along
+    frequency) widen the frequency context by their reach, and leave the time
+    context and streaming exactness as they are."""
+    torch.manual_seed(4)
+    spec = small_spec(
+        temporal_dilations=(1, 4, 8),
+        temporal_kernel_bins=3,
+        temporal_bin_dilations=(1, 1, 2),
+    )
+    net = SalienceNet(spec).eval()
+    assert net.context_frames == (1 + 2 + 1) + (1 + 4 + 8)
+    T, K = 60, 60
+    x = torch.zeros(1, len(spec.harmonics), T, K)
+    with torch.no_grad():
+        a, _ = net(x)
+        x2 = x.clone()
+        x2[0, :, 30, 30] = 5.0
+        b, _ = net(x2)
+    diff = (a - b).abs()[0]
+    rows = torch.nonzero(diff.amax(dim=1) > 0).flatten()
+    cols = torch.nonzero(diff.amax(dim=0) > 0).flatten()
+    assert rows.min() == 30 - net.context_frames
+    assert rows.max() == 30 + net.context_frames
+    reach = 3 * (spec.kernel_bins // 2) + (1 + 1 + 2)
+    assert cols.min() == 30 - reach and cols.max() == 30 + reach

@@ -30,9 +30,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+from fractions import Fraction
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -61,6 +67,9 @@ LINE_SMOOTH_S = 10.0  # unknown lines: mean feature over this many seconds
 LINE_Z = 2.0  # ... above this
 LINE_CLEAR_HZ = 2.5  # unknown lines farther than this from truth (harmonics)
 LINE_HARMONICS = 12
+TILT_MAX_DB = 15.0  # spectral tilt: at most this gain or attenuation
+HARD_HARMONICS = (1 / 3, 1 / 2, 2, 3, 4, 5)  # hard negatives at h * f of strong fish
+HARD_TOL_HZ = 1.2  # ... within this many Hz times max(1, h / 2)
 MIXTURES = DATA / "mixtures"
 CACHE = DATA / "salience" / "cache"
 OUT = DATA / "salience"
@@ -150,6 +159,18 @@ class Mixture:
         return f"{split.removesuffix('-field')}/{name}"
 
 
+def _smooth(n: int) -> int:
+    """The smallest number >= n whose prime factors are 2, 3 and 5."""
+    while True:
+        m = n
+        for p in (2, 3, 5):
+            while m % p == 0:
+                m //= p
+        if m == 1:
+            return n
+        n += 1
+
+
 def _fill(t, tt, f):
     ok = np.isfinite(f)
     if ok.sum() < 2:
@@ -206,9 +227,34 @@ def unknown_lines(mix: Mixture, spec: PowerSpectrogram, dev) -> np.ndarray:
     return line
 
 
+@dataclass
+class Crop:
+    """What one training crop is made of (drawn in the main thread, read in
+    a worker thread, built on the GPU)."""
+
+    mix: Mixture
+    j0: int  # first output frame, in frames of the mixture
+    electrodes: list[int]
+    gain: float  # field noise gain
+    k_los: list[int]  # first candidate bin of each frequency window
+    r: float = 1.0  # speed: r > 1 plays the source faster (frequencies x r)
+    tilt: float = 0.0  # dB per octave on the lab traces (fish), around f_ref
+    f_ref: float = 500.0
+
+
 class Batches:
     """Training examples drawn from the mixtures of a split, each with field
-    noise at a random gain (0: lab, 1: the field variant, up to 3)."""
+    noise at a random gain (0: lab, 1: the field variant, up to 3).
+
+    A crop's spectrogram serves ``windows`` random windows of candidate
+    frequencies. Augmentations (all off by default): ``speed`` resamples a
+    crop by a random r (frequencies and modulation speeds times r, the truth
+    with them; the field noise stays at its own rate); ``tilt_db`` tilts the
+    spectrum of the lab traces (fish and lab noise) by a random slope in dB
+    per octave, which changes the power ratios of the harmonics against the
+    field noise; ``harm_weight`` weights the bins at harmonics and
+    subharmonics of fish at least ``harm_snr`` dB above the noise as hard
+    negatives."""
 
     def __init__(
         self,
@@ -221,8 +267,20 @@ class Batches:
         seed=0,
         limit: int | None = None,
         fraction: float = 1.0,
+        harmonics: tuple[float, ...] = SalienceSpec(DF, FT).harmonics,
+        windows: int = 1,
+        speed: tuple[float, float] | None = None,
+        speed_p: float = 0.0,
+        tilt_db: float = 0.0,
+        tilt_p: float = 0.0,
+        harm_weight: float = 1.0,
+        harm_snr: float = 10.0,
+        hard_harmonics: tuple[float, ...] = HARD_HARMONICS,
+        sigma_hz: float = SIGMA_HZ,
+        workers: int = 4,
     ):
-        paths = mixture_dirs(split)[:limit]
+        splits = split.split(",")
+        paths = [p for s in splits for p in mixture_dirs(s)[:limit]]
         if fraction < 1.0:  # evenly spaced, so every scenario family keeps examples
             n = max(1, round(fraction * len(paths)))
             paths = [
@@ -237,6 +295,13 @@ class Batches:
         self.frames, self.ctx, self.bins = frames, ctx, bins
         self.snr_ignore = snr_ignore
         self.dev = dev
+        self.harmonics = tuple(harmonics)
+        self.windows = windows
+        self.speed, self.speed_p = speed, speed_p
+        self.tilt_db, self.tilt_p = tilt_db, tilt_p
+        self.harm_weight, self.harm_snr = harm_weight, harm_snr
+        self.hard_harmonics = tuple(hard_harmonics)
+        self.sigma_hz = sigma_hz
         self.spec = PowerSpectrogram(NFFT, STEP, RATE, dev)
         self.rng = np.random.default_rng(seed)
         self.lines = {}
@@ -244,84 +309,262 @@ class Batches:
             key = m.lab_name()
             if key not in self.lines:
                 self.lines[key] = unknown_lines(m, self.spec, dev)
+        self._gpu: dict[str, dict] = {}
+        self.pool = ThreadPoolExecutor(workers) if workers else None
+        self._pending: deque = deque()
 
-    def example(
-        self,
-        mix: Mixture | None = None,
-        j0: int | None = None,
-        k_lo: int | None = None,
-        electrodes=None,
-        gain: float | None = None,
-    ):
-        rng = self.rng
-        mix = mix if mix is not None else self.mixes[rng.integers(len(self.mixes))]
+    # --- drawing and reading ----------------------------------------------
+
+    def _span(self, crop: Crop):
+        """Source samples of the lab traces [s0, s0 + n_in), the output
+        samples n_out of the resampled segment (with margins M on both
+        sides), and the unwarped range [a, a + N) of the field noise."""
         T = self.frames + 2 * self.ctx
-        if j0 is None:
-            j0 = int(rng.integers(0, mix.n_frames - T))
-        if electrodes is None:
-            n_el = (
-                MIX_CHANNELS
-                if rng.random() < 0.5
-                else int(rng.integers(2, MIX_CHANNELS))
-            )
-            electrodes = sorted(rng.choice(MIX_CHANNELS, n_el, replace=False).tolist())
-        if k_lo is None:
-            k_lo = int(rng.integers(int(F_MIN / DF), int(F_MAX / DF) - self.bins))
-        k_hi = k_lo + self.bins - 1
-        if gain is None:
-            r = rng.random()
-            gain = 0.0 if r < 0.25 else 1.0 if r < 0.5 else float(rng.uniform(0, 3))
-        x = mix.traces(j0, T, gain)
-        snr_all = mix.snr_at(gain)
-        log = spectrogram(self.spec, x, electrodes, self.dev)
-        k_need = min(log.shape[0], 5 * k_hi + 4)
+        N = (T - 1) * STEP + NFFT
+        a = crop.j0 * STEP
+        if crop.r == 1.0 and crop.tilt == 0.0:
+            return a, N, N, 0, a, N
+        # FFT lengths with small prime factors only (cuFFT fails on some
+        # large primes); the exact ratio n_in / n_out is the speed used
+        n_out = _smooth(N + 2 * (NFFT // 2))
+        M = (n_out - N) // 2
+        n_in = _smooth(round(n_out * crop.r))
+        s0 = a - round(M * n_in / n_out)
+        return s0, n_in, n_out, M, a, N
+
+    def draw(self) -> Crop:
+        rng = self.rng
+        mix = self.mixes[rng.integers(len(self.mixes))]
+        n_el = (
+            MIX_CHANNELS if rng.random() < 0.5 else int(rng.integers(2, MIX_CHANNELS))
+        )
+        electrodes = sorted(rng.choice(MIX_CHANNELS, n_el, replace=False).tolist())
+        u = rng.random()
+        gain = 0.0 if u < 0.25 else 1.0 if u < 0.5 else float(rng.uniform(0, 3))
+        r = 1.0
+        if self.speed and rng.random() < self.speed_p:
+            lo, hi = np.log(self.speed[0]), np.log(self.speed[1])
+            r = float(np.exp(rng.uniform(lo, hi)))
+        tilt, f_ref = 0.0, 500.0
+        if self.tilt_db and rng.random() < self.tilt_p:
+            tilt = float(rng.uniform(-self.tilt_db, self.tilt_db))
+            f_ref = float(np.exp(rng.uniform(np.log(100.0), np.log(1500.0))))
+        # candidate fundamentals of the windows: in the crop's frequencies
+        k0, k1 = int(F_MIN / DF), int(F_MAX / DF) - self.bins
+        k_los = [int(rng.integers(k0, k1)) for _ in range(self.windows)]
+        T = self.frames + 2 * self.ctx
+        crop = Crop(mix, 0, electrodes, gain, k_los, r, tilt, f_ref)
+        # output frames whose source span stays inside the recording
+        n_samples = mix.raw.shape[0]
+        s0, n_in, *_ = self._span(crop)
+        lead = crop.j0 * STEP - s0  # samples the lab span starts before a
+        need = max(n_in - lead, (T - 1) * STEP + NFFT)
+        j_lo = int(np.ceil(max(lead, 0) / STEP))
+        j_hi = (n_samples - need) // STEP
+        crop.j0 = int(rng.integers(j_lo, max(j_lo + 1, j_hi)))
+        return crop
+
+    def read(self, crop: Crop):
+        """Raw (samples, channels) arrays: the lab traces over the union of
+        the warped and the unwarped span, and the field variant over the
+        unwarped one (None without field noise)."""
+        s0, n_in, _, _, a, N = self._span(crop)
+        u0, u1 = min(s0, a), max(s0 + n_in, a + N)
+        lab = np.array(crop.mix.raw[u0:u1])
+        field = None
+        if crop.gain and crop.mix.field is not None:
+            field = np.array(crop.mix.field[a : a + N])
+        return u0, lab, field
+
+    def prefetch(self, n: int) -> list[tuple[Crop, Any]]:
+        """The next n crops with their (pending) reads."""
+        while len(self._pending) < 3 * n:
+            c = self.draw()
+            fut = self.pool.submit(self.read, c) if self.pool else None
+            self._pending.append((c, fut))
+        out = []
+        for _ in range(n):
+            c, fut = self._pending.popleft()
+            out.append((c, fut.result() if fut else self.read(c)))
+        return out
+
+    # --- building on the GPU ----------------------------------------------
+
+    def _mix_gpu(self, mix: Mixture) -> dict:
+        key = str(mix.path)
+        if key not in self._gpu:
+            t = lambda a: torch.as_tensor(np.ascontiguousarray(a), device=self.dev)  # noqa: E731
+            self._gpu[key] = {
+                "freqs": t(mix.freqs).float(),
+                "guess": t(mix.guess).float(),
+                "completed": t(mix.completed),
+                "fish_power": t(mix.fish_power).float(),
+                "noise_lab": t(mix.noise_lab).float(),
+                "noise_field": None
+                if mix.noise_field is None
+                else t(mix.noise_field).float(),
+                "lines": t(self.lines[mix.lab_name()]),
+            }
+        return self._gpu[key]
+
+    def traces(self, crop: Crop, raw) -> torch.Tensor:
+        """(channels, N) output traces on the GPU: lab traces resampled and
+        tilted, plus the field noise at its gain."""
+        u0, lab_np, field_np = raw
+        s0, n_in, n_out, M, a, N = self._span(crop)
+        lab = torch.from_numpy(lab_np).to(self.dev, non_blocking=True)
+        lab = lab[:, crop.electrodes].T.contiguous()  # (ch, n)
+        if crop.r == 1.0 and crop.tilt == 0.0:
+            y = lab[:, a - u0 : a - u0 + N]
+        else:
+            seg = lab[:, s0 - u0 : s0 - u0 + n_in]
+            X = torch.fft.rfft(seg)
+            nb = n_out // 2 + 1
+            X = X[..., :nb] if nb <= X.shape[-1] else F.pad(X, (0, nb - X.shape[-1]))
+            if crop.tilt:
+                fo = torch.arange(nb, device=self.dev, dtype=torch.float32) * (
+                    RATE / n_out
+                )
+                g = crop.tilt * torch.log2(fo.clamp_min(20.0) / crop.f_ref)
+                X = X * (10.0 ** (g.clamp(-TILT_MAX_DB, TILT_MAX_DB) / 20.0))
+            y = torch.fft.irfft(X, n=n_out) * (n_out / n_in)
+            y = y[:, M : M + N]
+        if field_np is not None:
+            fld = torch.from_numpy(field_np).to(self.dev, non_blocking=True)
+            fld = fld[:, crop.electrodes].T
+            y = y + crop.gain * (fld - lab[:, a - u0 : a - u0 + N])
+        return y
+
+    def source_frames(self, crop: Crop, j: np.ndarray) -> tuple[np.ndarray, float]:
+        """Fractional source frame of output frames j, and the exact speed."""
+        if crop.r == 1.0 and crop.tilt == 0.0:
+            return (crop.j0 + j).astype(np.float64), 1.0
+        s0, n_in, n_out, M, _, _ = self._span(crop)
+        r = n_in / n_out
+        s = s0 + (j * STEP + NFFT / 2 + M) * r
+        return (s - NFFT / 2) / STEP, r
+
+    def build(self, crop: Crop, raw):
+        """-> features (windows, harmonics, T, bins) and targets, weights,
+        offset targets and weights (windows, frames, bins)."""
+        dev = self.dev
+        x = self.traces(crop, raw)
+        log = decibel(self.spec(x).sum(0))
+        k_hi_max = max(crop.k_los) + self.bins - 1
+        k_need = min(log.shape[0], math.ceil(max(self.harmonics) * k_hi_max) + 4)
         z = normalise(log[:k_need].T, DF)
-        feats = harmonic_stack(z, k_lo, k_hi, SPEC_HARMONICS)
-        # targets on the candidate bins, for the frames the loss sees
-        fr = slice(j0 + self.ctx, j0 + self.ctx + self.frames)
-        fk = (np.arange(k_lo, k_hi + 1)) * DF
-        target = np.zeros((self.frames, self.bins), np.float32)
-        weight = np.ones((self.frames, self.bins), np.float32)
-        off_t = np.zeros((self.frames, self.bins), np.float32)
-        off_w = np.zeros((self.frames, self.bins), np.float32)
-        half = int(np.ceil(1.5 / DF))
-        for i in range(len(mix.freqs)):
-            f = mix.freqs[i, fr]
-            g = mix.guess[i, fr]
-            snr = snr_all[i, fr]
-            comp = mix.completed[i, fr]
-            near = np.abs(fk[None, :] - np.where(np.isfinite(g), g, -1e9)[:, None])
-            gauss = np.exp(-0.5 * ((fk[None, :] - f[:, None]) / SIGMA_HZ) ** 2)
-            ok = np.isfinite(f) & (snr >= self.snr_ignore)
-            target[ok] = np.maximum(target[ok], gauss[ok])
-            around = near <= half * DF
-            ignore = (~ok)[:, None] & around  # unknown or below the noise
-            weight[ignore] = 0.0
-            weight[(ok & comp)[:, None] & around & (weight > 0)] = 0.5
-            k = np.round(f / DF) - k_lo
-            m = ok & (k >= 0) & (k < self.bins)
-            rows = np.flatnonzero(m)
-            kk = k[m].astype(int)
-            off_t[rows, kk] = (f[m] / DF - np.round(f[m] / DF)).astype(np.float32)
-            off_w[rows, kk] = 1.0
-        lines = self.lines[mix.lab_name()][fr, k_lo : k_hi + 1]
-        weight[lines] = 0.0
-        t = lambda a: torch.from_numpy(a).to(self.dev)  # noqa: E731
-        return feats, t(target), t(weight), t(off_t), t(off_w)
+        feats = torch.stack(
+            [
+                harmonic_stack(z, k, k + self.bins - 1, self.harmonics)
+                for k in crop.k_los
+            ]
+        )
+        # truth on the frames the loss sees
+        g = self._mix_gpu(crop.mix)
+        j = np.arange(self.ctx, self.ctx + self.frames)
+        q, r = self.source_frames(crop, j)
+        nf = crop.mix.n_frames
+        q = np.clip(q, 0, nf - 1)
+        i0 = np.floor(q).astype(np.int64)
+        i1 = np.minimum(i0 + 1, nf - 1)
+        w1 = torch.as_tensor(q - i0, device=dev, dtype=torch.float32)
+        i0t = torch.as_tensor(i0, device=dev)
+        i1t = torch.as_tensor(i1, device=dev)
+        near = torch.as_tensor(np.round(q).astype(np.int64), device=dev)
 
-    def batch(self, n: int):
-        ex = [self.example() for _ in range(n)]
-        return [torch.stack(c) for c in zip(*ex, strict=True)]
+        def lerp(a):  # NaN where a neighbour with weight is unknown
+            return torch.where(w1 > 0, a[:, i0t] * (1 - w1) + a[:, i1t] * w1, a[:, i0t])
+
+        f = lerp(g["freqs"]) * r  # NaN where either neighbour is unknown
+        guess = lerp(g["guess"]) * r
+        comp = g["completed"][:, near]
+        fish_p = g["fish_power"][:, near]
+        noise_lab = g["noise_lab"][:, near]
+        tilt = torch.ones_like(fish_p)
+        if crop.tilt:
+            gdb = crop.tilt * torch.log2(
+                torch.nan_to_num(f, nan=crop.f_ref).clamp_min(20.0) / crop.f_ref
+            )
+            tilt = 10.0 ** (gdb.clamp(-TILT_MAX_DB, TILT_MAX_DB) / 10.0)
+        noise = noise_lab * tilt
+        if crop.gain and g["noise_field"] is not None:
+            noise = noise + crop.gain**2 * (g["noise_field"][:, near] - noise_lab)
+        snr = 10 * torch.log10(fish_p * tilt / noise)
+        snr = torch.nan_to_num(snr, nan=-99.0, neginf=-99.0, posinf=99.0)
+        ok = torch.isfinite(f) & (snr >= self.snr_ignore)  # (fish, frames)
+        f0 = torch.where(torch.isfinite(f), f, torch.full_like(f, -1e9))
+        gs = torch.where(torch.isfinite(guess), guess, torch.full_like(guess, -1e9))
+        half = math.ceil(1.5 / DF) * DF
+        strong = ok & (snr >= self.harm_snr)
+        lines_all = g["lines"]
+        out = []
+        for k_lo in crop.k_los:
+            fk = (
+                torch.arange(k_lo, k_lo + self.bins, device=dev, dtype=torch.float32)
+                * DF
+            )
+            d = fk[None, None, :] - f0[:, :, None]  # (fish, frames, bins)
+            gauss = torch.exp(-0.5 * (d / self.sigma_hz) ** 2) * ok[:, :, None]
+            target = gauss.amax(0)
+            around = (fk[None, None, :] - gs[:, :, None]).abs() <= half
+            ignore = ((~ok)[:, :, None] & around).any(0)
+            halfw = ((ok & comp)[:, :, None] & around).any(0)
+            weight = torch.where(
+                ignore,
+                torch.zeros_like(target),
+                torch.where(
+                    halfw, torch.full_like(target, 0.5), torch.ones_like(target)
+                ),
+            )
+            if self.harm_weight != 1.0:
+                hard = torch.zeros_like(target, dtype=torch.bool)
+                for h in self.hard_harmonics:
+                    tol = HARD_TOL_HZ * max(1.0, h / 2)
+                    hd = (fk[None, None, :] - h * f0[:, :, None]).abs() <= tol
+                    hard |= (hd & strong[:, :, None]).any(0)
+                hard &= (target < 0.1) & (weight > 0)
+                weight = torch.where(hard, weight * self.harm_weight, weight)
+            # unknown lines of the lab variant, at the source's frames and bins
+            kb = torch.round(
+                torch.arange(k_lo, k_lo + self.bins, device=dev, dtype=torch.float64)
+                / r
+            ).long()
+            inb = kb < lines_all.shape[1]
+            lines = lines_all[near][:, kb.clamp(max=lines_all.shape[1] - 1)] & inb
+            weight = weight.masked_fill(lines, 0.0)
+            # sub-bin offsets at the truth bins
+            off_t = torch.zeros_like(target)
+            off_w = torch.zeros_like(target)
+            kf = f0 / DF
+            kr = torch.round(kf)
+            kk = (kr - k_lo).long()
+            m = ok & (kk >= 0) & (kk < self.bins)
+            fi, fr = torch.nonzero(m, as_tuple=True)
+            off_t[fr, kk[fi, fr]] = (kf - kr)[fi, fr]
+            off_w[fr, kk[fi, fr]] = 1.0
+            out.append((target, weight, off_t, off_w))
+        target, weight, off_t, off_w = (torch.stack(c) for c in zip(*out, strict=True))
+        return feats, target, weight, off_t, off_w
+
+    def example(self, mix, j0, k_lo, electrodes, gain):
+        """One fixed window without augmentation (validation)."""
+        crop = Crop(mix, j0, list(electrodes), gain, [k_lo])
+        feats, *rest = self.build(crop, self.read(crop))
+        return (feats[0], *(t[0] for t in rest))
+
+    def batch(self, n_crops: int):
+        ex = [self.build(c, raw) for c, raw in self.prefetch(n_crops)]
+        return [torch.cat(c) for c in zip(*ex, strict=True)]
 
 
-SPEC_HARMONICS = SalienceSpec(DF, FT).harmonics
-
-
-def losses(model, batch, ctx):
+def losses(model, batch, ctx, focal: float = 0.0):
     feats, target, weight, off_t, off_w = batch
-    logits, offset = model(feats)
+    logits, offset = model(feats.contiguous(memory_format=torch.channels_last))
     sl = slice(ctx, ctx + target.shape[1])
     logits, offset = logits[:, sl].float(), offset[:, sl].float()
+    if focal:  # down-weight what is already right: |target - p|^gamma
+        p = torch.sigmoid(logits).detach()
+        weight = weight * (target - p).abs().pow(focal)
     bce = F.binary_cross_entropy_with_logits(
         logits, target, weight=weight, reduction="sum"
     )
@@ -404,15 +647,33 @@ def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--tag", required=True)
     p.add_argument("--steps", type=int, default=6000)
-    p.add_argument("--batch", type=int, default=8)
+    p.add_argument("--batch", type=int, default=8, help="crops per step")
+    p.add_argument("--windows", type=int, default=1, help="frequency windows per crop")
     p.add_argument(
         "--frames", type=int, default=300, help="frames per crop seen by the loss"
     )
-    p.add_argument("--bins", type=int, default=512, help="candidate bins per crop")
+    p.add_argument("--bins", type=int, default=512, help="candidate bins per window")
     p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--channels", type=int, default=32)
     p.add_argument(
         "--dilations", default="1,2,4,8,16,1", help="time dilation per layer"
+    )
+    p.add_argument(
+        "--temporal-dilations",
+        default="",
+        help="time dilations of the temporal stack (empty: none)",
+    )
+    p.add_argument("--temporal-kernel", type=int, default=3)
+    p.add_argument("--temporal-kernel-bins", type=int, default=1)
+    p.add_argument(
+        "--temporal-bin-dilations",
+        default="",
+        help="frequency dilation per temporal layer (empty: 1)",
+    )
+    p.add_argument(
+        "--harmonics",
+        default="1/3,1/2,1,2,3,4,5",
+        help="channels of the harmonic stack",
     )
     p.add_argument("--seed", type=int, default=0)
     p.add_argument(
@@ -422,7 +683,34 @@ def main(argv=None):
         help="evenly spaced share of mixtures",
     )
     p.add_argument("--snr-ignore", type=float, default=-3.0)
+    p.add_argument(
+        "--speed", default="", help="speed perturbation range lo,hi (e.g. 0.85,1.18)"
+    )
+    p.add_argument("--speed-p", type=float, default=0.75)
+    p.add_argument("--tilt-db", type=float, default=0.0, help="max dB per octave")
+    p.add_argument("--tilt-p", type=float, default=0.5)
+    p.add_argument(
+        "--harm-weight",
+        type=float,
+        default=1.0,
+        help="loss weight of hard negatives at (sub)harmonics of strong fish",
+    )
+    p.add_argument("--harm-snr", type=float, default=10.0)
+    p.add_argument(
+        "--hard-harmonics",
+        default="1/3,1/2,2,3,4,5",
+        help="multiples of strong fish that are hard negatives",
+    )
+    p.add_argument(
+        "--focal", type=float, default=0.0, help="focal-loss exponent (0: BCE)"
+    )
+    p.add_argument(
+        "--sigma-hz", type=float, default=SIGMA_HZ, help="width of the target bumps"
+    )
+    p.add_argument("--checkpoint", action="store_true", help="recompute layers")
+    p.add_argument("--workers", type=int, default=4, help="reader threads")
     p.add_argument("--val-every", type=int, default=500)
+    p.add_argument("--save-every", type=int, default=0, help="keep sSTEP.pt")
     p.add_argument("--train-split", default="ltrain")
     p.add_argument("--val-split", default="ldev")
     p.add_argument("--device", default="cuda")
@@ -432,13 +720,24 @@ def main(argv=None):
     args = p.parse_args(argv)
     dev = torch.device(args.device)
     torch.manual_seed(args.seed)
+    torch.backends.cudnn.benchmark = True
     spec = SalienceSpec(
         freq_resolution=DF,
         frame_step=FT,
+        harmonics=tuple(float(Fraction(h)) for h in args.harmonics.split(",")),
         channels=args.channels,
         dilations=tuple(int(d) for d in args.dilations.split(",")),
+        temporal_dilations=tuple(
+            int(d) for d in args.temporal_dilations.split(",") if d
+        ),
+        temporal_kernel=args.temporal_kernel,
+        temporal_kernel_bins=args.temporal_kernel_bins,
+        temporal_bin_dilations=tuple(
+            int(d) for d in args.temporal_bin_dilations.split(",") if d
+        ),
     )
-    model = SalienceNet(spec).to(dev)
+    model = SalienceNet(spec).to(dev, memory_format=torch.channels_last)
+    model.checkpoint = args.checkpoint
     ctx = model.context_frames
     out = OUT / args.tag
     out.mkdir(parents=True, exist_ok=True)
@@ -452,9 +751,31 @@ def main(argv=None):
         1 + 10 * args.seed,
         args.limit,
         args.train_fraction,
+        harmonics=spec.harmonics,
+        windows=args.windows,
+        speed=tuple(float(v) for v in args.speed.split(",")) if args.speed else None,
+        speed_p=args.speed_p,
+        tilt_db=args.tilt_db,
+        tilt_p=args.tilt_p,
+        harm_weight=args.harm_weight,
+        harm_snr=args.harm_snr,
+        hard_harmonics=tuple(
+            float(Fraction(h)) for h in args.hard_harmonics.split(",")
+        ),
+        sigma_hz=args.sigma_hz,
+        workers=args.workers,
     )
     val = Batches(
-        args.val_split, args.frames, ctx, args.bins, args.snr_ignore, dev, 2, args.limit
+        args.val_split,
+        args.frames,
+        ctx,
+        args.bins,
+        args.snr_ignore,
+        dev,
+        2,
+        args.limit,
+        harmonics=spec.harmonics,
+        workers=0,
     )
     vr = np.random.default_rng(3)
     T = args.frames + 2 * ctx
@@ -487,7 +808,7 @@ def main(argv=None):
         model.train()
         batch = train.batch(args.batch)
         with torch.autocast("cuda", torch.bfloat16, enabled=dev.type == "cuda"):
-            bce, l1 = losses(model, batch, ctx)
+            bce, l1 = losses(model, batch, ctx, args.focal)
             loss = bce + 0.5 * l1
         opt.zero_grad(set_to_none=True)
         loss.backward()
@@ -524,6 +845,8 @@ def main(argv=None):
             print(json.dumps(row), flush=True)
             meta = {"tag": args.tag, "step": step, "args": vars(args), "val": sc}
             save_model(out / "last.pt", model, spec, meta)
+            if args.save_every and step % args.save_every == 0:
+                save_model(out / f"s{step}.pt", model, spec, meta)
             if tb is not None:
                 for k, v in sc.items():
                     metric, variant = k.rsplit("_", 1)
