@@ -7,6 +7,8 @@
 # trials, so the 30-fish scenarios (15 sources) use 5 trials twice, each copy
 # with its own frequency scale and offset. Field-noise variants (`ldev-field`,
 # noise.py derive) use the dev hours of the noise recording, as `dev-field`.
+# learned_dev2.yaml (`ldev2`) repeats these designs with other seeds: keep
+# them in sync.
 #
 #   python benchmarks/dense/mixture.py --suite benchmarks/dense/learned_dev.yaml
 #   python benchmarks/dense/noise.py derive --splits ldev

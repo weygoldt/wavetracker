@@ -1,6 +1,7 @@
 """Paired comparison of two runs on the dense mixtures: the mean difference of
 a score (b - a), a bootstrap 95 % CI over mixtures, and how many mixtures are
-better or worse; overall, per split, lab / field, and per scenario group.
+better or worse (lab and field variants counted apart); overall, per split,
+lab / field, and per scenario group (``--by-scenario``: per scenario).
 
 A run is given by its tag, or by tags per split when the same configuration
 ran under different tags (``tag:split`` entries separated by commas; an entry
