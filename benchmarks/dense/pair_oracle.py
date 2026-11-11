@@ -23,7 +23,7 @@ import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
-from run import MIXTURES, RUNS, merge, mixtures
+from run import MIXTURES, RUNS, merge, mixtures, overrides
 from score import match, score, truth_at
 
 from wavetracker.config import Config
@@ -89,6 +89,10 @@ def main(argv=None):
     p.add_argument("--tag", required=True)
     p.add_argument("-c", "--config", required=True)
     p.add_argument("--split", default="ldev")
+    p.add_argument(
+        "--only", nargs="+", help="mixtures whose name contains any of these"
+    )
+    p.add_argument("--set", nargs="*", help="config overrides, e.g. tracking.max_dt=20")
     p.add_argument("--min-snr", type=float, default=0.0)
     p.add_argument("--keep", type=float, default=1.0)
     p.add_argument("--seed", type=int, default=0)
@@ -98,9 +102,9 @@ def main(argv=None):
         help="the partner's detection at its truth frequency too",
     )
     args = p.parse_args(argv)
-    variant = yaml.safe_load(Path(args.config).read_text())
+    variant = merge(yaml.safe_load(Path(args.config).read_text()), overrides(args.set))
     rng = np.random.default_rng(args.seed)
-    for name in mixtures(args.split):
+    for name in mixtures(args.split, args.only):
         src = RUNS / args.source / name
         out = RUNS / args.tag / name
         if (out / "score.json").exists() or not (src / "fund_v.npy").exists():
