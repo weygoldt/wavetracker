@@ -631,23 +631,39 @@ of single-fish peaks split.
 | pair head + electrodes s0, p 0.3 | 0.748 / 0.739 | 0.54 / 0.53 | 0.85 / 0.87 | 0.969 / 0.964 | 0.13 / 0.20 | 0.5 / 0.6 | 0.43 / 0.42 | 0.7437 |
 | all weights fine-tuned s0, p 0.3 | 0.750 / 0.743 | 0.53 / 0.52 | 0.82 / 0.84 | 0.961 / 0.960 | 0.16 / 0.23 | 0.1 / 0.4 | 0.28 / 0.27 | 0.7462 |
 | all weights fine-tuned s0, no splits | 0.755 / 0.743 | 0.48 / 0.49 | 0.82 / 0.84 | 0.963 / 0.960 | 0.15 / 0.22 | 0.1 / 0.4 | 0.18 / 0.22 | 0.7488 |
+| all weights fine-tuned s0, no splits, t 0.5 | 0.755 / 0.742 | 0.49 / 0.49 | 0.84 / 0.86 | 0.943 / 0.937 | 0.27 / 0.38 | 0.0 / 0.1 | 0.17 / 0.21 | 0.7484 |
+| all weights fine-tuned s1, p 0.3 | 0.754 / 0.750 | 0.54 / 0.53 | 0.82 / 0.86 | 0.960 / 0.952 | 0.17 / 0.28 | 0.3 / 0.4 | 0.30 / 0.33 | 0.7523 |
+| all weights fine-tuned s1, no splits | 0.757 / 0.749 | 0.50 / 0.50 | 0.82 / 0.86 | 0.963 / 0.953 | 0.15 / 0.27 | 0.3 / 0.4 | 0.23 / 0.28 | 0.7530 |
+| control: fine-tuned without pair head s0 | 0.748 / 0.737 | 0.49 / 0.50 | 0.85 / 0.87 | 0.972 / 0.968 | 0.12 / 0.16 | 0.5 / 0.6 | 0.25 / 0.30 | 0.7426 |
+| control: fine-tuned without pair head s1 | 0.750 / 0.747 | 0.50 / 0.50 | 0.85 / 0.88 | 0.981 / 0.973 | 0.09 / 0.16 | 0.3 / 0.5 | 0.27 / 0.33 | 0.7483 |
 | pair oracle s0 | 0.735 / 0.725 | 0.98 / 0.98 | 0.85 / 0.87 | 0.973 / 0.966 | 0.11 / 0.18 | 0.5 / 0.6 | 1.26 / 1.36 | 0.7301 |
 | pair oracle s1 | 0.736 / 0.731 | 0.98 / 0.98 | 0.84 / 0.87 | 0.977 / 0.968 | 0.11 / 0.20 | 0.5 / 0.7 | 1.37 / 1.40 | 0.7333 |
 | pair oracle s0, exact frequencies | 0.740 / 0.727 | 0.98 / 0.98 | 0.85 / 0.87 | 0.973 / 0.966 | 0.11 / 0.18 | 0.5 / 0.6 | 1.04 / 1.07 | 0.7337 |
 
 (pair head: frozen `learned-b` trunk of the same seed, `p` the pair
-threshold; "pair oracle": see below.) The pair head turns about a tenth of
-the hidden fish into detections at a pair threshold of 0.3 (pair recall
-+0.04, both seeds) and a few percent at 0.5, but IDF1 does not follow: over
-two seeds 0.7442 (0.3) and 0.7457 (0.5) against 0.7450 for `learned-b`,
-within the seed spread of 0.003. Every split near a tracked fish adds
-switches (0.28 -> 0.42-0.48 per fish and minute at 0.3); fish in pairs do
-not spend more frames on their own identity (0.36 either way). The electrode
-branch finds slightly more pairs (0.54 / 0.53 at 0.3) with the same IDF1;
-`tracking.start_salience` changes nothing. Fine-tuning all weights with the
-pair head changes the salience itself (lower recall of faint fish, fewer
-false identities, fewer switches): without splits it scores 0.755 / 0.743
-on seed 0, which is not a pair effect.
+threshold; "all weights fine-tuned": the pair head trained together with
+every weight of `learned-b`, 4000 steps at lr 3e-4, half of the crops centred
+on a close pair; "control": the same fine-tune without pair head and without
+the pair-centred crops; "pair oracle": see below.) The pair head turns about
+a tenth of the hidden fish into detections at a pair threshold of 0.3 (pair
+recall +0.04, both seeds) and a few percent at 0.5, but IDF1 does not
+follow: over two seeds 0.7442 (0.3) and 0.7457 (0.5) against 0.7450 for
+`learned-b`, within the seed spread of 0.003. Every split near a tracked
+fish adds switches (0.28 -> 0.42-0.48 per fish and minute at 0.3); fish in
+pairs do not spend more frames on their own identity (0.36 either way). The
+electrode branch finds slightly more pairs (0.54 / 0.53 at 0.3) with the same
+IDF1; `tracking.start_salience` changes nothing.
+
+Training the pair head with all weights changes the salience itself (lower
+recall of faint fish, fewer false identities and switches); with splits
+off it scores 0.7488 and 0.7530 (mean 0.7509, both seeds above both
+`learned-b` seeds), the control 0.7426 and 0.7483 (mean 0.7455), mostly in
+the density scenarios (+0.03). On the 34 + 34 mixtures of `ldev2`, however,
+the fine-tuned models do not beat `learned-b` (lab / field, without splits):
+0.739 / 0.730 against 0.746 / 0.737 on seed 0, 0.751 / 0.743 against
+0.749 / 0.742 on seed 1; mean -0.003, though still with fewer switches
+(0.29 -> 0.20-0.24 per fish and minute in lab noise). The `ldev` gain is not
+robust; `learned-b` stays the candidate.
 
 **A perfect pair head would not help either** (`pair_oracle.py`): adding
 every hidden fish of a close pair from the truth to `learned-b`'s detections
@@ -665,10 +681,12 @@ two fish of a pair tie and swap. A frequency term that already costs at
 0.15 Hz (Boltzmann x0 0.15, dx 0.04 instead of 0.35, 0.08; an uncommitted
 experiment) does not help either (oracle 0.734, learned-b 0.751 with it, lab),
 nor does switching the linker off (0.659 / 0.635 against 0.677 / 0.652), so
-the swaps happen where the tracker joins its temporary identities. On the 17
-mixtures of `ldev2` that exist so far (lab noise) the oracle loses as well:
-0.747 against 0.765, and the pair head (seed 0, threshold 0.3) 0.760. Finding the second fish is not what limits close pairs;
-keeping the two apart is. Figure: `figures/B-pair-results.png`.
+the swaps happen where the tracker joins its temporary identities. On the
+first 17 mixtures of `ldev2` (lab noise; `benchmarks/dense/learned_dev2.yaml`)
+the oracle loses as well: 0.747 against 0.765, and the pair head (seed 0,
+threshold 0.3) 0.760. Finding the second fish is not what limits close pairs;
+keeping the two apart is. Figure: `figures/B-pair-results.png` (numbers in
+`figures/B-pair-results.json`).
 
 Next: the pair head is worth using once the tracker keeps the two fish of a
 pair apart, and `pair_oracle.py` (tracking only, minutes on CPU) tells when
