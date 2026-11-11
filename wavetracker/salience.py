@@ -89,6 +89,19 @@ class SalienceSpec:
     """Time dilation of each layer of a branch between the trunk and the
     pair head (residual convolutions as in the trunk; empty: the head reads
     the trunk directly). Their context adds to the trunk's."""
+    electrode_channels: int = 0
+    """Width of the electrode branch (0: none, the model sees only the
+    electrode sum). One encoder with shared weights reads every electrode's
+    spatial features at the candidate bins (`electrode_features`); the mean
+    and the maximum over electrodes, for any number of electrodes, join the
+    network through a gate that starts at zero."""
+    electrode_dilations: tuple[int, ...] = (1, 2, 4, 8)
+    """Time dilation of each layer of the electrode encoder."""
+    electrode_kernel_bins: int = 3
+    electrode_into: str = "pair"
+    """Where the electrode branch joins: "pair" (the input of the pair
+    branch: the salience stays that of the sum) or "trunk" (after the
+    convolutions, before the temporal stack)."""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SalienceSpec:
@@ -161,6 +174,30 @@ def harmonic_stack(
     return torch.stack(out)
 
 
+ELECTRODE_FEATURES = 3
+
+
+def electrode_features(stft: torch.Tensor, k_lo: int, k_hi: int) -> torch.Tensor:
+    """Complex spectra (electrodes, bins, frames) -> spatial features (frames,
+    electrodes, 3, candidate bins k_lo..k_hi) for the electrode branch: the
+    log10 share of the electrode in the summed power, and its phase relative
+    to the strongest electrode of the bin (cos, sin, scaled by the square root
+    of the share). One fish gives every electrode a fixed share and a phase
+    near 0 or pi; two fish in one bin make both move with their beat. Levels,
+    gains and the common phase do not matter."""
+    X = stft[:, k_lo : k_hi + 1]
+    P = X.real.square() + X.imag.square()
+    share = P / P.sum(0, keepdim=True).clamp_min(1e-30)
+    ref = torch.gather(X, 0, P.argmax(0, keepdim=True))
+    rel = X * ref.conj()
+    rel = rel / rel.abs().clamp_min(1e-30)
+    a = share.sqrt()
+    f = torch.stack(
+        [torch.log10(share.clamp_min(1e-4)), a * rel.real, a * rel.imag], 1
+    )  # (E, 3, K, T)
+    return f.permute(3, 0, 1, 2).float()
+
+
 class SalienceNet(nn.Module):
     """Fully convolutional over (time, frequency); no pooling or stride along
     frequency. Input (batch, harmonics, frames, bins); output the salience
@@ -208,6 +245,28 @@ class SalienceNet(nn.Module):
             for d in (spec.pair_dilations if spec.pair_head else ())
         )
         self.pair_norms = nn.ModuleList(nn.BatchNorm2d(c) for _ in self.pair_convs)
+        ce = spec.electrode_channels
+        self.el_convs = nn.ModuleList()
+        if ce:
+            if spec.electrode_into not in ("pair", "trunk"):
+                raise ValueError("electrode_into must be 'pair' or 'trunk'")
+            if spec.electrode_into == "pair" and not spec.pair_head:
+                raise ValueError("electrode_into 'pair' needs the pair head")
+            kb = spec.electrode_kernel_bins
+            n_in = ELECTRODE_FEATURES
+            for d in spec.electrode_dilations:
+                self.el_convs.append(
+                    nn.Conv2d(
+                        n_in,
+                        ce,
+                        (kt, kb),
+                        padding=(d * (kt // 2), kb // 2),
+                        dilation=(d, 1),
+                    )
+                )
+                n_in = ce
+            self.el_proj = nn.Conv2d(2 * ce, c, 1)
+            self.el_gate = nn.Parameter(torch.zeros(c))
         self.checkpoint = False
         """Training only: recompute each layer in the backward pass instead
         of keeping its activations (long crops of the temporal stack)."""
@@ -216,27 +275,61 @@ class SalienceNet(nn.Module):
     def context_frames(self) -> int:
         """Frames on each side that influence an output frame."""
         s = self.spec
-        trunk = sum(d * (s.kernel_frames // 2) for d in s.dilations)
-        trunk += sum(d * (s.temporal_kernel // 2) for d in s.temporal_dilations)
+        convs = sum(d * (s.kernel_frames // 2) for d in s.dilations)
+        el = self.electrode_context
+        if s.electrode_channels and s.electrode_into == "trunk":
+            convs = max(convs, el)
+        trunk = convs + sum(d * (s.temporal_kernel // 2) for d in s.temporal_dilations)
         if s.pair_head:
+            if s.electrode_channels and s.electrode_into == "pair":
+                trunk = max(trunk, el)
             trunk += sum(d * (s.kernel_frames // 2) for d in s.pair_dilations)
         return trunk
+
+    @property
+    def electrode_context(self) -> int:
+        """Frames on each side that influence the electrode branch's output."""
+        s = self.spec
+        if not s.electrode_channels:
+            return 0
+        return sum(d * (s.kernel_frames // 2) for d in s.electrode_dilations)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Salience logits and sub-bin offset (see `outputs` for all heads)."""
         out = self.outputs(x)
         return out["logits"], out["offset"]
 
-    def outputs(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+    def outputs(
+        self,
+        x: torch.Tensor,
+        el: torch.Tensor | None = None,
+        el_mask: torch.Tensor | None = None,
+        el_start: int = 0,
+    ) -> dict[str, torch.Tensor]:
         """All heads: ``logits`` and ``offset`` (batch, frames, bins) and,
         with the pair head, ``pair_logits`` (batch, frames, bins) and
         ``pair_offset`` (batch, 2, frames, bins), the offsets of the two
-        fish of a pair from the bin in bins (unordered)."""
-        y = self.trunk(x)
+        fish of a pair from the bin in bins (unordered).
+
+        `el` (batch, electrodes, 3, frames, bins): `electrode_features` of
+        the same frames and bins, for the electrode branch (None: the branch
+        adds nothing); `el_mask` (batch, electrodes) marks the electrodes
+        that are there (None: all), so a batch can mix electrode counts.
+        Training may pass fewer frames of `el`, starting at frame `el_start`
+        of `x` (the branch adds nothing outside them)."""
+        e = None
+        if self.el_convs and el is not None:
+            e = self.electrodes(el, el_mask)
+            pad = x.shape[2] - el_start - e.shape[2]
+            if el_start or pad:
+                e = F.pad(e, (0, 0, el_start, pad))
+        into_trunk = e is not None and self.spec.electrode_into == "trunk"
+        y = self.trunk(x, e if into_trunk else None)
         o = self.head(y)
         out = {"logits": o[:, 0], "offset": 0.5 * torch.tanh(o[:, 1])}
         if self.pair is not None:
-            q = self.pair(self.pair_branch(y))
+            yp = y if e is None or into_trunk else y + e
+            q = self.pair(self.pair_branch(yp))
             out["pair_logits"] = q[:, 0]
             out["pair_offset"] = self.spec.pair_reach * torch.tanh(q[:, 1:3])
         return out
@@ -247,13 +340,50 @@ class SalienceNet(nn.Module):
             y = y + _layer(conv, norm, y)
         return y
 
-    def trunk(self, x: torch.Tensor) -> torch.Tensor:
-        """Features (batch, channels, frames, bins) before the heads."""
+    def electrodes(
+        self, el: torch.Tensor, mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """Electrode features (batch, electrodes, 3, frames, bins) -> gated
+        contribution (batch, channels, frames, bins): the shared encoder on
+        every electrode, mean and maximum over the electrodes there."""
+        B, E = el.shape[:2]
+        if mask is None:
+            mask = torch.ones((B, E), dtype=torch.bool, device=el.device)
+        total = peak = None
+        for i in range(E):
+            if self.checkpoint and self.training and torch.is_grad_enabled():
+                h = torch.utils.checkpoint.checkpoint(
+                    self._encode, el[:, i], use_reentrant=False
+                )
+            else:
+                h = self._encode(el[:, i])
+            m = mask[:, i].to(h.dtype)[:, None, None, None]
+            total = h * m if total is None else total + h * m
+            hm = torch.where(m > 0, h, torch.full_like(h, -1e4))
+            peak = hm if peak is None else torch.maximum(peak, hm)
+        n = mask.sum(1).clamp_min(1).to(total.dtype)[:, None, None, None]
+        peak = torch.where(peak > -1e3, peak, torch.zeros_like(peak))
+        pooled = torch.cat([total / n, peak], 1)
+        return self.el_gate[None, :, None, None] * self.el_proj(pooled)
+
+    def _encode(self, x: torch.Tensor) -> torch.Tensor:
+        h = None
+        for conv in self.el_convs:
+            z = F.relu(conv(x if h is None else h))
+            h = z if h is None else h + z
+        return h
+
+    def trunk(self, x: torch.Tensor, e: torch.Tensor | None = None) -> torch.Tensor:
+        """Features (batch, channels, frames, bins) before the heads; `e` is
+        added after the convolutions (electrode branch into the trunk)."""
         layers = list(zip(self.convs, self.norms, strict=True)) + list(
             zip(self.temporal, self.temporal_norms, strict=True)
         )
+        n_convs = len(self.convs)
         y = None
-        for conv, norm in layers:
+        for i, (conv, norm) in enumerate(layers):
+            if e is not None and i == n_convs:
+                y = y + e
             inp = x if y is None else y
             if self.checkpoint and self.training and torch.is_grad_enabled():
                 h = torch.utils.checkpoint.checkpoint(
@@ -262,6 +392,8 @@ class SalienceNet(nn.Module):
             else:
                 h = _layer(conv, norm, inp)
             y = h if y is None else y + h
+        if e is not None and len(layers) == n_convs:
+            y = y + e
         return y
 
 
@@ -361,6 +493,21 @@ def default_model_path() -> Path:
     return Path(__file__).parent / "models" / "salience.pt"
 
 
+def _frames(z) -> int:
+    """Frames of block features (a tensor, or a tuple with electrodes)."""
+    return len(z[0]) if isinstance(z, tuple) else len(z)
+
+
+def _cat(parts: list):
+    if isinstance(parts[0], tuple):
+        return tuple(torch.cat(p) for p in zip(*parts, strict=True))
+    return torch.cat(parts)
+
+
+def _slice(z, sl: slice):
+    return tuple(t[sl] for t in z) if isinstance(z, tuple) else z[sl]
+
+
 def _mirror(x: torch.Tensor, left: int, right: int) -> torch.Tensor:
     """Extend frames (frames, bins) by `left` / `right` frames mirrored at
     the ends (without repeating the end frame), repeating the mirror if the
@@ -444,19 +591,27 @@ class StreamingSalience:
         s.model_info = {"path": str(path.resolve()), **meta}
         return s
 
-    def features(self, log_power: torch.Tensor) -> torch.Tensor:
+    def features(
+        self, log_power: torch.Tensor, stft: torch.Tensor | None = None
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """Log power (bins, frames) of one block -> normalised features
-        (frames, bins needed by the harmonic stack)."""
+        (frames, bins needed by the harmonic stack). With an electrode
+        branch and the block's complex spectra `stft` (electrodes, bins,
+        frames), also its `electrode_features` at the candidate bins."""
         k = min(self.k_need, log_power.shape[0])
-        return normalise(log_power[:k].T.to(self.device), self.df, self.spec.band_hz)
+        z = normalise(log_power[:k].T.to(self.device), self.df, self.spec.band_hz)
+        if not self.spec.electrode_channels or stft is None:
+            return z
+        el = electrode_features(stft.to(self.device), self.k_lo, self.k_hi)
+        return z, el
 
-    def push(self, z: torch.Tensor, payload: Any = None) -> list:
+    def push(self, z, payload: Any = None) -> list:
         """Add the features of the next block; returns the blocks that now
         have enough context on both sides."""
         self._queue.append((z, payload))
         out = []
         while self._queue:
-            after = sum(len(q[0]) for q in self._queue[1:])
+            after = sum(_frames(q[0]) for q in self._queue[1:])
             if after < self.ctx:
                 break
             out.append(self._pop())
@@ -473,29 +628,37 @@ class StreamingSalience:
     def _pop(self):
         z, payload = self._queue.pop(0)
         following = [q[0] for q in self._queue]
-        right = torch.cat(following)[: self.ctx] if following and self.ctx else None
+        right = (
+            _slice(_cat(following), slice(None, self.ctx))
+            if following and self.ctx
+            else None
+        )
         det = self._run(self._tail, z, right)
         self._advance(z)
         return det, payload
 
-    def _advance(self, z: torch.Tensor) -> None:
-        tail = z if self._tail is None else torch.cat([self._tail, z])
-        self._tail = tail[-self.ctx :] if self.ctx else tail[:0]
+    def _advance(self, z) -> None:
+        tail = z if self._tail is None else _cat([self._tail, z])
+        self._tail = _slice(tail, slice(-self.ctx, None) if self.ctx else slice(0, 0))
 
     @torch.no_grad()
     def _run(self, left, z, right):
-        parts = [p for p in (left, z, right) if p is not None and len(p)]
-        x = torch.cat(parts)
-        n_left = 0 if left is None else len(left)
+        parts = [p for p in (left, z, right) if p is not None and _frames(p)]
+        x = _cat(parts)
+        n_left = 0 if left is None else _frames(left)
         # the recording starts or ends here: mirror the data into the missing
         # context (the network was trained with real context on both sides)
         pad_l = self.ctx - n_left
-        pad_r = self.ctx - (0 if right is None else len(right))
+        pad_r = self.ctx - (0 if right is None else _frames(right))
+        el = None
+        if isinstance(x, tuple):
+            x, el = x
+            el = _mirror(el, pad_l, pad_r).permute(1, 2, 0, 3)[None]
         x = _mirror(x, pad_l, pad_r)
         n_left += max(pad_l, 0)
         stack = harmonic_stack(x, self.k_lo, self.k_hi, self.spec.harmonics)
-        out = self.model.outputs(stack[None])
-        sl = slice(n_left, n_left + len(z))
+        out = self.model.outputs(stack[None], el)
+        sl = slice(n_left, n_left + _frames(z))
         pair = {}
         if "pair_logits" in out:
             pair = {

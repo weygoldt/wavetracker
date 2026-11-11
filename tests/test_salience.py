@@ -10,6 +10,7 @@ from wavetracker.salience import (
     SalienceSpec,
     StreamingSalience,
     decode,
+    electrode_features,
     harmonic_stack,
     load_model,
     normalise,
@@ -518,3 +519,187 @@ def test_pair_branch_adds_its_context():
     assert rows.max() == 30 + net.context_frames
     sal = torch.nonzero((a["logits"] - b["logits"]).abs()[0].amax(1) > 0)
     assert sal.min() == 30 - (net.context_frames - 5)
+
+
+# --- electrode branch ----------------------------------------------------------
+
+
+def _two_fish_stft(E=5, K=8, T=40, seed=0, second=True):
+    """Complex spectra (electrodes, bins, frames): one fish at bin 3 with a
+    real (signed) pattern, optionally a second one 0.3 Hz higher."""
+    rng = np.random.default_rng(seed)
+    t = np.arange(T) * STEP
+    a1 = rng.normal(size=E)
+    a2 = rng.normal(size=E)
+    X = np.zeros((E, K, T), complex)
+    X[:, 3] = a1[:, None] * np.exp(2j * np.pi * 0.0 * t)[None] * np.exp(0.7j)
+    if second:
+        X[:, 3] += 0.8 * a2[:, None] * np.exp(2j * np.pi * 0.3 * t)[None]
+    X += 1e-4 * (rng.normal(size=X.shape) + 1j * rng.normal(size=X.shape))
+    return torch.as_tensor(X, dtype=torch.complex64)
+
+
+def test_electrode_features_tell_one_fish_from_two():
+    one = electrode_features(_two_fish_stft(second=False), 0, 7)
+    two = electrode_features(_two_fish_stft(), 0, 7)
+    assert one.shape == (40, 5, 3, 8)
+    # one fish: fixed shares, phases 0 or pi (sin ~ 0); two: both move
+    assert float(one[:, :, 2, 3].abs().max()) < 1e-3
+    assert float(one[:, :, 0, 3].std(0).max()) < 1e-3
+    assert float(two[:, :, 2, 3].abs().max()) > 0.1
+    assert float(two[:, :, 0, 3].std(0).max()) > 0.05
+    # gains and the common phase do not matter
+    g = electrode_features(_two_fish_stft() * 37.0 * np.exp(1j * 1.3), 0, 7)
+    torch.testing.assert_close(g, two, atol=1e-4, rtol=1e-4)
+    # silence stays finite
+    assert torch.isfinite(
+        electrode_features(torch.zeros(3, 8, 5, dtype=torch.complex64), 0, 7)
+    ).all()
+
+
+def _el_spec(**kw):
+    d = dict(
+        temporal_dilations=(1, 2),
+        pair_head=True,
+        pair_dilations=(1,),
+        electrode_channels=4,
+        electrode_dilations=(1, 2),
+    )
+    d.update(kw)
+    return small_spec(**d)
+
+
+def test_electrode_branch_starts_at_zero_and_any_count():
+    torch.manual_seed(9)
+    spec = _el_spec()
+    net = SalienceNet(spec).eval()
+    x = torch.randn(1, len(spec.harmonics), 30, 16)
+    el = electrode_features(_two_fish_stft(E=6, K=16, T=30), 0, 15).permute(1, 2, 0, 3)[
+        None
+    ]
+    with torch.no_grad():
+        a = net.outputs(x)
+        b = net.outputs(x, el)
+        for k in a:  # gate 0: the electrodes change nothing yet
+            torch.testing.assert_close(a[k], b[k])
+        net.el_gate.fill_(1.0)
+        c = net.outputs(x, el)
+        assert float((c["pair_logits"] - a["pair_logits"]).abs().max()) > 0
+        torch.testing.assert_close(c["logits"], a["logits"])  # into "pair"
+        # any order, and padded electrodes that are masked out
+        perm = net.outputs(x, el[:, [3, 0, 5, 1, 4, 2]])
+        torch.testing.assert_close(perm["pair_logits"], c["pair_logits"])
+        pad = torch.cat([el, torch.randn(1, 3, 3, 30, 16)], 1)
+        mask = torch.tensor([[True] * 6 + [False] * 3])
+        padded = net.outputs(x, pad, mask)
+        torch.testing.assert_close(padded["pair_logits"], c["pair_logits"])
+        # two electrodes work as well
+        two = net.outputs(x, el[:, :2])
+        assert torch.isfinite(two["pair_logits"]).all()
+
+
+def test_electrode_branch_into_trunk_changes_the_salience_and_context():
+    torch.manual_seed(10)
+    spec = _el_spec(
+        electrode_into="trunk", dilations=(1,), electrode_dilations=(1, 2, 4)
+    )
+    net = SalienceNet(spec).eval()
+    # electrode context (7) exceeds the convolutions' (1) before the temporal stack
+    assert net.context_frames == 7 + (1 + 2) + 1
+    with torch.no_grad():
+        net.el_gate.fill_(1.0)
+        x = torch.zeros(1, len(spec.harmonics), 50, 16)
+        el = torch.zeros(1, 3, 3, 50, 16)
+        a = net.outputs(x, el)
+        el2 = el.clone()
+        el2[0, :, :, 25, 8] = 1.0
+        b = net.outputs(x, el2)
+    rows = torch.nonzero((a["logits"] - b["logits"]).abs()[0].amax(1) > 0).flatten()
+    assert (
+        rows.min() >= 25 - net.context_frames and rows.max() <= 25 + net.context_frames
+    )
+    assert len(rows) > 0
+
+
+def test_streaming_with_electrodes_equals_one_pass():
+    torch.manual_seed(11)
+    for into in ("pair", "trunk"):
+        spec = _el_spec(electrode_into=into)
+        net = SalienceNet(spec).eval()
+        with torch.no_grad():
+            net.el_gate.fill_(2.0)
+            net.pair.bias[0] = 2.0
+        freqs = np.fft.rfftfreq(2**15, 1 / 20000.0)
+        rng = np.random.default_rng(12)
+        K = int(np.searchsorted(freqs, 5000))
+        T, E = 50, 4
+        stft = torch.as_tensor(
+            rng.normal(size=(E, K, T)) + 1j * rng.normal(size=(E, K, T)),
+            dtype=torch.complex64,
+        )
+        stft[:, 1310] *= 30
+        log = 10 * torch.log10(stft.abs().square().sum(0))
+
+        def run(block_sizes, net=net, spec=spec, freqs=freqs, log=log, stft=stft):
+            s = StreamingSalience(
+                net,
+                spec,
+                freqs,
+                STEP,
+                400,
+                1200,
+                0.3,
+                torch.device("cpu"),
+                pair_threshold=0.5,
+            )
+            out, f0 = [], 0
+            for n in block_sizes:
+                sl = slice(f0, f0 + n)
+                for det, payload in s.push(s.features(log[:, sl], stft[:, :, sl]), f0):
+                    out.append((det[0] + payload, det[2], det[3]))
+                f0 += n
+            for det, payload in s.finish():
+                out.append((det[0] + payload, det[2], det[3]))
+            fr = np.concatenate([o[0] for o in out])
+            fq = np.concatenate([o[1] for o in out])
+            sl_ = np.concatenate([o[2] for o in out])
+            order = np.lexsort((fq, fr))
+            return fr[order], fq[order], sl_[order]
+
+        whole = run([T])
+        blocks = run([9, 20, 2, 19])
+        assert len(whole[0]) > 0
+        for a, b in zip(whole, blocks, strict=True):
+            np.testing.assert_allclose(a, b, rtol=1e-4, atol=1e-5)
+
+
+def test_pipeline_learned_detector_with_electrodes(synthetic_wav, tmp_path):
+    """A model with an electrode branch reads the electrodes of the recording
+    inside `detect`, whatever its count, block by block."""
+    from wavetracker.pipeline import detect
+
+    path, _ = synthetic_wav
+    torch.manual_seed(13)
+    spec = _el_spec(electrode_into="trunk", pair_head=False, pair_dilations=())
+    net = SalienceNet(spec).eval()
+    with torch.no_grad():
+        net.el_gate.fill_(1.0)
+    model = tmp_path / "m.pt"
+    save_model(model, net, spec)
+    runs = []
+    for block in (60.0, 7.0):
+        cfg = Config()
+        cfg.detector.method = "learned"
+        cfg.detector.model = str(model)
+        cfg.detector.threshold = 0.2
+        cfg.harmonic_groups.min_freq, cfg.harmonic_groups.max_freq = 400.0, 1000.0
+        cfg.spectrogram.block_duration = block
+        cfg.interference.enabled = False
+        cfg.clicks.enabled = False
+        r = detect(path, tmp_path / f"b{block}", cfg, device="cpu").results
+        order = np.lexsort((r.fund_v, r.idx_v))
+        runs.append((r.idx_v[order], r.fund_v[order]))
+    assert len(runs[0][0]) > 0
+    n = min(len(runs[0][0]), len(runs[1][0]))
+    assert abs(len(runs[0][0]) - len(runs[1][0])) <= 1e-4 * len(runs[0][0]) + 1
+    np.testing.assert_allclose(runs[0][1][:n], runs[1][1][:n], atol=1e-3)
