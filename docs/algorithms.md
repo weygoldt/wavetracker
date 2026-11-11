@@ -241,6 +241,45 @@ frames or detections, and the model was trained on 9 and 2 electrodes and on
 change by about 4.5 dB rms within a minute, see
 [benchmarks](benchmarks.md#learned-fragment-linking)).
 
+## Joining across rises
+
+At a rise a fish's frequency jumps up by a few to about 60 Hz within about a
+second and decays back over 10-60 s. The jump is far beyond the tracker's
+tolerances and beyond the linker's candidates (`linking.max_df`, 5 Hz), so
+the fish goes on as a new identity, or the linker leaves it on two
+identities that take turns at its rises. With `rises.enabled` (off by
+default), `wavetracker.rises` joins such identities after linking (or
+stitching) and before `tracking.min_identity_salience`:
+
+1. **Stops and starts**: an identity *stops* where it has no detection for
+   `stop_gap` (2 s) after a detection, and *starts* where it has none for as
+   long before one. A start must be followed by at least `min_duration`
+   (1 s) of the identity.
+2. **Candidates**: a stop of A and a start of B (another identity) that
+   begins at most `max_gap` (5 s) after it, or up to `max_overlap` (4 s)
+   before it, between `min_jump` and `max_jump` (1.5-35 Hz) higher
+   (medians over `edge_window`, 1 s, at the two edges).
+3. **One fish?** The electrode patterns (mean power per electrode in dB,
+   relative to their mean) over `pattern_window` (5 s) before the stop and
+   after the start agree: rms difference at most `max_pattern_rms` (7 dB)
+   and correlation at least `min_pattern_corr` (0.5). A fish hardly moves
+   during a rise, while another fish that starts there usually sits
+   elsewhere on the grid. Near the noise a pattern is noise and two faint
+   fish look alike, so both sides need a mean detection salience of
+   `min_salience` (0.4).
+4. **Joins**: best pattern first, unless the two identities would share
+   more than `max_shared` (30 %) of the smaller one's frames.
+
+Detectors with temporal context report the old frequency for a few seconds
+after the onset (a ghost tail), and sometimes the new one a little before
+it, hence the overlap: when such a pair is joined, A's detections after B's
+start are dropped. The decay after the rise is not used: many rise pieces
+end, or the next rise starts, before they decay, and requiring a falling
+frequency lost more true joins than false ones. On the dense benchmark this
+raises IDF1 by 0.02 with the learned detector; about 1 in 11 of its joins
+puts two different fish together (see
+[benchmarks](benchmarks.md#rises-step-b)).
+
 ## Recordings without fish
 
 Field loggers start on the boat. For minutes the electrodes are out of the water,
