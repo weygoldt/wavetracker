@@ -61,6 +61,9 @@ def _purity(ident, fish):
 
 def test_off_by_default_and_unchanged_when_off():
     assert Config().pairs.enabled is False
+    # switched on, the pair head's detections come last; the resolver is opt-in
+    assert PairsConfig(enabled=True).partners == "fill"
+    assert PairsConfig(enabled=True).resolve is False
     s = _scene(*[lambda t, i=i: _flat_pair(t)[i] for i in (0, 1)])
     ident = s["fish"].astype(float)
     ident[(s["times"][s["idx"]] > 50)] = 1 - s["fish"][s["times"][s["idx"]] > 50]
@@ -143,7 +146,10 @@ def test_pairs_in_the_pipeline(stage):
         meta={},
     )
     cfg = Config.from_dict(
-        {"pairs": {"enabled": True, "stage": stage}, "linking": {"enabled": False}}
+        {
+            "pairs": {"enabled": True, "resolve": True, "stage": stage},
+            "linking": {"enabled": False},
+        }
     )
     track_results(res, cfg)
     assert res.meta["pairs_config"]["stage"] == stage

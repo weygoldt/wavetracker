@@ -300,6 +300,54 @@ raises IDF1 by 0.02 with the learned detector; about 1 in 11 of its joins
 puts two different fish together (see
 [benchmarks](benchmarks.md#rises-step-b)).
 
+## Two fish in one peak: the pair head's detections
+
+A pair head (see [Learned detector](#learned-detector)) adds a second
+detection to a peak that hides two fish. Tracked like any detection, the two
+detections of one peak hurt: they carry the electrode spectra of the same
+peak, so two thirds of the tracker's link error cannot tell them apart, and
+below about 0.2 Hz the frequency term cannot either. Within a pair episode
+the tracker hands the two fish back and forth, and the fish often leave the
+episode on each other's identity, or on new ones, and stay there. On the
+dense benchmark even a perfect pair head lowered IDF1, through the frames
+*after* the episodes (see
+[benchmarks](benchmarks.md#keeping-two-close-fish-apart-step-c)).
+
+The detector flags its second detections (`Results.split_v`, saved as
+`split_v.npy`). With `pairs.enabled` and `pairs.partners: fill`
+(`wavetracker.pairs`), they come last, as in ByteTrack's second association:
+
+1. Tracking, linking, the rise joiner and `tracking.min_identity_salience`
+   run without them, so every other detection gets exactly the identity it
+   would get from a detector without the pair head.
+2. Identities then grow into their gaps: in one sweep forward in time and
+   one backward, a second detection goes to an identity that has no
+   detection in its frame and whose latest detection (or a second detection
+   it already took) lies at most `fill_gap` (2 s) and `fill_df` (0.4 Hz)
+   away, the closest first. A fish whose own detection is missing while it
+   shares its neighbour's peak keeps its identity through those frames.
+3. With `pairs.partner_tracks` (seconds), the second detections no identity
+   took are tracked on their own; their tracks of at least that duration
+   become identities (they pass `tracking.min_identity_salience` like any
+   identity). These are fish hidden in another's peak for minutes, which
+   the confident detections alone never start.
+
+Results without flags (older runs, detectors without a pair head) are
+tracked as before. Any two detections closer than 1.2 Hz are *not* taken
+for a split: the learned detector also resolves neighbours that close, and
+holding them back cost IDF1.
+
+`pairs.resolve` (with `pairs.enabled`; off in the recommended configs) is a
+second, pattern-based tool: for every episode of two identities closer than
+`max_df` (2 Hz) in a frame, it compares their electrode patterns from
+detections clear of other lines (`clear_df`) just before and just after it,
+and if the fish fit better exchanged (by `margin`), the identities swap
+everything after the closest approach; `order` also orders the detections
+inside the episode by frequency. It helped a little when every split was
+tracked, but too few episodes have clean patterns on both sides (fish that
+weave among several neighbours have none), and on detections without a pair
+head it decided no better than the tracker and linker.
+
 ## Recordings without fish
 
 Field loggers start on the boat. For minutes the electrodes are out of the water,

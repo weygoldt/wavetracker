@@ -453,9 +453,12 @@ PAIRS_PARTNERS = ("track", "fill")
 
 @dataclass
 class PairsConfig:
-    """Two fish in one spectral peak (see wavetracker.pairs).
+    """Two fish in one spectral peak (see wavetracker.pairs): what to do with
+    the second detections a learned detector's pair head adds to peaks that
+    hide two fish (`partners`), and a pattern-based resolver (`resolve`).
 
-    Where two identities run closer than `max_df`, a pair episode, the two
+    Resolver: where two identities run closer than `max_df`, a pair episode,
+    the two
     detections of a shared peak carry the same electrode spectra and the
     tracker may hand each fish's future to the other. Each episode is
     decided as a unit: the electrode patterns of the two identities just
@@ -465,10 +468,10 @@ class PairsConfig:
     after the episode's closest approach."""
 
     enabled: bool = False
-    resolve: bool = True
+    resolve: bool = False
     """Decide every pair episode by the electrode patterns before and after
     it (see above)."""
-    partners: str = "track"
+    partners: str = "fill"
     """The second detection the learned detector's pair head adds to a peak
     (`detector.pair_threshold`, flagged in `Results.split_v`), its
     *partner*: "track" tracks it like any other; "fill" leaves it out of
