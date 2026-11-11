@@ -76,6 +76,9 @@ def strata(fr: dict) -> dict[str, float]:
     for lo, hi, name in NN_BANDS:
         m = (fr["nn_hz"] >= lo) & (fr["nn_hz"] < hi) & (fr["snr_db"] >= 6)
         out[f"nn {name}"] = float(fr["matched"][m].mean()) if m.any() else np.nan
+    for lo, hi, name in NN_BANDS:  # on the fish's own (IDF1) identity
+        m = (fr["nn_hz"] >= lo) & (fr["nn_hz"] < hi) & (fr["snr_db"] >= 6)
+        out[f"id nn {name}"] = float(fr["assigned"][m].mean()) if m.any() else np.nan
     return out
 
 
@@ -98,9 +101,11 @@ def main(argv=None):
         + [f"idf1 {g}" for g in GROUPS]
         + [f"snr {b[2]}" for b in SNR_BANDS]
         + [f"nn {b[2]}" for b in NN_BANDS]
+        + [f"id nn {b[2]}" for b in NN_BANDS]
     )
     print(
-        "recall by SNR band (all frames) and by nearest-line distance (frames with SNR ≥ 6 dB)"
+        "recall by SNR band (all frames) and by nearest-line distance (frames with "
+        "SNR ≥ 6 dB); id nn: those frames on the fish's own (IDF1) identity"
     )
     w = max([len(t + " / " + sp) for t, sp in table] + [28]) + 1
     print(f"{'':{w}s}" + "".join(f"{k[:13]:>14s}" for k in keys))
