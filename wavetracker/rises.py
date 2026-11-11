@@ -140,7 +140,7 @@ def join_rises(
         # the earlier identity's tail after the later one starts (a ghost)
         m = members[a]
         tail = m[(t_det[m] >= t_s) & (t_det[m] <= t_e)]
-        fa = np.setdiff1d(frames[ra], idx_v[tail], assume_unique=True)
+        fa = np.setdiff1d(frames[ra], np.unique(idx_v[tail]), assume_unique=True)
         fb = frames[rb]
         shared = len(np.intersect1d(fa, fb, assume_unique=True))
         if shared > cfg.max_shared * min(len(fa), len(fb)):
