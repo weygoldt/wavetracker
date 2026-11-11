@@ -667,7 +667,7 @@ experiment) does not help either (oracle 0.734, learned-b 0.751 with it, lab),
 nor does switching the linker off (0.659 / 0.635 against 0.677 / 0.652), so
 the swaps happen where the tracker joins its temporary identities. On the 17
 mixtures of `ldev2` that exist so far (lab noise) the oracle loses as well:
-0.747 against 0.765. Finding the second fish is not what limits close pairs;
+0.747 against 0.765, and the pair head (seed 0, threshold 0.3) 0.760. Finding the second fish is not what limits close pairs;
 keeping the two apart is. Figure: `figures/B-pair-results.png`.
 
 Next: the pair head is worth using once the tracker keeps the two fish of a

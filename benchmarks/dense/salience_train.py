@@ -1027,7 +1027,7 @@ def main(argv=None):
         ),
         sigma_hz=args.sigma_hz,
         workers=args.workers,
-        pair_hz=args.pair_hz if spec.pair_head else 0.0,
+        pair_hz=args.pair_hz if spec.pair_head or args.pair_focus else 0.0,
         pair_focus=args.pair_focus,
         el_frames=el_frames,
     )
