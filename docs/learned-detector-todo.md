@@ -31,6 +31,29 @@ Fix sketch:
 
 Check first on a few sources by eye (truth over the spectrogram at rises).
 
+## Confidence of tracks, not just of detections (2026-11-11, idea from the user)
+
+Report how sure we are that a track is a fish and that its identity is
+right, so users (and the eodsorter GUI) can see where to look. Today there
+is only the detector's salience per detection. Ideas, not decided:
+- per identity and per segment: mean and lowest salience, fraction of
+  frames detected, harmonic or line-like evidence (the network could get a
+  "line but not a fundamental" output);
+- per join: the linker's probability and the rise joiner's pattern match,
+  stored with the result, so weak joins can be reviewed;
+- calibration: check on the dev mixtures that a stated confidence matches
+  how often it is right (reliability curves), per detection and per join;
+- uncertainty from several models (two seeds or an ensemble) or from a
+  learned association model's link probabilities;
+- a confidence map over the spectrogram (salience plus association
+  confidence) shown in the GUI next to the tracks.
+
+## Why the boat take's constant fish is missed (in progress, branch learned-boatfish)
+
+The one fish present for the whole of `DR0000_0209` (probably the ~308 Hz
+line: v1 found it in 19 % of its frames, classic in 60 %) is barely
+tracked. Diagnosis only; the boat takes are not evaluation data.
+
 ## Close pairs (in progress, branches learned-pairtrack, learned-assocnet)
 
 Two fish closer than about 1.2 Hz are limited by association: even a
