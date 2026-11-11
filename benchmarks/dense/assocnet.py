@@ -52,10 +52,30 @@ MAX_DT = 2.0  # s, candidate edges
 MAX_DF = 2.5  # Hz
 
 
+MERGED_HZ = 0.5  # a fish without a detection this close to another's shares it
+
+
+def hidden_partner(res: Results, F: np.ndarray, fish: np.ndarray) -> np.ndarray:
+    """For every matched detection, the nearest other fish within MERGED_HZ
+    that has no detection of its own in that frame (the two fish make one
+    peak), else -1."""
+    n_fish, n_frames = F.shape
+    has = np.zeros((n_fish, n_frames), bool)
+    m = fish >= 0
+    has[fish[m], res.idx_v[m]] = True
+    d = np.abs(F[:, res.idx_v] - res.fund_v[None])  # (fish, det)
+    d[has[:, res.idx_v]] = np.inf  # fish with their own detection
+    d[~np.isfinite(d)] = np.inf
+    alt = d.argmin(0)
+    ok = m & (d[alt, np.arange(len(alt))] <= MERGED_HZ)
+    return np.where(ok, alt, -1)
+
+
 def build_one(res: Results, truth: dict) -> dict:
     F = truth_at(truth, res.times)
     Ff = truth_at(truth, res.times, "freqs_filled")
     fish = match(res, F)
+    alt = hidden_partner(res, F, fish)
     cls = classify_unmatched(res, F, Ff, fish)
     dt = res.times[1] - res.times[0]
     src, dst = assocnet.candidate_edges(
@@ -69,6 +89,7 @@ def build_one(res: Results, truth: dict) -> dict:
         "cplx": res.cplx_v.astype(np.complex64),
         "sal": res.sal_v.astype(np.float32),
         "fish": fish.astype(np.int16),
+        "fish_alt": alt.astype(np.int16),
         "cls": cls.astype(np.int8),
         "src": src.astype(np.int32),
         "dst": dst.astype(np.int32),
@@ -109,7 +130,9 @@ class Mixture:
     """One mixture in memory (CPU): inputs, labels, edges; crops go to the
     training device."""
 
-    def __init__(self, path: Path, device, hard_weight: float = 1.0):
+    def __init__(
+        self, path: Path, device, hard_weight: float = 1.0, merged: bool = False
+    ):
         import torch
 
         z = np.load(path)
@@ -123,6 +146,11 @@ class Mixture:
         src, dst = z["src"].astype(np.int64), z["dst"].astype(np.int64)
         fa, fb = fish[src], fish[dst]
         y = (fa == fb) & (fa >= 0)
+        if merged:  # a merged peak belongs to both fish
+            alt = z["fish_alt"].astype(np.int64)
+            aa, ab = alt[src], alt[dst]
+            y |= ((aa == fb) & (aa >= 0)) | ((fa == ab) & (fa >= 0))
+            y |= (aa == ab) & (aa >= 0)
         w = ((fa >= 0) | (fb >= 0)) & (cls[src] != 1) & (cls[dst] != 1)
         w = w.astype(np.float32)
         if hard_weight != 1.0:  # edges of detections with true and false candidates
@@ -153,11 +181,10 @@ class Mixture:
         s, t = self.src[e0:e1], self.dst[e0:e1]
         ok = t < hi
         s, t = s[ok] - lo, t[ok] - lo
-        sub = self.d.subset(torch.arange(lo, hi))
         dev = self.device
         sub = assocnet.Detections(
             **{
-                k: getattr(sub, k).to(dev, non_blocking=True)
+                k: getattr(self.d, k)[lo:hi].to(dev)
                 for k in assocnet.Detections.__dataclass_fields__
             }
         )
@@ -193,13 +220,18 @@ def concat(parts):
 
 
 def load_split(
-    split: str, device, pairs: bool, only=None, hard_weight: float = 1.0
+    split: str,
+    device,
+    pairs: bool,
+    only=None,
+    hard_weight: float = 1.0,
+    merged: bool = False,
 ) -> list[Mixture]:
     files = sorted((WORK / "data" / split).glob("*.npz"))
     files = [f for f in files if f.stem.endswith("-pairs") == pairs]
     if only:
         files = [f for f in files if any(o in f.stem for o in only)]
-    return [Mixture(f, device, hard_weight) for f in files]
+    return [Mixture(f, device, hard_weight, merged) for f in files]
 
 
 def evaluate(net, mixes, crop_frames, device):
@@ -231,17 +263,24 @@ def train(args):
     from torch.utils.tensorboard import SummaryWriter
 
     torch.manual_seed(args.seed)
+    torch.set_num_threads(args.threads)  # the CPU only cuts crops
     rng = np.random.default_rng(args.seed)
     device = torch.device(args.device)
     out = WORK / args.tag
     out.mkdir(parents=True, exist_ok=True)
     (out / "args.json").write_text(json.dumps(vars(args), indent=1))
-    hw = args.hard_weight
+    hw, mg = args.hard_weight, args.merged
     mixes = [
-        m for sp in args.train_splits for m in load_split(sp, device, False, None, hw)
+        m
+        for sp in args.train_splits
+        for m in load_split(sp, device, False, None, hw, mg)
     ]
     pair_mixes = (
-        [m for sp in args.train_splits for m in load_split(sp, device, True, None, hw)]
+        [
+            m
+            for sp in args.train_splits
+            for m in load_split(sp, device, True, None, hw, mg)
+        ]
         if args.pair_frac > 0
         else []
     )
@@ -426,6 +465,9 @@ def main(argv=None):
     t.add_argument("--el-hidden", type=int, default=32)
     t.add_argument("--pair-frac", type=float, default=0.0)
     t.add_argument(
+        "--merged", action="store_true", help="merged peaks belong to both fish"
+    )
+    t.add_argument(
         "--hard-weight",
         type=float,
         default=1.0,
@@ -434,6 +476,7 @@ def main(argv=None):
     t.add_argument("--val-every", type=int, default=500)
     t.add_argument("--seed", type=int, default=0)
     t.add_argument("--device", default="cuda")
+    t.add_argument("--threads", type=int, default=2, help="CPU threads of torch")
     f = sub.add_parser("frags")
     f.add_argument("-c", "--config", required=True)
     f.add_argument("--splits", nargs="+", default=["ldev", "ldev-field"])

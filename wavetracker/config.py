@@ -316,10 +316,10 @@ class TrackingConfig:
     assoc_mode: str = "link"
     """Learned association: "link" builds tracks from the learned links alone
     (frame by frame, links up to the model's horizon of a few seconds); "cost"
-    keeps the rule-based tracker (windows, temporary identities, gaps up to
-    max_dt and the options above) and replaces its error for links within the
-    model's horizon by 1 - the learned probability, dropping links below
-    assoc_threshold."""
+    keeps the rule-based tracker (windows, temporary identities, its
+    candidate tolerances, gaps up to max_dt and the options above) and
+    replaces its error for links within the model's horizon by 1 - the
+    learned probability, dropping links below assoc_threshold."""
     assoc_model: str | None = None
     """Weights of the learned association (method "learned"), trained with
     benchmarks/dense/assocnet.py; not packaged."""

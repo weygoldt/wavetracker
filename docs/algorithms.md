@@ -300,6 +300,58 @@ raises IDF1 by 0.02 with the learned detector; about 1 in 11 of its joins
 puts two different fish together (see
 [benchmarks](benchmarks.md#rises-step-b)).
 
+## Learned association
+
+The rule-based tracker scores links by a fixed error (two thirds the rank of
+the electrode-pattern distance, one third a sigmoid of the frequency
+difference). Where two fish cross or run within about a hertz of each other
+the two terms tie, and it swaps them. With `tracking.method: learned`
+(`wavetracker.assocnet`) a trained network scores the links instead, in the
+manner of tracking-by-detection with a learned association (Brasó &
+Leal-Taixé, CVPR 2020; Trackastra, Gallusser & Weigert, ECCV 2024):
+
+1. **Candidate graph**: every detection is linked to the detections of the
+   next 2 s whose frequency is within 2.5 Hz (the model's horizon, fixed at
+   training; frames are counted from the frame step, so any resolution
+   works).
+2. **Edge scores**: a message-passing network gives each link the
+   probability that both detections are one fish. Detections carry their
+   salience, the distance to the next lower and higher detection of their
+   frame, how many others are within 1.2 and 3 Hz, and their level over the
+   frame's median. Links carry the time and frequency step, the level change,
+   both saliences, and the two electrode patterns compared electrode by
+   electrode: power relative to the mean over electrodes, each electrode's
+   share, and the phase difference after removing the common phase (the
+   relative sign, from `cplx_v`). One small network encodes every electrode
+   and the results are pooled (mean and max), so any number of electrodes in
+   any order works. Three rounds of messages between detections and links,
+   with a detection's earlier and later links kept apart, let each link see
+   its competitors and the slopes of the lines around it over a few seconds.
+3. **Tracks**, by `tracking.assoc_mode`:
+   * `link` (default): frame by frame, the detections of a frame are
+     attached to tracks that end within the horizon before it, most probable
+     link first, down to `assoc_threshold`; each detection has at most one
+     successor. Tracks shorter than `assoc_min_detections` stay unassigned.
+   * `cost`: the rule-based tracker runs as configured (windows,
+     temporary identities, its frequency tolerances, gaps up to `max_dt`, `min_support`,
+     `motion_window`), but the error of a link within the horizon is 1 − its
+     learned probability, and links below `assoc_threshold` are dropped.
+     Longer links keep the rule-based error and come after all learned ones.
+
+Recordings of any length are scored in chunks of 3000 frames with the
+network's receptive field as context on both sides, so the scores do not
+depend on the chunking, and the tracks are built once over the whole
+recording, so identities do not change between chunks. The fragment linker,
+the rise joiner and `min_identity_salience` follow as with the rule-based
+tracker.
+
+The weights are not packaged. `benchmarks/dense/assocnet.py` trains them on
+the benchmark's `ltrain` mixtures: the detections of the learned detector are
+matched to the truth, a link is "same fish" when both ends are on one fish,
+and half of the training crops also hold the hidden fish of close pairs (two
+detections of one peak with the same spectra), so that the network learns to
+keep them apart.
+
 ## Recordings without fish
 
 Field loggers start on the boat. For minutes the electrodes are out of the water,

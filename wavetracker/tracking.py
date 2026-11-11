@@ -145,22 +145,22 @@ def _connections(
     error; ties keep the (origin, target) order of the original error cube.
 
     With learned link probabilities (`l_frames` > 0: edges of a in
-    l_dst[l_start[a]:l_start[a + 1]], sorted), a link up to `l_frames` frames
-    is a candidate if its probability is at least `l_threshold`, with error
-    1 - probability; longer links keep the rule-based error plus 1, so that
-    they come after every learned one."""
+    l_dst[l_start[a]:l_start[a + 1]], sorted), a candidate link up to
+    `l_frames` frames is kept if its probability is at least `l_threshold`,
+    with error 1 - probability; longer links keep the rule-based error plus
+    1, so that they come after every learned one."""
     # First pass: count, second pass: fill.
     n = 0
     for i in range(f0, f1):
         for a in range(frame_start[i], frame_start[i + 1]):
             for b in range(frame_start[i + 1], frame_start[i + comp_range + 1]):
-                if l_frames > 0 and idx[b] - idx[a] <= l_frames:
-                    if _learned_prob(l_start, l_dst, l_prob, a, b) >= l_threshold:
-                        n += 1
-                    continue
                 df = _freq_error(fund, idx, a, b, slope, frame_dt, motion, horizon)
                 if df < freq_tol and df < tol0 + tol_rate * (idx[b] - idx[a]):
-                    n += 1
+                    if l_frames > 0 and idx[b] - idx[a] <= l_frames:
+                        if _learned_prob(l_start, l_dst, l_prob, a, b) >= l_threshold:
+                            n += 1
+                    else:
+                        n += 1
     ca = np.empty(n, dtype=np.int64)
     cb = np.empty(n, dtype=np.int64)
     ce = np.empty(n)
@@ -169,16 +169,16 @@ def _connections(
     for i in range(f0, f1):
         for a in range(frame_start[i], frame_start[i + 1]):
             for b in range(frame_start[i + 1], frame_start[i + comp_range + 1]):
-                if l_frames > 0 and idx[b] - idx[a] <= l_frames:
-                    pr = _learned_prob(l_start, l_dst, l_prob, a, b)
-                    if pr >= l_threshold:
-                        ca[k] = a
-                        cb[k] = b
-                        ce[k] = 1.0 - pr
-                        k += 1
-                    continue
                 df = _freq_error(fund, idx, a, b, slope, frame_dt, motion, horizon)
                 if df < freq_tol and df < tol0 + tol_rate * (idx[b] - idx[a]):
+                    if l_frames > 0 and idx[b] - idx[a] <= l_frames:
+                        pr = _learned_prob(l_start, l_dst, l_prob, a, b)
+                        if pr >= l_threshold:
+                            ca[k] = a
+                            cb[k] = b
+                            ce[k] = 1.0 - pr
+                            k += 1
+                        continue
                     if n_dist > 0:
                         rel_a = (
                             A_WEIGHT
