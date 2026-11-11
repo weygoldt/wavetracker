@@ -290,7 +290,9 @@ def audit_joins(res, raw, fish, cfg, source):
         if cfg.linking.enabled
         else raw
     )
-    joined = join_rises(res.fund_v, res.idx_v, res.sign_v, linked, res.times, cfg.rises)
+    joined = join_rises(
+        res.fund_v, res.idx_v, res.sign_v, linked, res.times, cfg.rises, res.sal_v
+    )
     maj = majority_fish(linked, fish)
     n_join = n_false = n_same_source = 0
     ok = np.isfinite(linked) & np.isfinite(joined)
@@ -396,8 +398,11 @@ def summarize(results, label):
     if results[0].get("joins"):
         nj = sum(x["joins"]["joins"] for x in results)
         nf = sum(x["joins"]["false"] for x in results)
+        ns = sum(x["joins"].get("false_same_source", 0) for x in results)
         print(
-            f"  rise joins {nj / n:.1f} per mixture, between different fish {nf / n:.2f} ({nf / max(nj, 1):.3f})"
+            f"  rise joins {nj / n:.1f} per mixture, between different fish "
+            f"{nf / n:.2f} ({nf / max(nj, 1):.3f}), of these from one source "
+            f"recording {ns / max(nf, 1):.2f}"
         )
     br = [
         r
@@ -462,7 +467,7 @@ def plot(args):
         ):
             ax = axs[r, c]
             y = np.arange(len(shown))[::-1]
-            for i, (res, lab) in enumerate(((before, tb), (after, tn))):
+            for i, res in enumerate((before, after)):
                 if key == "count":
                     v = [
                         sum(x["outcome"] == o for m in res for x in m["rises"]) / n
@@ -471,7 +476,9 @@ def plot(args):
                 else:
                     v = [np.mean([m["cost"][o] for m in res]) for o in shown]
                 yy = y + 0.2 - 0.4 * i
-                ax.barh(yy, v, 0.36, color=SERIES[i], label=lab)
+                ax.barh(
+                    yy, v, 0.36, color=SERIES[i], label=("before", "with the change")[i]
+                )
                 for yv, vv in zip(yy, v, strict=True):
                     ax.text(
                         vv,
