@@ -377,7 +377,7 @@ def test_pair_head_outputs():
     x = torch.randn(2, len(spec.harmonics), 20, 30) * 3
     with torch.no_grad():
         out = net.outputs(x)
-        logits, offset = net(x)
+        logits, _ = net(x)
     torch.testing.assert_close(logits, out["logits"])
     assert out["pair_logits"].shape == (2, 20, 30)
     assert out["pair_offset"].shape == (2, 2, 20, 30)
@@ -421,7 +421,7 @@ def test_decode_does_not_split_a_peak_with_a_close_neighbour():
     pair[0, 10] = pair[0, 12] = 3.0
     poff[:, 0, 10] = torch.tensor([0.0, 2.0])
     poff[:, 0, 12] = torch.tensor([-2.0, 0.0])
-    fr, b, f, s = decode(logits, offset, 0.5, 100, DF, pair, poff, 0.5)
+    _, _, f, _ = decode(logits, offset, 0.5, 100, DF, pair, poff, 0.5)
     np.testing.assert_allclose(f, np.array([110, 112]) * DF)
 
 
@@ -430,7 +430,7 @@ def test_decode_keeps_pair_detections_inside_the_window():
     logits[0, 0] = 3.0
     pair[0, 0] = 3.0
     poff[:, 0, 0] = torch.tensor([-1.4, 0.3])
-    fr, b, f, s = decode(logits, offset, 0.5, 100, DF, pair, poff, 0.5)
+    _, b, f, _ = decode(logits, offset, 0.5, 100, DF, pair, poff, 0.5)
     np.testing.assert_allclose(f, np.array([98.6, 100.3]) * DF)
     assert list(b) == [100, 100]  # clamped to the candidate bins
 
