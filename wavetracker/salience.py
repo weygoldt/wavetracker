@@ -43,6 +43,10 @@ from torch import nn
 
 FORMAT = "wavetracker-salience"
 GRID_TOLERANCE = 0.01  # relative mismatch of resolution / frame step accepted
+PAIR_SPACING = 2
+"""A salience peak with another peak within this many bins is not split by
+the pair head (the salience resolves that pair; two equal tones are about two
+bins apart where they start to make two peaks)."""
 
 
 @dataclass(frozen=True)
@@ -73,6 +77,14 @@ class SalienceSpec:
     kernels let the temporal stack follow lines that drift across bins."""
     temporal_bin_dilations: tuple[int, ...] = ()
     """Frequency dilation of each temporal layer (empty: 1 for all)."""
+    pair_head: bool = False
+    """A second head says, at every bin, whether two fundamentals closer than
+    the window resolves (one spectral peak) are there, with the sub-bin
+    offsets of both: a salience peak with a high pair probability becomes two
+    detections (see `decode`). False: one detection per peak (v1)."""
+    pair_reach: float = 2.5
+    """Largest offset of a fish of a pair from its bin [bins of the model's
+    grid] the pair head can give."""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SalienceSpec:
@@ -185,6 +197,7 @@ class SalienceNet(nn.Module):
             nn.BatchNorm2d(c) for _ in spec.temporal_dilations
         )
         self.head = nn.Conv2d(c, 2, 1)
+        self.pair = nn.Conv2d(c, 3, 1) if spec.pair_head else None
         self.checkpoint = False
         """Training only: recompute each layer in the backward pass instead
         of keeping its activations (long crops of the temporal stack)."""
@@ -197,6 +210,26 @@ class SalienceNet(nn.Module):
         return trunk + sum(d * (s.temporal_kernel // 2) for d in s.temporal_dilations)
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Salience logits and sub-bin offset (see `outputs` for all heads)."""
+        out = self.outputs(x)
+        return out["logits"], out["offset"]
+
+    def outputs(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        """All heads: ``logits`` and ``offset`` (batch, frames, bins) and,
+        with the pair head, ``pair_logits`` (batch, frames, bins) and
+        ``pair_offset`` (batch, 2, frames, bins), the offsets of the two
+        fish of a pair from the bin in bins (unordered)."""
+        y = self.trunk(x)
+        o = self.head(y)
+        out = {"logits": o[:, 0], "offset": 0.5 * torch.tanh(o[:, 1])}
+        if self.pair is not None:
+            q = self.pair(y)
+            out["pair_logits"] = q[:, 0]
+            out["pair_offset"] = self.spec.pair_reach * torch.tanh(q[:, 1:3])
+        return out
+
+    def trunk(self, x: torch.Tensor) -> torch.Tensor:
+        """Features (batch, channels, frames, bins) before the heads."""
         layers = list(zip(self.convs, self.norms, strict=True)) + list(
             zip(self.temporal, self.temporal_norms, strict=True)
         )
@@ -210,8 +243,7 @@ class SalienceNet(nn.Module):
             else:
                 h = _layer(conv, norm, inp)
             y = h if y is None else y + h
-        o = self.head(y)
-        return o[:, 0], 0.5 * torch.tanh(o[:, 1])
+        return y
 
 
 def _layer(conv: nn.Module, norm: nn.Module, x: torch.Tensor) -> torch.Tensor:
@@ -224,10 +256,20 @@ def decode(
     threshold: float,
     k_lo: int,
     df: float,
+    pair_logits: torch.Tensor | None = None,
+    pair_offset: torch.Tensor | None = None,
+    pair_threshold: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Salience peaks along frequency above `threshold` -> (frame, bin,
     frequency [Hz], salience). A peak is at least its lower neighbour and
-    above its upper one, so plateaus give one detection."""
+    above its upper one, so plateaus give one detection.
+
+    With the pair head (`pair_logits`, `pair_offset` (2, frames, bins)), a
+    peak whose pair probability reaches `pair_threshold` (default
+    `threshold`) and that has no other peak within ``PAIR_SPACING`` bins
+    becomes two detections, at the two pair offsets (each with the peak's
+    salience and the bin nearest its frequency). A peak with a neighbour that
+    close is one fish of a pair the salience already resolves."""
     p = torch.sigmoid(logits.float())
     left = F.pad(p, (1, 0), value=-1.0)[:, :-1]
     right = F.pad(p, (0, 1), value=-1.0)[:, 1:]
@@ -235,11 +277,37 @@ def decode(
     fr, kk = torch.nonzero(peak, as_tuple=True)
     bins = kk + k_lo
     freq = (bins.double() + offset[fr, kk].double()) * df
+    sal = p[fr, kk]
+    if pair_logits is not None and pair_offset is not None and len(fr):
+        thr = threshold if pair_threshold is None else pair_threshold
+        r = PAIR_SPACING
+        # peaks within r bins, the peak itself included
+        n_near = F.avg_pool1d(
+            F.pad(peak.float(), (r, r))[:, None], 2 * r + 1, stride=1
+        )[:, 0] * (2 * r + 1)
+        split = (torch.sigmoid(pair_logits.float()[fr, kk]) >= thr) & (
+            n_near[fr, kk] < 1.5
+        )
+        if bool(split.any()):
+            keep = ~split
+            fs, ks = fr[split], kk[split]
+            off = pair_offset.float()[:, fs, ks].double()  # (2, n)
+            k2 = (ks + k_lo).double()[None] + off
+            n_bins = logits.shape[-1]
+            b2 = torch.round(k2).long().clamp(k_lo, k_lo + n_bins - 1)
+            fr = torch.cat([fr[keep], fs, fs])
+            bins = torch.cat([bins[keep], b2[0], b2[1]])
+            freq = torch.cat([freq[keep], k2[0] * df, k2[1] * df])
+            sal = torch.cat([sal[keep], sal[split], sal[split]])
+            order = torch.from_numpy(
+                np.lexsort((freq.cpu().numpy(), fr.cpu().numpy()))
+            ).to(fr.device)
+            fr, bins, freq, sal = fr[order], bins[order], freq[order], sal[order]
     return (
         fr.cpu().numpy().astype(np.int64),
         bins.cpu().numpy().astype(np.int64),
         freq.cpu().numpy(),
-        p[fr, kk].cpu().numpy().astype(np.float32),
+        sal.cpu().numpy().astype(np.float32),
     )
 
 
@@ -310,6 +378,7 @@ class StreamingSalience:
         max_freq: float,
         threshold: float,
         device: torch.device,
+        pair_threshold: float | None = None,
     ):
         df = float(freqs[1])
         if abs(df - spec.freq_resolution) > GRID_TOLERANCE * spec.freq_resolution:
@@ -325,6 +394,9 @@ class StreamingSalience:
             )
         self.model, self.spec, self.device = model, spec, device
         self.df, self.threshold = df, float(threshold)
+        self.pair_threshold = pair_threshold
+        """Pair head: pair probability at which a peak becomes two detections
+        (None: `threshold`; models without the head ignore it)."""
         self.k_lo = max(1, math.ceil(min_freq / df))
         self.k_hi = min(len(freqs) - 1, math.floor(max_freq / df))
         if self.k_hi < self.k_lo:
@@ -340,7 +412,15 @@ class StreamingSalience:
         path = Path(dc.model).expanduser() if dc.model else default_model_path()
         model, spec, meta = load_model(path, device)
         s = cls(
-            model, spec, freqs, frame_step, min_freq, max_freq, dc.threshold, device
+            model,
+            spec,
+            freqs,
+            frame_step,
+            min_freq,
+            max_freq,
+            dc.threshold,
+            device,
+            pair_threshold=getattr(dc, "pair_threshold", None),
         )
         s.model_info = {"path": str(path.resolve()), **meta}
         return s
@@ -395,6 +475,20 @@ class StreamingSalience:
         x = _mirror(x, pad_l, pad_r)
         n_left += max(pad_l, 0)
         stack = harmonic_stack(x, self.k_lo, self.k_hi, self.spec.harmonics)
-        logits, offset = self.model(stack[None])
+        out = self.model.outputs(stack[None])
         sl = slice(n_left, n_left + len(z))
-        return decode(logits[0, sl], offset[0, sl], self.threshold, self.k_lo, self.df)
+        pair = {}
+        if "pair_logits" in out:
+            pair = {
+                "pair_logits": out["pair_logits"][0, sl],
+                "pair_offset": out["pair_offset"][0, :, sl],
+                "pair_threshold": self.pair_threshold,
+            }
+        return decode(
+            out["logits"][0, sl],
+            out["offset"][0, sl],
+            self.threshold,
+            self.k_lo,
+            self.df,
+            **pair,
+        )

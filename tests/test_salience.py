@@ -349,3 +349,149 @@ def test_temporal_stack_can_follow_drifting_lines():
     assert rows.max() == 30 + net.context_frames
     reach = 3 * (spec.kernel_bins // 2) + (1 + 1 + 2)
     assert cols.min() == 30 - reach and cols.max() == 30 + reach
+
+
+# --- pair head: two fish in one spectral peak --------------------------------
+
+
+def test_models_without_pair_head_load_and_run_as_before(tmp_path):
+    """Specs saved before the pair head existed rebuild without it: the same
+    parameters, the same two outputs."""
+    spec = small_spec()
+    d = {k: v for k, v in spec.__dict__.items() if not k.startswith("pair")}
+    old = SalienceSpec.from_dict(d)
+    assert old.pair_head is False
+    net = SalienceNet(old).eval()
+    assert not any(k.startswith("pair") for k in net.state_dict())
+    x = torch.randn(1, len(spec.harmonics), 20, 30)
+    with torch.no_grad():
+        out = net(x)
+        full = net.outputs(x)
+    assert len(out) == 2 and set(full) == {"logits", "offset"}
+    torch.testing.assert_close(out[0], full["logits"])
+
+
+def test_pair_head_outputs():
+    spec = small_spec(pair_head=True, pair_reach=2.5)
+    net = SalienceNet(spec).eval()
+    x = torch.randn(2, len(spec.harmonics), 20, 30) * 3
+    with torch.no_grad():
+        out = net.outputs(x)
+        logits, offset = net(x)
+    torch.testing.assert_close(logits, out["logits"])
+    assert out["pair_logits"].shape == (2, 20, 30)
+    assert out["pair_offset"].shape == (2, 2, 20, 30)
+    assert float(out["pair_offset"].abs().max()) <= 2.5
+
+
+def _peaks(T=1, F=40):
+    logits = torch.full((T, F), -8.0)
+    offset = torch.zeros(T, F)
+    pair = torch.full((T, F), -8.0)
+    poff = torch.zeros(2, T, F)
+    return logits, offset, pair, poff
+
+
+def test_decode_splits_a_pair_peak_into_two_detections():
+    logits, offset, pair, poff = _peaks()
+    logits[0, 10] = 3.0
+    offset[0, 10] = 0.2
+    pair[0, 10] = 2.0
+    poff[:, 0, 10] = torch.tensor([0.9, -0.7])  # unordered
+    logits[0, 25] = 3.0  # a single fish
+    offset[0, 25] = -0.1
+    poff[:, 0, 25] = torch.tensor([1.0, -1.0])  # ignored: pair probability low
+    fr, b, f, s = decode(logits, offset, 0.5, 100, DF, pair, poff, 0.5)
+    np.testing.assert_allclose(f, np.array([109.3, 110.9, 124.9]) * DF)
+    assert list(fr) == [0, 0, 0]
+    assert list(b) == [109, 111, 125]  # the bin nearest each frequency
+    assert s[0] == s[1] and s[0] > 0.9
+    # without the pair outputs (or below the pair threshold): one per peak
+    one = decode(logits, offset, 0.5, 100, DF)
+    np.testing.assert_allclose(one[2], np.array([110.2, 124.9]) * DF)
+    high = decode(logits, offset, 0.5, 100, DF, pair, poff, 0.95)
+    np.testing.assert_allclose(high[2], one[2])
+
+
+def test_decode_does_not_split_a_peak_with_a_close_neighbour():
+    """Two fish the salience already shows as two peaks (2 bins apart) stay
+    two detections, even where the pair head flags both."""
+    logits, offset, pair, poff = _peaks()
+    logits[0, 10], logits[0, 11], logits[0, 12] = 3.0, 0.0, 2.5
+    pair[0, 10] = pair[0, 12] = 3.0
+    poff[:, 0, 10] = torch.tensor([0.0, 2.0])
+    poff[:, 0, 12] = torch.tensor([-2.0, 0.0])
+    fr, b, f, s = decode(logits, offset, 0.5, 100, DF, pair, poff, 0.5)
+    np.testing.assert_allclose(f, np.array([110, 112]) * DF)
+
+
+def test_decode_keeps_pair_detections_inside_the_window():
+    logits, offset, pair, poff = _peaks(F=10)
+    logits[0, 0] = 3.0
+    pair[0, 0] = 3.0
+    poff[:, 0, 0] = torch.tensor([-1.4, 0.3])
+    fr, b, f, s = decode(logits, offset, 0.5, 100, DF, pair, poff, 0.5)
+    np.testing.assert_allclose(f, np.array([98.6, 100.3]) * DF)
+    assert list(b) == [100, 100]  # clamped to the candidate bins
+
+
+def test_streaming_with_pair_head_equals_one_pass():
+    torch.manual_seed(6)
+    spec = small_spec(dilations=(1, 2), temporal_dilations=(1, 4), pair_head=True)
+    net = SalienceNet(spec).eval()
+    with torch.no_grad():  # make the pair head fire often
+        net.pair.bias[0] = 3.0
+    freqs = np.fft.rfftfreq(2**15, 1 / 20000.0)
+    rng = np.random.default_rng(7)
+    K = int(np.searchsorted(freqs, 5000))
+    log = torch.as_tensor(
+        10 * np.log10(rng.exponential(1.0, (K, 60))), dtype=torch.float32
+    )
+    log[1310] += 15
+
+    def run(block_sizes):
+        s = StreamingSalience(
+            net,
+            spec,
+            freqs,
+            STEP,
+            400,
+            1200,
+            0.3,
+            torch.device("cpu"),
+            pair_threshold=0.5,
+        )
+        out, f0 = [], 0
+        for n in block_sizes:
+            for det, payload in s.push(s.features(log[:, f0 : f0 + n]), f0):
+                out.append((det[0] + payload, det[2], det[3]))
+            f0 += n
+        for det, payload in s.finish():
+            out.append((det[0] + payload, det[2], det[3]))
+        fr = np.concatenate([o[0] for o in out])
+        fq = np.concatenate([o[1] for o in out])
+        sl = np.concatenate([o[2] for o in out])
+        order = np.lexsort((fq, fr))
+        return fr[order], fq[order], sl[order]
+
+    whole = run([60])
+    blocks = run([7, 20, 3, 30])
+    no_pair = StreamingSalience(
+        net, spec, freqs, STEP, 400, 1200, 0.3, torch.device("cpu"), pair_threshold=1.0
+    )
+    single = sum(
+        len(d[0]) for d, _ in no_pair.push(no_pair.features(log)) + no_pair.finish()
+    )
+    assert len(whole[0]) > single  # pairs were split
+    for a, b in zip(whole, blocks, strict=True):
+        np.testing.assert_allclose(a, b, rtol=1e-4, atol=1e-5)
+
+
+def test_detector_config_pair_threshold():
+    assert DetectorConfig().pair_threshold is None
+    cfg = Config.from_dict(
+        {"detector": {"method": "learned", "threshold": 0.6, "pair_threshold": 0.4}}
+    )
+    assert cfg.detector.pair_threshold == 0.4
+    with pytest.raises(ValueError, match="pair_threshold"):
+        DetectorConfig(pair_threshold=1.5)
