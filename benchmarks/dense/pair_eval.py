@@ -50,7 +50,7 @@ def evaluate(path: Path, n_crops: int, frames: int, bins: int, thr: float, dev) 
     T = frames + 2 * ctx
     res = {}
     for gain, name in ((0.0, "lab"), (1.0, "field")):
-        score, label, hit = [], [], []
+        score, label, hit, err2, err_add, err_rep = [], [], [], [], [], []
         for m in data.mixes:
             for _ in range(n_crops):
                 j0 = int(rng.integers(0, m.n_frames - T))
@@ -99,11 +99,30 @@ def evaluate(path: Path, n_crops: int, frames: int, bins: int, thr: float, dev) 
                 score.append(q.cpu().numpy()[has_fish])
                 label.append(is_pair[has_fish])
                 hit.append((np.abs(f2 - f_second) <= 1.2)[has_fish])
-        score, label, hit = (np.concatenate(v) for v in (score, label, hit))
+                err2.append(np.abs(f2 - f_second)[has_fish])
+                # both detections of a split against both fish: the peak's own
+                # and the far offset ("add", as decode does), or both pair
+                # offsets ("replace"); mean error of the best assignment
+                i1 = np.argsort(d, 0)[0]
+                f_first = tf[i1, np.arange(tf.shape[1])]
+                lo_f = np.minimum(f_first, f_second)
+                hi_f = np.maximum(f_first, f_second)
+                pl = ((kk + k_lo).double()[None] + po).cpu().numpy() * DF
+                a = np.minimum(f_own, f2)
+                b = np.maximum(f_own, f2)
+                err_add.append((0.5 * (np.abs(a - lo_f) + np.abs(b - hi_f)))[has_fish])
+                a, b = pl.min(0), pl.max(0)
+                err_rep.append((0.5 * (np.abs(a - lo_f) + np.abs(b - hi_f)))[has_fish])
+        score, label, hit, err2, err_add, err_rep = (
+            np.concatenate(v) for v in (score, label, hit, err2, err_add, err_rep)
+        )
         r = {
             "auc": wauc(score[label], score[~label], np.ones((~label).sum())),
             "n_pair": int(label.sum()),
             "n_single": int((~label).sum()),
+            "err_second_hz": float(np.median(err2[label])),
+            "err_add_hz": float(np.median(err_add[label])),
+            "err_replace_hz": float(np.median(err_rep[label])),
         }
         for t in PAIR_THRESHOLDS:
             r[f"pairs split @{t}"] = float((score[label] >= t).mean())
@@ -133,7 +152,9 @@ def main(argv=None):
             )
             print(
                 f"{m} {name}: AUC {r['auc']:.3f} ({r['n_pair']} pair / {r['n_single']} "
-                f"single peaks); second found / singles split: {cells}",
+                f"single peaks), median error of the second detection "
+                f"{r['err_second_hz']:.2f} Hz (both, add / replace: {r['err_add_hz']:.2f} / "
+                f"{r['err_replace_hz']:.2f} Hz); second found / singles split: {cells}",
                 flush=True,
             )
 
