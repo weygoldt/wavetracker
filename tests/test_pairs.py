@@ -153,3 +153,122 @@ def test_pairs_in_the_pipeline(stage):
 def test_stage_must_be_known():
     with pytest.raises(ValueError, match="stage"):
         PairsConfig(stage="somewhere")
+
+
+def test_the_weaker_detection_of_a_split_peak_is_its_partner():
+    from wavetracker.pairs import split_partners
+
+    fund = np.array([600.0, 600.4, 610.0, 600.0, 601.5])
+    idx = np.array([0, 0, 0, 1, 1])
+    sal = np.array([0.9, 0.4, 0.8, 0.9, 0.5])
+    np.testing.assert_array_equal(
+        split_partners(fund, idx, sal, 1.2), [False, True, False, False, False]
+    )
+    # equal salience: the later of the two in the arrays
+    sal[1] = 0.9
+    assert split_partners(fund, idx, sal, 1.2)[1]
+
+
+def _gap_scene(df=0.05):
+    """A at 600 Hz throughout; B at 600.5 Hz, its own detections missing from
+    40 to 60 s, where split partners of A's peak run along B's path (off it
+    by `df`)."""
+    times = np.arange(0.0, 100.0, DT)
+    n = len(times)
+    t_b = (times < 40) | (times > 60)
+    n_p = (~t_b).sum()
+    fund = np.r_[np.full(n, 600.0), np.full(t_b.sum(), 600.5), np.full(n_p, 600.5 - df)]
+    idx = np.r_[np.arange(n), np.flatnonzero(t_b), np.flatnonzero(~t_b)]
+    ident = np.r_[np.zeros(n), np.ones(t_b.sum()), np.full(n_p, np.nan)]
+    partner = np.r_[np.zeros(n + t_b.sum(), bool), np.ones(n_p, bool)]
+    o = np.lexsort((fund, idx))
+    return fund[o], idx[o], ident[o], partner[o], times
+
+
+def test_partners_fill_the_gap_of_the_identity_whose_path_they_are_on():
+    from wavetracker.pairs import fill_partners
+
+    fund, idx, ident, partner, times = _gap_scene()
+    out = fill_partners(fund, idx, ident, partner, times, ON)
+    np.testing.assert_array_equal(out[~partner], ident[~partner])
+    assert (out[partner] == 1).all()
+
+
+def test_partners_off_the_path_or_after_a_gap_stay_unassigned():
+    from wavetracker.pairs import fill_partners
+
+    fund, idx, ident, partner, times = _gap_scene(df=0.6)
+    out = fill_partners(fund, idx, ident, partner, times, ON)
+    assert not np.isfinite(out[partner]).any()
+    # partners only from 45 s on: more than fill_gap after B's last detection
+    fund, idx, ident, partner, times = _gap_scene()
+    late = partner & (times[idx] < 45)
+    keep = ~late
+    out = fill_partners(fund[keep], idx[keep], ident[keep], partner[keep], times, ON)
+    t = times[idx[keep]]
+    p = partner[keep]
+    # reached from B's next detection at 60 s, backward
+    assert (out[p] == 1).all()
+    out = fill_partners(
+        fund[keep],
+        idx[keep],
+        ident[keep],
+        partner[keep],
+        times,
+        PairsConfig(fill_gap=1.0),
+    )
+    assert (out[p] == 1).all()  # frame by frame, each step is short
+    assert t[p].min() >= 45
+
+
+def test_a_partner_does_not_take_an_identity_present_in_its_frame():
+    from wavetracker.pairs import fill_partners
+
+    fund, idx, ident, partner, times = _gap_scene()
+    ident[partner] = np.nan
+    ident[~partner & (ident == 0)] = 1.0  # B's identity holds A's peak too
+    ident[~partner & (fund == 600.5)] = 1.0
+    out = fill_partners(fund, idx, ident, partner, times, ON)
+    assert not np.isfinite(out[partner]).any()
+
+
+def test_split_partners_do_not_change_the_other_identities():
+    from wavetracker.pipeline import track_results
+    from wavetracker.results import Results
+
+    s = _scene(*[lambda t, i=i: _flat_pair(t)[i] for i in (0, 1)])
+    sal = np.full(len(s["fund"]), 0.9)
+    t = s["times"][s["idx"]]
+    # in the shared peak, B's detection is a weaker split partner
+    in_peak = (s["fish"] == 1) & (np.abs(s["fund"] - 600.0) < 1.2)
+    sal[in_peak] = 0.5
+
+    def run(keep, partners):
+        res = Results(
+            fund_v=s["fund"][keep],
+            idx_v=s["idx"][keep],
+            sign_v=s["sign"][keep],
+            ident_v=np.full(keep.sum(), np.nan),
+            times=s["times"],
+            meta={},
+            sal_v=sal[keep],
+        )
+        cfg = Config.from_dict(
+            {
+                "pairs": {"enabled": True, "resolve": False, "partners": partners},
+                "linking": {"enabled": False},
+            }
+        )
+        track_results(res, cfg)
+        return res.ident_v
+
+    alone = run(~in_peak, "track")
+    filled = run(np.ones(len(sal), bool), "fill")
+    np.testing.assert_array_equal(filled[~in_peak], alone)
+    assert np.isfinite(filled[in_peak]).mean() > 0.9
+    assert t[in_peak].min() > 40
+
+
+def test_partners_must_be_known():
+    with pytest.raises(ValueError, match="partners"):
+        PairsConfig(partners="somewhere")

@@ -448,6 +448,7 @@ class RisesConfig:
 
 
 PAIRS_STAGES = ("tracking", "linking")
+PAIRS_PARTNERS = ("track", "fill")
 
 
 @dataclass
@@ -464,10 +465,31 @@ class PairsConfig:
     after the episode's closest approach."""
 
     enabled: bool = False
+    resolve: bool = True
+    """Decide every pair episode by the electrode patterns before and after
+    it (see above)."""
+    partners: str = "track"
+    """The weaker detection of a split peak (two detections in a frame closer
+    than `split_df`), its *partner*: "track" tracks it like any other;
+    "fill" leaves it out of tracking, linking and the rise joiner, so the
+    identities of all other detections are what they would be without it,
+    and then lets the identities grow into their gaps: a partner goes to an
+    identity that has no detection in its frame and whose latest detection
+    (or a partner it took) is at most `fill_gap` before it and `fill_df`
+    away, the closest first, in one sweep forward in time and one backward
+    (ByteTrack's second association: confident detections first, the others
+    only extend identities)."""
+    split_df: float = 1.2
+    """Two detections in a frame closer than this are one split peak [Hz]."""
+    fill_gap: float = 2.0
+    """Largest step in time from an identity's latest detection to a partner
+    it takes [s] ..."""
+    fill_df: float = 0.4
+    """... and in frequency [Hz]."""
     stage: str = "linking"
     """Where: "tracking" (on the tracker's identities, before linking or
     stitching) or "linking" (after linking and the rise joiner, before
-    `tracking.min_identity_salience`)."""
+    `tracking.min_identity_salience`) for the resolver."""
     max_df: float = 2.0
     """Two identities with detections in one frame closer than this are in a
     pair episode [Hz]."""
@@ -499,6 +521,10 @@ class PairsConfig:
         if self.stage not in PAIRS_STAGES:
             raise ValueError(
                 f"pairs.stage must be one of {PAIRS_STAGES}, not {self.stage!r}"
+            )
+        if self.partners not in PAIRS_PARTNERS:
+            raise ValueError(
+                f"pairs.partners must be one of {PAIRS_PARTNERS}, not {self.partners!r}"
             )
 
 

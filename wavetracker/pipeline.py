@@ -19,7 +19,7 @@ from .harmonics import Detections, absolute_limit_binds, detect_harmonic_groups
 from .interference import CombCanceller, merge_tooth_neighbours
 from .io import FrameLayout, iter_blocks, open_recording, resolve_input
 from .linking import link
-from .pairs import resolve_pairs
+from .pairs import fill_partners, resolve_pairs, split_partners
 from .results import Results
 from .rises import join_rises
 from .salience import StreamingSalience
@@ -546,11 +546,56 @@ def detect(
     return DetectionOutput(results, timings)
 
 
+def _subset(results: Results, keep: np.ndarray) -> Results:
+    def sel(v):
+        return None if v is None else v[keep]
+
+    return Results(
+        fund_v=results.fund_v[keep],
+        idx_v=results.idx_v[keep],
+        sign_v=results.sign_v[keep],
+        ident_v=results.ident_v[keep],
+        times=results.times,
+        meta=results.meta,
+        cplx_v=sel(results.cplx_v),
+        sal_v=sel(results.sal_v),
+    )
+
+
 def track_results(results: Results, cfg: Config) -> float:
     """Assign identities in place; returns the time it took."""
     t0 = time.perf_counter()
     if cfg.tracking.min_identity_salience is not None and results.sal_v is None:
         raise ValueError(_no_salience("min_identity_salience"))
+    if cfg.pairs.enabled and cfg.pairs.partners == "fill":
+        # split partners second: everything else is tracked without them
+        partner = split_partners(
+            results.fund_v, results.idx_v, results.sal_v, cfg.pairs.split_df
+        )
+        sub = _subset(results, ~partner)
+        _identities(sub, cfg)
+        ident = np.full(len(results.fund_v), np.nan)
+        ident[~partner] = sub.ident_v
+        results.ident_v = fill_partners(
+            results.fund_v, results.idx_v, ident, partner, results.times, cfg.pairs
+        )
+    else:
+        _identities(results, cfg)
+    dt = time.perf_counter() - t0
+    results.meta.setdefault("timings", {})["tracking"] = dt
+    results.meta["tracking_config"] = vars(cfg.tracking)
+    results.meta["stitching_config"] = vars(cfg.stitching)
+    results.meta["linking_config"] = vars(cfg.linking)
+    if cfg.rises.enabled:
+        results.meta["rises_config"] = vars(cfg.rises)
+    if cfg.pairs.enabled:
+        results.meta["pairs_config"] = vars(cfg.pairs)
+    return dt
+
+
+def _identities(results: Results, cfg: Config) -> None:
+    """Tracking, linking (or stitching), the rise joiner, the pair resolver
+    and the identity salience filter, in place."""
     results.ident_v = track(
         results.fund_v,
         results.idx_v,
@@ -563,7 +608,7 @@ def track_results(results: Results, cfg: Config) -> float:
     )
 
     def pairs(stage):
-        if cfg.pairs.enabled and cfg.pairs.stage == stage:
+        if cfg.pairs.enabled and cfg.pairs.resolve and cfg.pairs.stage == stage:
             results.ident_v = resolve_pairs(
                 results.fund_v,
                 results.idx_v,
@@ -608,13 +653,3 @@ def track_results(results: Results, cfg: Config) -> float:
         results.ident_v = drop_weak_identities(
             results.ident_v, results.sal_v, cfg.tracking.min_identity_salience
         )
-    dt = time.perf_counter() - t0
-    results.meta.setdefault("timings", {})["tracking"] = dt
-    results.meta["tracking_config"] = vars(cfg.tracking)
-    results.meta["stitching_config"] = vars(cfg.stitching)
-    results.meta["linking_config"] = vars(cfg.linking)
-    if cfg.rises.enabled:
-        results.meta["rises_config"] = vars(cfg.rises)
-    if cfg.pairs.enabled:
-        results.meta["pairs_config"] = vars(cfg.pairs)
-    return dt

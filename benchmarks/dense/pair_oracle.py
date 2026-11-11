@@ -34,10 +34,19 @@ PAIR_HZ = 1.2
 
 
 def add_hidden(
-    res: Results, truth: dict, min_snr: float, keep: float, rng, exact: bool = False
+    res: Results,
+    truth: dict,
+    min_snr: float,
+    keep: float,
+    rng,
+    exact: bool = False,
+    sal_offset: float = 0.0,
 ) -> int:
     """Add the hidden fish of close pairs to `res` (in place); returns how many.
-    `exact`: the partner's detection moves to its truth frequency as well."""
+    `exact`: the partner's detection moves to its truth frequency as well.
+    `sal_offset`: the added detections get their partner's salience minus
+    this (a pair head gives its pair probability, below the peak's), so
+    that they are the weaker of the split peak."""
     F = truth_at(truth, res.times)
     snr = np.stack(
         [np.interp(res.times, truth["snr_times"], s) for s in truth["snr_db"]]
@@ -73,7 +82,7 @@ def add_hidden(
     if res.cplx_v is not None:
         res.cplx_v = np.concatenate([res.cplx_v, res.cplx_v[src]])
     if res.sal_v is not None:
-        res.sal_v = np.concatenate([res.sal_v, res.sal_v[src]])
+        res.sal_v = np.concatenate([res.sal_v, res.sal_v[src] - sal_offset])
     res.ident_v = np.full(len(res.fund_v), np.nan)
     order = np.lexsort((res.fund_v, res.idx_v))
     for name in ("fund_v", "idx_v", "sign_v", "cplx_v", "sal_v", "ident_v"):
@@ -97,6 +106,12 @@ def main(argv=None):
     p.add_argument("--keep", type=float, default=1.0)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument(
+        "--sal-offset",
+        type=float,
+        default=0.0,
+        help="added detections: their partner's salience minus this",
+    )
+    p.add_argument(
         "--exact",
         action="store_true",
         help="the partner's detection at its truth frequency too",
@@ -113,7 +128,9 @@ def main(argv=None):
         cfg = Config.from_dict(merge(variant, band))
         res = Results.load(src)
         truth = dict(np.load(MIXTURES / name / "truth.npz"))
-        n_add = add_hidden(res, truth, args.min_snr, args.keep, rng, args.exact)
+        n_add = add_hidden(
+            res, truth, args.min_snr, args.keep, rng, args.exact, args.sal_offset
+        )
         t_track = track_results(res, cfg)
         res.meta["pair_oracle"] = {"source": args.source, "added": n_add}
         res.save(out)

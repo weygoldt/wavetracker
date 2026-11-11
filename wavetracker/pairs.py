@@ -238,3 +238,78 @@ def resolve_pairs(
                 post = up.get("post", pre)
                 _order(ident, fund_v, idx_v, ep, i, j, pre, post, cut)
     return ident
+
+
+def split_partners(fund_v, idx_v, sal_v, split_df) -> np.ndarray:
+    """Which detections are the weaker of two in a frame closer than
+    split_df (one spectral peak split in two): the lower salience, or with
+    equal (or no) salience the later of the two in the arrays. A chain of
+    close detections is taken in pairs from the lowest frequency up."""
+    n = len(fund_v)
+    out = np.zeros(n, bool)
+    if n < 2:
+        return out
+    sal = np.zeros(n) if sal_v is None else np.asarray(sal_v, float)
+    order = _by_frame(fund_v, idx_v, np.arange(n))
+    f, fr = fund_v[order], idx_v[order]
+    close = np.flatnonzero((fr[1:] == fr[:-1]) & (np.diff(f) < split_df))
+    taken = np.zeros(n, bool)  # by position in `order`
+    for c in close:
+        if taken[c] or taken[c + 1]:
+            continue
+        a, b = order[c], order[c + 1]
+        weaker = b if sal[b] < sal[a] or (sal[b] == sal[a] and b > a) else a
+        out[weaker] = True
+        taken[c] = taken[c + 1] = True
+    return out
+
+
+def _grow(fund_v, idx_v, ident, partner, gap, df, reverse):
+    """One sweep through the frames (forward, or backward with `reverse`):
+    every open partner goes to an identity without a detection in its frame
+    whose latest detection (a partner it took included) lies at most `gap`
+    frames and `df` Hz away, the closest in frequency first."""
+    ids = np.unique(ident[np.isfinite(ident)])
+    lab = {v: i for i, v in enumerate(ids)}
+    far = np.iinfo(np.int64).max // 4
+    last_fr = np.full(len(ids), far if reverse else -far, dtype=np.int64)
+    last_f = np.zeros(len(ids))
+    order = np.argsort(idx_v, kind="stable")
+    if reverse:
+        order = order[::-1]
+    for grp in np.split(order, np.flatnonzero(np.diff(idx_v[order]) != 0) + 1):
+        t = idx_v[grp[0]]
+        open_p = grp[partner[grp] & ~np.isfinite(ident[grp])]
+        if len(open_p):
+            present = np.zeros(len(ids), bool)
+            present[[lab[v] for v in ident[grp] if np.isfinite(v)]] = True
+            near = (np.abs(t - last_fr) <= gap) & ~present
+            cand = []
+            for q in open_p:
+                err = np.abs(fund_v[q] - last_f)
+                cand += [(err[i], q, i) for i in np.flatnonzero(near & (err <= df))]
+            for _, q, i in sorted(cand):
+                if not (np.isfinite(ident[q]) or present[i]):
+                    ident[q] = ids[i]
+                    present[i] = True
+        known = grp[np.isfinite(ident[grp])]
+        k = np.array([lab[v] for v in ident[known]], dtype=np.int64)
+        last_fr[k] = t
+        last_f[k] = fund_v[known]
+    return ident
+
+
+def fill_partners(fund_v, idx_v, ident_v, partner, times, cfg: PairsConfig):
+    """Identities with the split partners (`partner`, unassigned in ident_v)
+    given to the identities whose gaps they fill (see PairsConfig.partners):
+    identities grow into their gaps frame by frame, forward in time and then
+    backward, from their own detections and the partners they took. The
+    other detections keep their identities."""
+    ident = np.array(ident_v, dtype=float)
+    ident[partner] = np.nan
+    if not partner.any() or not np.isfinite(ident).any() or len(times) < 2:
+        return ident
+    gap = max(1, round(cfg.fill_gap / float(times[1] - times[0])))
+    for reverse in (False, True):
+        ident = _grow(fund_v, idx_v, ident, partner, gap, cfg.fill_df, reverse)
+    return ident
