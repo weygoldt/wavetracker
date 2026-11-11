@@ -155,20 +155,6 @@ def test_stage_must_be_known():
         PairsConfig(stage="somewhere")
 
 
-def test_the_weaker_detection_of_a_split_peak_is_its_partner():
-    from wavetracker.pairs import split_partners
-
-    fund = np.array([600.0, 600.4, 610.0, 600.0, 601.5])
-    idx = np.array([0, 0, 0, 1, 1])
-    sal = np.array([0.9, 0.4, 0.8, 0.9, 0.5])
-    np.testing.assert_array_equal(
-        split_partners(fund, idx, sal, 1.2), [False, True, False, False, False]
-    )
-    # equal salience: the later of the two in the arrays
-    sal[1] = 0.9
-    assert split_partners(fund, idx, sal, 1.2)[1]
-
-
 def _gap_scene(df=0.05):
     """A at 600 Hz throughout; B at 600.5 Hz, its own detections missing from
     40 to 60 s, where split partners of A's peak run along B's path (off it
@@ -239,7 +225,7 @@ def test_split_partners_do_not_change_the_other_identities():
     s = _scene(*[lambda t, i=i: _flat_pair(t)[i] for i in (0, 1)])
     sal = np.full(len(s["fund"]), 0.9)
     t = s["times"][s["idx"]]
-    # in the shared peak, B's detection is a weaker split partner
+    # in the shared peak, B's detection is the pair head's second detection
     in_peak = (s["fish"] == 1) & (np.abs(s["fund"] - 600.0) < 1.2)
     sal[in_peak] = 0.5
 
@@ -252,6 +238,7 @@ def test_split_partners_do_not_change_the_other_identities():
             times=s["times"],
             meta={},
             sal_v=sal[keep],
+            split_v=in_peak[keep],
         )
         cfg = Config.from_dict(
             {
@@ -272,3 +259,89 @@ def test_split_partners_do_not_change_the_other_identities():
 def test_partners_must_be_known():
     with pytest.raises(ValueError, match="partners"):
         PairsConfig(partners="somewhere")
+
+
+def test_results_keep_the_split_flags(tmp_path):
+    from wavetracker.results import Results
+
+    res = Results(
+        fund_v=np.array([600.0, 600.4]),
+        idx_v=np.array([0, 0]),
+        sign_v=np.ones((2, 3)),
+        ident_v=np.full(2, np.nan),
+        times=np.array([0.0, DT]),
+        split_v=np.array([False, True]),
+    )
+    res.save(tmp_path)
+    np.testing.assert_array_equal(Results.load(tmp_path).split_v, [False, True])
+    (tmp_path / "split_v.npy").unlink()
+    assert Results.load(tmp_path).split_v is None
+
+
+def test_long_tracks_of_left_over_partners_become_identities():
+    from wavetracker.pipeline import track_results
+    from wavetracker.results import Results
+
+    # B is hidden in A's peak for all but its first 5 s: only partners
+    times = np.arange(0.0, 100.0, DT)
+    n = len(times)
+    rng = np.random.default_rng(0)
+    fa = 600.0 + rng.normal(0, 0.03, n)
+    fb = 600.5 + rng.normal(0, 0.03, n)
+    fund = np.r_[fa, fb]
+    idx = np.r_[np.arange(n), np.arange(n)]
+    sign = np.tile(PA, (2 * n, 1))
+    sal = np.r_[np.full(n, 0.9), np.full(n, 0.85)]
+    o = np.lexsort((fund, idx))
+    is_b = np.r_[np.zeros(n, bool), np.ones(n, bool)][o]
+
+    def run(partner_tracks):
+        res = Results(
+            fund_v=fund[o],
+            idx_v=idx[o],
+            sign_v=sign[o],
+            ident_v=np.full(2 * n, np.nan),
+            times=times,
+            meta={},
+            sal_v=sal[o],
+            split_v=is_b,
+        )
+        pairs = {"enabled": True, "resolve": False, "partners": "fill"}
+        pairs["partner_tracks"] = partner_tracks
+        cfg = Config.from_dict({"pairs": pairs, "linking": {"enabled": False}})
+        track_results(res, cfg)
+        return res.ident_v
+
+    without = run(None)
+    assert not np.isfinite(without[is_b]).any()
+    with_tracks = run(60.0)
+    b = with_tracks[is_b]
+    assert np.isfinite(b).mean() > 0.9
+    assert len(np.unique(b[np.isfinite(b)])) == 1
+    assert not np.isin(b, with_tracks[~is_b]).any()
+    np.testing.assert_array_equal(with_tracks[~is_b], without[~is_b])
+    assert not np.isfinite(run(200.0)[is_b]).any()
+
+
+def test_without_split_flags_fill_tracks_every_detection():
+    from wavetracker.pipeline import track_results
+    from wavetracker.results import Results
+
+    s = _scene(*[lambda t, i=i: _flat_pair(t)[i] for i in (0, 1)])
+
+    def run(pairs):
+        res = Results(
+            fund_v=s["fund"],
+            idx_v=s["idx"],
+            sign_v=s["sign"],
+            ident_v=np.full(len(s["fund"]), np.nan),
+            times=s["times"],
+            meta={},
+        )
+        track_results(res, Config.from_dict({"pairs": pairs}))
+        return res.ident_v
+
+    np.testing.assert_array_equal(
+        run({"enabled": True, "resolve": False, "partners": "fill"}),
+        run({}),
+    )

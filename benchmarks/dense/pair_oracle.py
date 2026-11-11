@@ -40,13 +40,11 @@ def add_hidden(
     keep: float,
     rng,
     exact: bool = False,
-    sal_offset: float = 0.0,
 ) -> int:
     """Add the hidden fish of close pairs to `res` (in place); returns how many.
-    `exact`: the partner's detection moves to its truth frequency as well.
-    `sal_offset`: the added detections get their partner's salience minus
-    this (a pair head gives its pair probability, below the peak's), so
-    that they are the weaker of the split peak."""
+    They are flagged as the second detections of split peaks (`split_v`), as
+    a pair head's are. `exact`: the partner's detection moves to its truth
+    frequency as well."""
     F = truth_at(truth, res.times)
     snr = np.stack(
         [np.interp(res.times, truth["snr_times"], s) for s in truth["snr_db"]]
@@ -82,10 +80,14 @@ def add_hidden(
     if res.cplx_v is not None:
         res.cplx_v = np.concatenate([res.cplx_v, res.cplx_v[src]])
     if res.sal_v is not None:
-        res.sal_v = np.concatenate([res.sal_v, res.sal_v[src] - sal_offset])
+        res.sal_v = np.concatenate([res.sal_v, res.sal_v[src]])
+    split = np.zeros(len(res.idx_v) - len(idx), bool)
+    if res.split_v is not None:
+        split = np.asarray(res.split_v, bool)
+    res.split_v = np.r_[split, np.ones(len(idx), bool)]
     res.ident_v = np.full(len(res.fund_v), np.nan)
     order = np.lexsort((res.fund_v, res.idx_v))
-    for name in ("fund_v", "idx_v", "sign_v", "cplx_v", "sal_v", "ident_v"):
+    for name in ("fund_v", "idx_v", "sign_v", "cplx_v", "sal_v", "split_v", "ident_v"):
         v = getattr(res, name)
         if v is not None:
             setattr(res, name, v[order])
@@ -106,12 +108,6 @@ def main(argv=None):
     p.add_argument("--keep", type=float, default=1.0)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument(
-        "--sal-offset",
-        type=float,
-        default=0.0,
-        help="added detections: their partner's salience minus this",
-    )
-    p.add_argument(
         "--exact",
         action="store_true",
         help="the partner's detection at its truth frequency too",
@@ -128,9 +124,7 @@ def main(argv=None):
         cfg = Config.from_dict(merge(variant, band))
         res = Results.load(src)
         truth = dict(np.load(MIXTURES / name / "truth.npz"))
-        n_add = add_hidden(
-            res, truth, args.min_snr, args.keep, rng, args.exact, args.sal_offset
-        )
+        n_add = add_hidden(res, truth, args.min_snr, args.keep, rng, args.exact)
         t_track = track_results(res, cfg)
         res.meta["pair_oracle"] = {"source": args.source, "added": n_add}
         res.save(out)

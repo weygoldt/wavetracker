@@ -410,10 +410,12 @@ def decode(
     pair_logits: torch.Tensor | None = None,
     pair_offset: torch.Tensor | None = None,
     pair_threshold: float | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    split: bool = False,
+) -> tuple[np.ndarray, ...]:
     """Salience peaks along frequency above `threshold` -> (frame, bin,
-    frequency [Hz], salience). A peak is at least its lower neighbour and
-    above its upper one, so plateaus give one detection.
+    frequency [Hz], salience), with `split` also whether each detection is
+    the second fish of a split peak (see below). A peak is at least its
+    lower neighbour and above its upper one, so plateaus give one detection.
 
     With the pair head (`pair_logits`, `pair_offset` (2, frames, bins)), a
     peak whose pair probability reaches `pair_threshold` (default
@@ -431,6 +433,7 @@ def decode(
     bins = kk + k_lo
     freq = (bins.double() + offset[fr, kk].double()) * df
     sal = p[fr, kk]
+    second = torch.zeros(len(fr), dtype=torch.bool, device=fr.device)
     if pair_logits is not None and pair_offset is not None and len(fr):
         thr = threshold if pair_threshold is None else pair_threshold
         r = PAIR_SPACING
@@ -439,9 +442,9 @@ def decode(
             F.pad(peak.float(), (r, r))[:, None], 2 * r + 1, stride=1
         )[:, 0] * (2 * r + 1)
         q = torch.sigmoid(pair_logits.float()[fr, kk])
-        split = (q >= thr) & (n_near[fr, kk] < 1.5)
-        if bool(split.any()):
-            fs, ks = fr[split], kk[split]
+        to_split = (q >= thr) & (n_near[fr, kk] < 1.5)
+        if bool(to_split.any()):
+            fs, ks = fr[to_split], kk[to_split]
             off = pair_offset.float()[:, fs, ks].double()  # (2, n)
             # the peak's own detection stays; the pair offset farther from
             # it is the second fish
@@ -455,17 +458,20 @@ def decode(
             fr = torch.cat([fr, fs])
             bins = torch.cat([bins, b2])
             freq = torch.cat([freq, k2 * df])
-            sal = torch.cat([sal, q[split]])
+            sal = torch.cat([sal, q[to_split]])
+            second = torch.cat([second, torch.ones_like(fs, dtype=torch.bool)])
             order = torch.from_numpy(
                 np.lexsort((freq.cpu().numpy(), fr.cpu().numpy()))
             ).to(fr.device)
             fr, bins, freq, sal = fr[order], bins[order], freq[order], sal[order]
-    return (
+            second = second[order]
+    out = (
         fr.cpu().numpy().astype(np.int64),
         bins.cpu().numpy().astype(np.int64),
         freq.cpu().numpy(),
         sal.cpu().numpy().astype(np.float32),
     )
+    return (*out, second.cpu().numpy()) if split else out
 
 
 def save_model(
@@ -672,6 +678,7 @@ class StreamingSalience:
                 "pair_offset": out["pair_offset"][0, :, sl],
                 "pair_threshold": self.pair_threshold,
             }
+        # with a pair head, a fifth array flags the second fish of split peaks
         return decode(
             out["logits"][0, sl],
             out["offset"][0, sl],
@@ -679,4 +686,5 @@ class StreamingSalience:
             self.k_lo,
             self.df,
             **pair,
+            split=bool(pair),
         )

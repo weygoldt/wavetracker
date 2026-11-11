@@ -240,30 +240,6 @@ def resolve_pairs(
     return ident
 
 
-def split_partners(fund_v, idx_v, sal_v, split_df) -> np.ndarray:
-    """Which detections are the weaker of two in a frame closer than
-    split_df (one spectral peak split in two): the lower salience, or with
-    equal (or no) salience the later of the two in the arrays. A chain of
-    close detections is taken in pairs from the lowest frequency up."""
-    n = len(fund_v)
-    out = np.zeros(n, bool)
-    if n < 2:
-        return out
-    sal = np.zeros(n) if sal_v is None else np.asarray(sal_v, float)
-    order = _by_frame(fund_v, idx_v, np.arange(n))
-    f, fr = fund_v[order], idx_v[order]
-    close = np.flatnonzero((fr[1:] == fr[:-1]) & (np.diff(f) < split_df))
-    taken = np.zeros(n, bool)  # by position in `order`
-    for c in close:
-        if taken[c] or taken[c + 1]:
-            continue
-        a, b = order[c], order[c + 1]
-        weaker = b if sal[b] < sal[a] or (sal[b] == sal[a] and b > a) else a
-        out[weaker] = True
-        taken[c] = taken[c + 1] = True
-    return out
-
-
 def _grow(fund_v, idx_v, ident, partner, gap, df, reverse):
     """One sweep through the frames (forward, or backward with `reverse`):
     every open partner goes to an identity without a detection in its frame

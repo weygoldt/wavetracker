@@ -47,6 +47,9 @@ class Results:
     sal_v: np.ndarray | None = None
     """Salience (0-1) per detection (optional; older results have none), see
     `pipeline.detect`."""
+    split_v: np.ndarray | None = None
+    """Per detection: the second fish of a peak the learned detector's pair
+    head split in two (optional; only from models with a pair head)."""
 
     @property
     def n_ids(self) -> int:
@@ -64,6 +67,8 @@ class Results:
             np.save(folder / "cplx_v.npy", self.cplx_v)
         if self.sal_v is not None:
             np.save(folder / "sal_v.npy", self.sal_v)
+        if self.split_v is not None:
+            np.save(folder / "split_v.npy", self.split_v)
         (folder / META_FILE).write_text(json.dumps(self.meta, indent=2, default=str))
 
     @classmethod
@@ -83,6 +88,8 @@ class Results:
         arrays["cplx_v"] = np.load(cplx) if cplx.exists() else None
         sal = folder / "sal_v.npy"
         arrays["sal_v"] = np.load(sal) if sal.exists() else None
+        split = folder / "split_v.npy"
+        arrays["split_v"] = np.load(split) if split.exists() else None
         meta_file = folder / META_FILE
         meta = json.loads(meta_file.read_text()) if meta_file.exists() else {}
         return cls(**arrays, meta=meta)
