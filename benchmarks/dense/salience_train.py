@@ -35,7 +35,7 @@ import sys
 import time
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from pathlib import Path
 from typing import Any
@@ -52,6 +52,7 @@ from wavetracker.salience import (
     SalienceSpec,
     decode,
     harmonic_stack,
+    load_model,
     normalise,
     save_model,
 )
@@ -184,6 +185,15 @@ def spectrogram(spec: PowerSpectrogram, x: np.ndarray, electrodes, dev) -> torch
     return decibel(spec(tr).sum(0))
 
 
+def summed_power(spec: PowerSpectrogram, x: torch.Tensor) -> torch.Tensor:
+    """Power (bins, frames) of traces (channels, samples) summed over
+    channels, one channel at a time (a ninth of the memory)."""
+    p = spec(x[:1])[0]
+    for c in range(1, len(x)):
+        p += spec(x[c : c + 1])[0]
+    return p
+
+
 def unknown_lines(mix: Mixture, spec: PowerSpectrogram, dev) -> np.ndarray:
     """(frames, bins up to F_MAX) bool: persistent lines in the lab variant of
     the mixture that are no truth fundamental or harmonic. Cached per mixture."""
@@ -278,6 +288,8 @@ class Batches:
         hard_harmonics: tuple[float, ...] = HARD_HARMONICS,
         sigma_hz: float = SIGMA_HZ,
         workers: int = 4,
+        pair_hz: float = 0.0,
+        pair_focus: float = 0.0,
     ):
         splits = split.split(",")
         paths = [p for s in splits for p in mixture_dirs(s)[:limit]]
@@ -302,6 +314,9 @@ class Batches:
         self.harm_weight, self.harm_snr = harm_weight, harm_snr
         self.hard_harmonics = tuple(hard_harmonics)
         self.sigma_hz = sigma_hz
+        self.pair_hz = pair_hz
+        self.pair_focus = pair_focus if pair_hz else 0.0
+        self._pairs: dict[str, np.ndarray] = {}
         self.spec = PowerSpectrogram(NFFT, STEP, RATE, dev)
         self.rng = np.random.default_rng(seed)
         self.lines = {}
@@ -362,7 +377,31 @@ class Batches:
         j_lo = int(np.ceil(max(lead, 0) / STEP))
         j_hi = (n_samples - need) // STEP
         crop.j0 = int(rng.integers(j_lo, max(j_lo + 1, j_hi)))
+        pairs = self.close_pairs(mix) if self.pair_focus else None
+        if pairs is not None and len(pairs) and rng.random() < self.pair_focus:
+            # centre the crop on a close pair: a random output frame and
+            # position in the first frequency window
+            p_frame, p_freq = pairs[rng.integers(len(pairs))]
+            j_out = int(rng.integers(0, self.frames))
+            j0 = round(p_frame - (self.ctx + j_out) * r)
+            crop.j0 = int(np.clip(j0, j_lo, max(j_lo, j_hi - 1)))
+            k = round(p_freq * r / DF) - int(rng.integers(8, self.bins - 8))
+            crop.k_los[0] = int(np.clip(k, k0, k1 - 1))
         return crop
+
+    def close_pairs(self, mix: Mixture) -> np.ndarray:
+        """(frame, mean frequency) of every pair of known fish closer than
+        ``pair_hz`` (cached per mixture)."""
+        key = str(mix.path)
+        if key not in self._pairs:
+            F = mix.freqs
+            rows = []
+            for i in range(len(F)):
+                d = np.abs(F[i + 1 :] - F[i])
+                a, j = np.nonzero(d < self.pair_hz)
+                rows.append(np.stack([j, 0.5 * (F[i, j] + F[i + 1 + a, j])], 1))
+            self._pairs[key] = np.concatenate(rows) if rows else np.zeros((0, 2))
+        return self._pairs[key]
 
     def read(self, crop: Crop):
         """Raw (samples, channels) arrays: the lab traces over the union of
@@ -449,7 +488,7 @@ class Batches:
         offset targets and weights (windows, frames, bins)."""
         dev = self.dev
         x = self.traces(crop, raw)
-        log = decibel(self.spec(x).sum(0))
+        log = decibel(summed_power(self.spec, x))
         k_hi_max = max(crop.k_los) + self.bins - 1
         k_need = min(log.shape[0], math.ceil(max(self.harmonics) * k_hi_max) + 4)
         z = normalise(log[:k_need].T, DF)
@@ -542,9 +581,11 @@ class Batches:
             fi, fr = torch.nonzero(m, as_tuple=True)
             off_t[fr, kk[fi, fr]] = (kf - kr)[fi, fr]
             off_w[fr, kk[fi, fr]] = 1.0
-            out.append((target, weight, off_t, off_w))
-        target, weight, off_t, off_w = (torch.stack(c) for c in zip(*out, strict=True))
-        return feats, target, weight, off_t, off_w
+            parts = (target, weight, off_t, off_w)
+            if self.pair_hz:
+                parts += pair_targets(f0, ok, k_lo, self.bins, weight, self.pair_hz)
+            out.append(parts)
+        return (feats, *(torch.stack(c) for c in zip(*out, strict=True)))
 
     def example(self, mix, j0, k_lo, electrodes, gain):
         """One fixed window without augmentation (validation)."""
@@ -557,9 +598,56 @@ class Batches:
         return [torch.cat(c) for c in zip(*ex, strict=True)]
 
 
-def losses(model, batch, ctx, focal: float = 0.0):
-    feats, target, weight, off_t, off_w = batch
-    logits, offset = model(feats.contiguous(memory_format=torch.channels_last))
+PAIR_NEAR_BINS = 2.5  # pair-head negatives at full weight this close to a fish
+PAIR_FAR_WEIGHT = 0.1  # ... and elsewhere at this weight (no peaks there)
+
+
+def pair_targets(f0, ok, k_lo, n_bins, weight, pair_hz):
+    """Targets of the pair head in one window: (pair, weight, offsets (2, ...),
+    offset weight), each (frames, bins). A bin is a pair bin if its centre is
+    within half a bin of the span of two fish (at least -3 dB, see ``ok``)
+    closer than `pair_hz`; the offsets are those of the lower and the upper
+    fish from the bin [bins]. Bins one more bin outside a span are ignored
+    (a peak may sit there or not), bins near single fish are negatives, bins
+    away from fish weak negatives."""
+    dev = f0.device
+    n, T = f0.shape
+    fb = f0 / DF
+    q = torch.zeros((T, n_bins), device=dev)
+    amb = torch.zeros((T, n_bins), dtype=torch.bool, device=dev)
+    po = torch.zeros((2, T, n_bins), device=dev)
+    kk = torch.arange(k_lo, k_lo + n_bins, device=dev, dtype=torch.float32)
+    near = (
+        ((kk[None, None, :] - fb[:, :, None]).abs() <= PAIR_NEAR_BINS) & ok[:, :, None]
+    ).any(0)
+    fi = torch.where(ok, fb, torch.full_like(fb, float("nan")))
+    close = (fi[:, None, :] - fi[None, :, :]).abs() < pair_hz / DF
+    close &= torch.triu(torch.ones(n, n, dtype=torch.bool, device=dev), 1)[:, :, None]
+    a, b, t = torch.nonzero(close, as_tuple=True)
+    if len(t):
+        lo = torch.minimum(fb[a, t], fb[b, t])
+        hi = torch.maximum(fb[a, t], fb[b, t])
+        k0 = torch.ceil(lo - 1.5)
+        for s in range(math.ceil(pair_hz / DF) + 4):
+            k = k0 + s
+            idx = (k - k_lo).long()
+            inb = (idx >= 0) & (idx < n_bins)
+            inside = inb & (k >= lo - 0.5) & (k <= hi + 0.5)
+            edge = inb & ~inside & (k >= lo - 1.5) & (k <= hi + 1.5)
+            q[t[inside], idx[inside]] = 1.0
+            po[0, t[inside], idx[inside]] = (lo - k)[inside]
+            po[1, t[inside], idx[inside]] = (hi - k)[inside]
+            amb[t[edge], idx[edge]] = True
+    w = weight * torch.where(near, 1.0, PAIR_FAR_WEIGHT)
+    w = torch.where(amb & (q == 0), torch.zeros_like(w), w)
+    po_w = q * (weight > 0)
+    return q, w, po, po_w
+
+
+def losses(model, batch, ctx, focal: float = 0.0, pair_pos_weight: float = 1.0):
+    feats, target, weight, off_t, off_w, *pair = batch
+    out = model.outputs(feats.contiguous(memory_format=torch.channels_last))
+    logits, offset = out["logits"], out["offset"]
     sl = slice(ctx, ctx + target.shape[1])
     logits, offset = logits[:, sl].float(), offset[:, sl].float()
     if focal:  # down-weight what is already right: |target - p|^gamma
@@ -570,10 +658,20 @@ def losses(model, batch, ctx, focal: float = 0.0):
     )
     bce = bce / weight.sum().clamp_min(1.0)
     l1 = ((offset - off_t).abs() * off_w).sum() / off_w.sum().clamp_min(1.0)
-    return bce, l1
+    if not pair or "pair_logits" not in out:
+        return bce, l1
+    q_t, q_w, po_t, po_w = pair
+    q_w = q_w * (1.0 + (pair_pos_weight - 1.0) * q_t)
+    ql = out["pair_logits"][:, sl].float()
+    bce_q = F.binary_cross_entropy_with_logits(ql, q_t, weight=q_w, reduction="sum")
+    bce_q = bce_q / q_w.sum().clamp_min(1.0)
+    po = torch.sort(out["pair_offset"][:, :, sl].float(), dim=1).values
+    l1_q = ((po - po_t).abs().sum(1) * po_w).sum() / po_w.sum().clamp_min(1.0)
+    return bce, l1, bce_q, l1_q
 
 
 THRESHOLDS = (0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
+PAIR_THRESHOLD = 0.5  # validation: pair probability that splits a peak
 
 
 def frame_scores(model, data: Batches, examples, ctx, tol=1.2):
@@ -582,8 +680,8 @@ def frame_scores(model, data: Batches, examples, ctx, tol=1.2):
     fish frames at >= 0 dB) over thresholds, so that checkpoints are compared
     independently of how their salience is calibrated."""
     th = np.array(THRESHOLDS)
-    hits = {b: np.zeros(len(th)) for b in ("faint", "visible")}
-    tot = {"faint": 0, "visible": 0}
+    hits = {b: np.zeros(len(th)) for b in ("faint", "visible", "pair")}
+    tot = {"faint": 0, "visible": 0, "pair": 0}
     n_det, n_match = np.zeros(len(th)), np.zeros(len(th))
     for mix, j0, k_lo, el, gain in examples:
         feats, *_ = data.example(mix, j0, k_lo, el, gain)
@@ -591,10 +689,22 @@ def frame_scores(model, data: Batches, examples, ctx, tol=1.2):
             torch.no_grad(),
             torch.autocast("cuda", torch.bfloat16, enabled=feats.is_cuda),
         ):
-            logits, offset = model(feats[None])
+            out = model.outputs(feats[None])
         sl = slice(ctx, ctx + data.frames)
+        pair = {}
+        if "pair_logits" in out:
+            pair = {
+                "pair_logits": out["pair_logits"][0, sl].float(),
+                "pair_offset": out["pair_offset"][0, :, sl].float(),
+                "pair_threshold": PAIR_THRESHOLD,
+            }
         fr, _, f, sal = decode(
-            logits[0, sl].float(), offset[0, sl].float(), th.min(), k_lo, DF
+            out["logits"][0, sl].float(),
+            out["offset"][0, sl].float(),
+            th.min(),
+            k_lo,
+            DF,
+            **pair,
         )
         rows = slice(j0 + ctx, j0 + ctx + data.frames)
         tf, snr = mix.freqs[:, rows], mix.snr_at(gain)[:, rows]
@@ -609,13 +719,16 @@ def frame_scores(model, data: Batches, examples, ctx, tol=1.2):
                 b = "visible" if snr[i, j] >= 6 else "faint" if snr[i, j] >= 0 else None
                 if b:
                     tot[b] += 1
-                bands.append((i, b))
+                close = np.abs(np.delete(t, i) - t[i]) < 1.2
+                in_pair = b is not None and bool(close.any())
+                tot["pair"] += in_pair
+                bands.append((i, b, in_pair))
             tt = t[np.isfinite(t)]
             for q, thr in enumerate(th):
                 keep = s_all >= thr
                 d = d_all[keep]
                 used = np.zeros(len(d), bool)
-                for i, b in bands:
+                for i, b, in_pair in bands:
                     if not len(d) or b is None:
                         continue
                     dist = np.where(used, np.inf, np.abs(d - t[i]))
@@ -623,6 +736,7 @@ def frame_scores(model, data: Batches, examples, ctx, tol=1.2):
                     if dist[m] <= tol:
                         used[m] = True
                         hits[b][q] += 1
+                        hits["pair"][q] += in_pair
                 dd = d[(d > lo) & (d < hi)]
                 n_det[q] += len(dd)
                 if len(dd) and len(tt):
@@ -637,6 +751,7 @@ def frame_scores(model, data: Batches, examples, ctx, tol=1.2):
     return {
         "recall_visible": float(hits["visible"][q5] / max(tot["visible"], 1)),
         "recall_faint": float(hits["faint"][q5] / max(tot["faint"], 1)),
+        "recall_pair": float(hits["pair"][q5] / max(tot["pair"], 1)),
         "precision": float(prec[q5]),
         "best_f1": float(f1[best]),
         "best_thr": float(th[best]),
@@ -707,6 +822,36 @@ def main(argv=None):
     p.add_argument(
         "--sigma-hz", type=float, default=SIGMA_HZ, help="width of the target bumps"
     )
+    p.add_argument(
+        "--pair-head",
+        action="store_true",
+        help="train a pair head (two fish in one peak, see pair_targets)",
+    )
+    p.add_argument("--pair-hz", type=float, default=1.2, help="pairs closer than this")
+    p.add_argument(
+        "--pair-dilations", default="", help="time dilations of the pair branch"
+    )
+    p.add_argument("--pair-weight", type=float, default=1.0, help="pair loss weight")
+    p.add_argument(
+        "--pair-focus",
+        type=float,
+        default=0.0,
+        help="share of crops centred on a close pair (time and first window)",
+    )
+    p.add_argument(
+        "--pair-pos-weight",
+        type=float,
+        default=1.0,
+        help="loss weight of pair bins relative to other bins",
+    )
+    p.add_argument(
+        "--init", default="", help="start from this model's weights (new parts random)"
+    )
+    p.add_argument(
+        "--freeze-trunk",
+        action="store_true",
+        help="with --init: train only what the init model does not have",
+    )
     p.add_argument("--checkpoint", action="store_true", help="recompute layers")
     p.add_argument("--workers", type=int, default=4, help="reader threads")
     p.add_argument("--val-every", type=int, default=500)
@@ -736,7 +881,33 @@ def main(argv=None):
             int(d) for d in args.temporal_bin_dilations.split(",") if d
         ),
     )
+    if args.pair_head:
+        spec = replace(
+            spec,
+            pair_head=True,
+            pair_dilations=tuple(int(d) for d in args.pair_dilations.split(",") if d),
+        )
+    frozen: list[str] = []
+    if args.init:
+        init_model, init_spec, _ = load_model(args.init, "cpu")
+        spec = replace(
+            init_spec,
+            pair_head=spec.pair_head,
+            pair_dilations=spec.pair_dilations,
+        )
+        state = init_model.state_dict()
     model = SalienceNet(spec).to(dev, memory_format=torch.channels_last)
+    if args.init:
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        if unexpected:
+            raise SystemExit(f"--init: unexpected keys {unexpected}")
+        print(
+            f"init from {args.init}; new: {sorted({k.split('.')[0] for k in missing})}"
+        )
+        if args.freeze_trunk:
+            frozen = [n for n, _ in model.named_parameters() if n in state]
+            for n, prm in model.named_parameters():
+                prm.requires_grad_(n not in state)
     model.checkpoint = args.checkpoint
     ctx = model.context_frames
     out = OUT / args.tag
@@ -764,6 +935,8 @@ def main(argv=None):
         ),
         sigma_hz=args.sigma_hz,
         workers=args.workers,
+        pair_hz=args.pair_hz if spec.pair_head else 0.0,
+        pair_focus=args.pair_focus,
     )
     val = Batches(
         args.val_split,
@@ -792,7 +965,8 @@ def main(argv=None):
         f"{len(train.mixes)} train / {len(val.mixes)} val mixtures",
         flush=True,
     )
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
+    params = [prm for prm in model.parameters() if prm.requires_grad]
+    opt = torch.optim.AdamW(params, lr=args.lr, weight_decay=1e-4)
     sched = torch.optim.lr_scheduler.OneCycleLR(
         opt, max_lr=args.lr, total_steps=args.steps, pct_start=0.05
     )
@@ -806,19 +980,28 @@ def main(argv=None):
     t_mark = t0
     for step in range(1, args.steps + 1):
         model.train()
+        if frozen:  # batch norms of the frozen parts keep their statistics
+            for name, mod in model.named_modules():
+                if isinstance(mod, torch.nn.BatchNorm2d) and f"{name}.weight" in frozen:
+                    mod.eval()
         batch = train.batch(args.batch)
         with torch.autocast("cuda", torch.bfloat16, enabled=dev.type == "cuda"):
-            bce, l1 = losses(model, batch, ctx, args.focal)
+            bce, l1, *pl = losses(model, batch, ctx, args.focal, args.pair_pos_weight)
             loss = bce + 0.5 * l1
+            if pl:
+                loss = loss + args.pair_weight * (pl[0] + 0.5 * pl[1])
+            if frozen:  # only the new parts learn
+                loss = args.pair_weight * (pl[0] + 0.5 * pl[1])
         opt.zero_grad(set_to_none=True)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(params, 1.0)
         opt.step()
         sched.step()
         if step % 50 == 0:
             now = time.perf_counter()
+            pmsg = f" pair bce {pl[0].item():.4f} l1 {pl[1].item():.3f}" if pl else ""
             print(  # speed over the last 50 steps, without validation
-                f"step {step}: bce {bce.item():.4f} l1 {l1.item():.3f} "
+                f"step {step}: bce {bce.item():.4f} l1 {l1.item():.3f}{pmsg} "
                 f"({(now - t_mark) / 50:.2f} s/step)",
                 flush=True,
             )
@@ -826,6 +1009,9 @@ def main(argv=None):
             if tb is not None:
                 tb.add_scalar("train/bce", bce.item(), step)
                 tb.add_scalar("train/offset_l1", l1.item(), step)
+                if pl:
+                    tb.add_scalar("train/pair_bce", pl[0].item(), step)
+                    tb.add_scalar("train/pair_offset_l1", pl[1].item(), step)
                 tb.add_scalar("train/lr", sched.get_last_lr()[0], step)
         if step % args.val_every == 0 or step == args.steps:
             model.eval()
