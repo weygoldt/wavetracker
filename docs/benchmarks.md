@@ -486,6 +486,43 @@ Open problems seen there: a strong 308 Hz fish on the boat take detected in
 19 % of its frames (classic 60 %), and occasional harmonics reported as a
 second fish. Figures: `figures/field_side_by_side/`.
 
+### Association for the learned detector (step B)
+
+With the detections of learned v1 fixed, `benchmarks/dense/assoc_diag.py`
+compares the tracker's raw fragments with the truth: where a fragment
+switches fish, where a fish's fragments break, and what each situation costs
+(details and all experiments: `benchmarks/dense/association_notes.md`).
+Of the 0.051 / 0.052 IDF1 between v1 and its truth identities, joining the
+fragments costs 0.030 / 0.031 (the linker refusing joins at rises, missing
+candidates for rise onsets, and its threshold), switches inside fragments
+0.012 / 0.011 (78 % at crossings, half of them where the two fish are one
+line, which no tracker can get right), and harmonic and false detections
+inside identities 0.008 / 0.009. With truth detections, crossings dominate
+(0.05).
+
+`configs/learned-assoc.yaml` combines what helped: the tracker's motion model
+(`tracking.motion_window: 2`, see
+[algorithms](algorithms.md#following-the-frequency-slope-motion-model)), a
+linker retrained on that tracker's `ltrain` fragments (threshold 0.6),
+looser shared-frame and parallel rules in the linker's association
+(`max_shared` 0.3, `max_parallel` 0.6: both refused mostly true joins at
+rises), and dropping identities whose mean salience is below 0.75
+(`tracking.min_identity_salience`):
+
+| | IDF1 | purity | false ids >= 30 s | switches / fish / min |
+|---|---|---|---|---|
+| v1, `learned-relinked.yaml` | 0.739 / 0.723 | 0.981 / 0.981 | 1.6 / 1.9 | 0.43 / 0.46 |
+| v1, `learned-assoc.yaml` | **0.750 / 0.737** | 0.980 / 0.983 | 0.9 / 0.9 | 0.26 / 0.29 |
+| truth detections >= 0 dB, `dense-linked.yaml` | 0.775 / 0.740 | 0.954 / 0.956 | 0 / 0 | 1.82 / 1.67 |
+| the same + motion model and association rules | **0.790 / 0.757** | 0.955 / 0.959 | 0 / 0 | 1.43 / 1.29 |
+
+It is better in 15 / 13 of the 17 mixtures (lab / field) and worse in 1 / 0.
+The motion model keeps crossing fish apart (with truth detections, frames
+with a neighbour within 3 Hz on their fish's identity: +0.03-0.04), but for
+learned detections it needs the retrained linker. Tracking takes twice as
+long. Figures: `figures/assoc_diagnosis.png`, `figures/assoc_results.png`,
+`figures/strata_assoc.png`.
+
 ## Learned fragment linking
 
 On the dense mixtures, identities break much more often than detections

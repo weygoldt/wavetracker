@@ -137,7 +137,16 @@ reliable. A change counts if it holds in lab and field noise.
 | motion, one-sided slopes, 1 s | 0.744 / 0.718 | 0.791 / 0.750 |
 | motion, one-sided slopes, 2 s | 0.742 / 0.720 | 0.790 / 0.746 |
 | motion, one-sided, shrunk slopes, horizon (`motion_window` 1) | 0.743 / 0.723 | 0.786 / 0.749 |
+| the same, `motion_window` 2 | 0.743 / 0.722 | 0.786 / 0.753 |
 | the same, `motion_window` 3 | 0.744 / 0.722 | 0.788 / 0.749 |
+| motion 2 s + linker retrained on its fragments, threshold 0.6 / 0.7 / 0.8 | 0.744 / 0.725, 0.741 / 0.721, 0.740 / 0.720 | |
+| **C1**: `max_shared` 0.3, `max_parallel` 0.6, identity salience 0.75 | 0.746 / 0.732 | (rules only: 0.781 / 0.748) |
+| **C2**: C1 + motion 2 s + retrained linker at 0.6 (`learned-assoc.yaml`) | **0.750 / 0.737** | (motion + rules: **0.790 / 0.757**) |
+| C2, linker threshold 0.5 / 0.65 / 0.7 | 0.750 / 0.737, 0.749 / 0.736, 0.747 / 0.734 | |
+| C2 with motion 3 s and its retrained linker (0.6 / 0.7) | 0.749 / 0.732, 0.748 / 0.732 | |
+| C2 with motion 3 s and the old linker (0.7) | 0.749 / 0.730 | |
+| C2 + rise candidates (`rise_df` 30, `rise_gap` 5), linker retrained with them | 0.751 / 0.732 | |
+| C1 / C2 with linkers trained with seed 1 | 0.746 / 0.729, 0.750 / 0.735 | |
 
 * Isolated tolerance (`$WT_BENCHMARK_DATA/assoc/isolated-tolerance.patch`,
   not kept): a detection with no other line within +-3 Hz for +-1 s may link
@@ -185,7 +194,8 @@ of `A-learned` (step A's model, `salience/linker-learned-v1.npz`, is
 reproduced bit for bit by `train --base A-learned`):
 
 ```bash
-python benchmarks/dense/run.py retrack --tag B-assoc-lt-motion2 --source A-learned -c benchmarks/dense/configs/learned-assoc.yaml --split ltrain   # and ltrain-field
+# a base run with the ltrain detections (its identities do not matter)
+python benchmarks/dense/run.py retrack --tag B-assoc-lt-motion2 --source A-learned -c benchmarks/dense/configs/learned-relinked.yaml --split ltrain   # and ltrain-field
 python benchmarks/dense/linker.py build --base B-assoc-lt-motion2 -c benchmarks/dense/configs/learned-assoc.yaml --splits ltrain ltrain-field
 python benchmarks/dense/linker.py train --base B-assoc-lt-motion2 --train-splits ltrain ltrain-field --val-splits ltrain-field --out $WT_BENCHMARK_DATA/assoc/linker-learned-v1-motion2.npz
 ```
@@ -193,3 +203,62 @@ python benchmarks/dense/linker.py train --base B-assoc-lt-motion2 --train-splits
 (The runs here used base tags whose split folders link to the `A-learned`
 and `A-v1m-relinked` runs instead of copying them, and validated on `ldev`;
 the validation split does not change the model.)
+
+## Result
+
+`configs/learned-assoc.yaml` (C2) against the step-A baseline
+(`learned-relinked.yaml`), learned v1 detections, means of 17 mixtures, lab /
+field noise:
+
+| | baseline | C2 |
+|---|---|---|
+| IDF1 | 0.739 / 0.723 | **0.750 / 0.737** |
+| purity | 0.981 / 0.981 | 0.980 / 0.983 |
+| false identities >= 30 s | 1.6 / 1.9 | 0.9 / 0.9 |
+| identity switches per fish and minute | 0.43 / 0.46 | 0.26 / 0.29 |
+| identities >= 30 s | 25.9 / 25.9 | 23.6 / 23.5 |
+| IDF1 crowded | 0.728 / 0.730 | 0.741 / 0.752 |
+| IDF1 density | 0.900 / 0.894 | 0.915 / 0.904 |
+| IDF1 atten (+ ladder) | 0.567 / 0.548 | 0.578 / 0.559 |
+| IDF1 lowfreq (+ lowonly) | 0.881 / 0.842 | 0.883 / 0.864 |
+| frames >= 6 dB on the fish's identity, neighbour < 1.2 / 1.2-3 / 3-10 / >= 10 Hz (lab) | 0.60 / 0.74 / 0.89 / 0.93 | 0.61 / 0.74 / 0.91 / 0.94 |
+
+C2 is better in 15 of 17 mixtures in lab noise (one loss, `lowonly-10`
+-0.015) and in 13 of 17 in field noise (no loss). With truth detections the
+same tracker and rules (packaged linker at 0.9, no salience filter) reach
+0.790 / 0.757 (+0.015 / +0.017), most of it at close fish (frames with a
+neighbour within 3 Hz on their identity: 0.73 -> 0.76 below 1.2 Hz, 0.78 ->
+0.81 at 1.2-3 Hz). Detections are fixed, so recall, precision and the
+detection strata do not change. Tracking takes twice as long (two passes).
+
+Where the gain comes from (learned, lab / field): the association rules
++0.003 / +0.005, the identity salience filter +0.004 / +0.005 (it drops 30,200
+harmonic or false detections and 6,800 detections of real fish, in short
+faint identities, over the 34 mixtures), the motion model with the retrained
+linker +0.004 / +0.005 on top (with either linker seed; mostly in `crowded`,
++0.04 there). The motion model alone, with the old linker, gives +0.0035 /
+-0.0006: its fragments are purer, but the old linker joins fewer of them.
+
+After C2, the open breaks cost 0.016 / 0.017 (oracle join; was 0.023 /
+0.024): rises 0.008 / 0.009, gaps of 1-10 s 0.005 / 0.006, crossings 0.003 /
+0.002, dropouts 0.003 / 0.004. Switches inside fragments still cost 0.011 /
+0.009 with perfect joining, about half of it where the two fish are one line.
+
+## Next
+
+* Rise onsets: jumps of more than 5 Hz get no candidate, and candidates for
+  them (`rise_df`) hurt even with a linker trained on them. A tracker that
+  follows the onset (the old frequency fades while the new one appears in the
+  same 1.6 s window), or a dedicated rise joiner, would address the largest
+  remaining break.
+* Interleaved fragments at fast frequency modulation (two lines for one fish
+  in one analysis window) are a detector issue; the temporal module of the
+  detector track could remove them.
+* The linker sees no fragment under 10 detections and cannot cut an impure
+  fragment; a linker that scores detection-level joins near crossings (a
+  Trackastra-style pairwise model over short windows) is the next step if
+  more is needed. Its ceiling for learned detections is limited: half the
+  switch cost is where two fish are one line.
+* The truth-identity ceiling counts merged lines as switches; a scorer that
+  ignores frames where two fish are within the resolution would make the
+  ceiling honest.

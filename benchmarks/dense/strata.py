@@ -122,14 +122,15 @@ def main(argv=None):
     groups = [
         ("snr", SNR_BANDS, "recall by SNR"),
         ("nn", NN_BANDS, "recall by distance to nearest line (SNR ≥ 6 dB)"),
+        ("id nn", NN_BANDS, "on the fish's identity, by nearest line (SNR ≥ 6 dB)"),
     ]
     fig, axs = plt.subplots(
         len(args.splits),
-        3,
-        figsize=(16, 3.6 * len(args.splits)),
+        4,
+        figsize=(21, 3.6 * len(args.splits)),
         squeeze=False,
         layout="constrained",
-        gridspec_kw={"width_ratios": [4, 4, 3]},
+        gridspec_kw={"width_ratios": [4, 4, 4, 3]},
     )
     for si, sp in enumerate(args.splits):
         tags = [t for t in args.tags if (t, sp) in table]
@@ -150,7 +151,7 @@ def main(argv=None):
             ax.set_title(f"{sp}: {title}", fontsize=10, loc="left")
             ax.grid(axis="y", alpha=0.3)
             ax.spines[["top", "right"]].set_visible(False)
-        ax = axs[si, 2]
+        ax = axs[si, 3]
         metrics = ["idf1", "recall", "precision"]
         for ti, t in enumerate(tags):
             v = [table[(t, sp)][m] for m in metrics]
