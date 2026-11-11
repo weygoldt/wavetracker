@@ -541,7 +541,7 @@ class Batches:
 
 def losses(model, batch, ctx, focal: float = 0.0):
     feats, target, weight, off_t, off_w = batch
-    logits, offset = model(feats)
+    logits, offset = model(feats.contiguous(memory_format=torch.channels_last))
     sl = slice(ctx, ctx + target.shape[1])
     logits, offset = logits[:, sl].float(), offset[:, sl].float()
     if focal:  # down-weight what is already right: |target - p|^gamma
@@ -700,7 +700,7 @@ def main(argv=None):
         ),
         temporal_kernel=args.temporal_kernel,
     )
-    model = SalienceNet(spec).to(dev)
+    model = SalienceNet(spec).to(dev, memory_format=torch.channels_last)
     model.checkpoint = args.checkpoint
     ctx = model.context_frames
     out = OUT / args.tag
