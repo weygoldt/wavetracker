@@ -51,6 +51,7 @@ from wavetracker.salience import (
     SalienceNet,
     SalienceSpec,
     decode,
+    electrode_features,
     harmonic_stack,
     load_model,
     normalise,
@@ -185,13 +186,27 @@ def spectrogram(spec: PowerSpectrogram, x: np.ndarray, electrodes, dev) -> torch
     return decibel(spec(tr).sum(0))
 
 
-def summed_power(spec: PowerSpectrogram, x: torch.Tensor) -> torch.Tensor:
+def summed_power(
+    spec: PowerSpectrogram,
+    x: torch.Tensor,
+    windows: list[int] | None = None,
+    bins: int = 0,
+    frames: slice = slice(None),
+):
     """Power (bins, frames) of traces (channels, samples) summed over
-    channels, one channel at a time (a ninth of the memory)."""
-    p = spec(x[:1])[0]
-    for c in range(1, len(x)):
-        p += spec(x[c : c + 1])[0]
-    return p
+    channels, one channel at a time (a ninth of the memory). With `windows`
+    (first bins), also the complex spectra of every channel in each window
+    of `bins` bins and the given frames: (windows, channels, bins, frames)."""
+    p, per = None, []
+    for c in range(len(x)):
+        X = spec.stft(x[c : c + 1])[0]
+        pc = spec.power(X)
+        p = pc if p is None else p + pc
+        if windows is not None:
+            per.append(torch.stack([X[k : k + bins, frames] for k in windows]))
+    if windows is None:
+        return p
+    return p, torch.stack(per, 1)
 
 
 def unknown_lines(mix: Mixture, spec: PowerSpectrogram, dev) -> np.ndarray:
@@ -290,6 +305,7 @@ class Batches:
         workers: int = 4,
         pair_hz: float = 0.0,
         pair_focus: float = 0.0,
+        el_frames: slice | None = None,
     ):
         splits = split.split(",")
         paths = [p for s in splits for p in mixture_dirs(s)[:limit]]
@@ -316,6 +332,8 @@ class Batches:
         self.sigma_hz = sigma_hz
         self.pair_hz = pair_hz
         self.pair_focus = pair_focus if pair_hz else 0.0
+        self.el_frames = el_frames
+        """Electrode features of these crop frames (None: no electrodes)."""
         self._pairs: dict[str, np.ndarray] = {}
         self.spec = PowerSpectrogram(NFFT, STEP, RATE, dev)
         self.rng = np.random.default_rng(seed)
@@ -488,7 +506,19 @@ class Batches:
         offset targets and weights (windows, frames, bins)."""
         dev = self.dev
         x = self.traces(crop, raw)
-        log = decibel(summed_power(self.spec, x))
+        el = None
+        if self.el_frames is None:
+            power = summed_power(self.spec, x)
+        else:
+            power, X = summed_power(self.spec, x, crop.k_los, self.bins, self.el_frames)
+            el = torch.stack(
+                [electrode_features(Xw, 0, self.bins - 1) for Xw in X]
+            ).permute(0, 2, 3, 1, 4)  # (windows, electrodes, 3, frames, bins)
+            n = el.shape[1]
+            el = F.pad(el, (0, 0, 0, 0, 0, 0, 0, MIX_CHANNELS - n))
+            mask = torch.zeros((len(el), MIX_CHANNELS), dtype=torch.bool, device=dev)
+            mask[:, :n] = True
+        log = decibel(power)
         k_hi_max = max(crop.k_los) + self.bins - 1
         k_need = min(log.shape[0], math.ceil(max(self.harmonics) * k_hi_max) + 4)
         z = normalise(log[:k_need].T, DF)
@@ -581,21 +611,25 @@ class Batches:
             fi, fr = torch.nonzero(m, as_tuple=True)
             off_t[fr, kk[fi, fr]] = (kf - kr)[fi, fr]
             off_w[fr, kk[fi, fr]] = 1.0
-            parts = (target, weight, off_t, off_w)
+            parts = {"target": target, "weight": weight, "off_t": off_t, "off_w": off_w}
             if self.pair_hz:
-                parts += pair_targets(f0, ok, k_lo, self.bins, weight, self.pair_hz)
+                q = pair_targets(f0, ok, k_lo, self.bins, weight, self.pair_hz)
+                parts |= dict(zip(("q_t", "q_w", "po_t", "po_w"), q, strict=True))
             out.append(parts)
-        return (feats, *(torch.stack(c) for c in zip(*out, strict=True)))
+        ex = {k: torch.stack([o[k] for o in out]) for k in out[0]}
+        ex["feats"] = feats
+        if el is not None:
+            ex["el"], ex["el_mask"] = el, mask
+        return ex
 
     def example(self, mix, j0, k_lo, electrodes, gain):
         """One fixed window without augmentation (validation)."""
         crop = Crop(mix, j0, list(electrodes), gain, [k_lo])
-        feats, *rest = self.build(crop, self.read(crop))
-        return (feats[0], *(t[0] for t in rest))
+        return {k: v[0] for k, v in self.build(crop, self.read(crop)).items()}
 
-    def batch(self, n_crops: int):
+    def batch(self, n_crops: int) -> dict[str, torch.Tensor]:
         ex = [self.build(c, raw) for c, raw in self.prefetch(n_crops)]
-        return [torch.cat(c) for c in zip(*ex, strict=True)]
+        return {k: torch.cat([e[k] for e in ex]) for k in ex[0]}
 
 
 PAIR_NEAR_BINS = 2.5  # pair-head negatives at full weight this close to a fish
@@ -644,9 +678,19 @@ def pair_targets(f0, ok, k_lo, n_bins, weight, pair_hz):
     return q, w, po, po_w
 
 
-def losses(model, batch, ctx, focal: float = 0.0, pair_pos_weight: float = 1.0):
-    feats, target, weight, off_t, off_w, *pair = batch
-    out = model.outputs(feats.contiguous(memory_format=torch.channels_last))
+def losses(
+    model,
+    batch: dict,
+    ctx: int,
+    focal: float = 0.0,
+    pair_pos_weight: float = 1.0,
+    el_start: int = 0,
+):
+    target, weight, off_t, off_w = (
+        batch[k] for k in ("target", "weight", "off_t", "off_w")
+    )
+    feats = batch["feats"].contiguous(memory_format=torch.channels_last)
+    out = model.outputs(feats, batch.get("el"), batch.get("el_mask"), el_start)
     logits, offset = out["logits"], out["offset"]
     sl = slice(ctx, ctx + target.shape[1])
     logits, offset = logits[:, sl].float(), offset[:, sl].float()
@@ -658,9 +702,9 @@ def losses(model, batch, ctx, focal: float = 0.0, pair_pos_weight: float = 1.0):
     )
     bce = bce / weight.sum().clamp_min(1.0)
     l1 = ((offset - off_t).abs() * off_w).sum() / off_w.sum().clamp_min(1.0)
-    if not pair or "pair_logits" not in out:
+    if "q_t" not in batch or "pair_logits" not in out:
         return bce, l1
-    q_t, q_w, po_t, po_w = pair
+    q_t, q_w, po_t, po_w = (batch[k] for k in ("q_t", "q_w", "po_t", "po_w"))
     q_w = q_w * (1.0 + (pair_pos_weight - 1.0) * q_t)
     ql = out["pair_logits"][:, sl].float()
     bce_q = F.binary_cross_entropy_with_logits(ql, q_t, weight=q_w, reduction="sum")
@@ -674,7 +718,7 @@ THRESHOLDS = (0.3, 0.4, 0.5, 0.6, 0.7, 0.8)
 PAIR_THRESHOLD = 0.5  # validation: pair probability that splits a peak
 
 
-def frame_scores(model, data: Batches, examples, ctx, tol=1.2):
+def frame_scores(model, data: Batches, examples, ctx, tol=1.2, el_start: int = 0):
     """Recall per SNR band and precision of salience peaks on fixed crops, at
     every threshold in THRESHOLDS; ``best_f1`` is the best F1 (recall over all
     fish frames at >= 0 dB) over thresholds, so that checkpoints are compared
@@ -684,12 +728,18 @@ def frame_scores(model, data: Batches, examples, ctx, tol=1.2):
     tot = {"faint": 0, "visible": 0, "pair": 0}
     n_det, n_match = np.zeros(len(th)), np.zeros(len(th))
     for mix, j0, k_lo, el, gain in examples:
-        feats, *_ = data.example(mix, j0, k_lo, el, gain)
+        ex = data.example(mix, j0, k_lo, el, gain)
+        feats = ex["feats"]
         with (
             torch.no_grad(),
             torch.autocast("cuda", torch.bfloat16, enabled=feats.is_cuda),
         ):
-            out = model.outputs(feats[None])
+            out = model.outputs(
+                feats[None],
+                ex["el"][None] if "el" in ex else None,
+                ex["el_mask"][None] if "el" in ex else None,
+                el_start,
+            )
         sl = slice(ctx, ctx + data.frames)
         pair = {}
         if "pair_logits" in out:
@@ -845,6 +895,14 @@ def main(argv=None):
         help="loss weight of pair bins relative to other bins",
     )
     p.add_argument(
+        "--electrode-channels",
+        type=int,
+        default=0,
+        help="width of the electrode branch (0: none)",
+    )
+    p.add_argument("--electrode-dilations", default="1,2,4,8")
+    p.add_argument("--electrode-into", default="pair", choices=("pair", "trunk"))
+    p.add_argument(
         "--init", default="", help="start from this model's weights (new parts random)"
     )
     p.add_argument(
@@ -887,14 +945,26 @@ def main(argv=None):
             pair_head=True,
             pair_dilations=tuple(int(d) for d in args.pair_dilations.split(",") if d),
         )
+    if args.electrode_channels:
+        spec = replace(
+            spec,
+            electrode_channels=args.electrode_channels,
+            electrode_dilations=tuple(
+                int(d) for d in args.electrode_dilations.split(",") if d
+            ),
+            electrode_into=args.electrode_into,
+        )
     frozen: list[str] = []
     if args.init:
         init_model, init_spec, _ = load_model(args.init, "cpu")
-        spec = replace(
-            init_spec,
-            pair_head=spec.pair_head,
-            pair_dilations=spec.pair_dilations,
+        new = (
+            "pair_head",
+            "pair_dilations",
+            "electrode_channels",
+            "electrode_dilations",
+            "electrode_into",
         )
+        spec = replace(init_spec, **{k: getattr(spec, k) for k in new})
         state = init_model.state_dict()
     model = SalienceNet(spec).to(dev, memory_format=torch.channels_last)
     if args.init:
@@ -910,6 +980,18 @@ def main(argv=None):
                 prm.requires_grad_(n not in state)
     model.checkpoint = args.checkpoint
     ctx = model.context_frames
+    # electrode features only where they reach the loss frames: into the pair
+    # branch, its context and the encoder's around them; into the trunk, all
+    el_frames, el_start = None, 0
+    if spec.electrode_channels:
+        if spec.electrode_into == "pair":
+            reach = model.electrode_context + sum(
+                d * (spec.kernel_frames // 2) for d in spec.pair_dilations
+            )
+            el_start = ctx - reach
+            el_frames = slice(el_start, ctx + args.frames + reach)
+        else:
+            el_frames = slice(None)
     out = OUT / args.tag
     out.mkdir(parents=True, exist_ok=True)
     train = Batches(
@@ -937,6 +1019,7 @@ def main(argv=None):
         workers=args.workers,
         pair_hz=args.pair_hz if spec.pair_head else 0.0,
         pair_focus=args.pair_focus,
+        el_frames=el_frames,
     )
     val = Batches(
         args.val_split,
@@ -949,6 +1032,7 @@ def main(argv=None):
         args.limit,
         harmonics=spec.harmonics,
         workers=0,
+        el_frames=el_frames,
     )
     vr = np.random.default_rng(3)
     T = args.frames + 2 * ctx
@@ -986,7 +1070,9 @@ def main(argv=None):
                     mod.eval()
         batch = train.batch(args.batch)
         with torch.autocast("cuda", torch.bfloat16, enabled=dev.type == "cuda"):
-            bce, l1, *pl = losses(model, batch, ctx, args.focal, args.pair_pos_weight)
+            bce, l1, *pl = losses(
+                model, batch, ctx, args.focal, args.pair_pos_weight, el_start
+            )
             loss = bce + 0.5 * l1
             if pl:
                 loss = loss + args.pair_weight * (pl[0] + 0.5 * pl[1])
@@ -1017,7 +1103,7 @@ def main(argv=None):
             model.eval()
             sc = {}
             for g, name in ((0.0, "lab"), (1.0, "field")):
-                r = frame_scores(model, val, val_examples[g], ctx)
+                r = frame_scores(model, val, val_examples[g], ctx, el_start=el_start)
                 sc |= {f"{k}_{name}": v for k, v in r.items()}
             row = {
                 "step": step,
