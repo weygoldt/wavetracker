@@ -68,8 +68,8 @@ LINE_Z = 2.0  # ... above this
 LINE_CLEAR_HZ = 2.5  # unknown lines farther than this from truth (harmonics)
 LINE_HARMONICS = 12
 TILT_MAX_DB = 15.0  # spectral tilt: at most this gain or attenuation
-HARD_HARMONICS = (1 / 3, 1 / 2, 2, 3)  # hard negatives at h * f of strong fish
-HARD_TOL_HZ = 1.0  # ... within this many Hz times max(1, h)
+HARD_HARMONICS = (1 / 3, 1 / 2, 2, 3, 4, 5)  # hard negatives at h * f of strong fish
+HARD_TOL_HZ = 1.2  # ... within this many Hz times max(1, h / 2)
 MIXTURES = DATA / "mixtures"
 CACHE = DATA / "salience" / "cache"
 OUT = DATA / "salience"
@@ -263,6 +263,7 @@ class Batches:
         tilt_p: float = 0.0,
         harm_weight: float = 1.0,
         harm_snr: float = 10.0,
+        hard_harmonics: tuple[float, ...] = HARD_HARMONICS,
         workers: int = 4,
     ):
         splits = split.split(",")
@@ -286,6 +287,7 @@ class Batches:
         self.speed, self.speed_p = speed, speed_p
         self.tilt_db, self.tilt_p = tilt_db, tilt_p
         self.harm_weight, self.harm_snr = harm_weight, harm_snr
+        self.hard_harmonics = tuple(hard_harmonics)
         self.spec = PowerSpectrogram(NFFT, STEP, RATE, dev)
         self.rng = np.random.default_rng(seed)
         self.lines = {}
@@ -500,8 +502,8 @@ class Batches:
             )
             if self.harm_weight != 1.0:
                 hard = torch.zeros_like(target, dtype=torch.bool)
-                for h in HARD_HARMONICS:
-                    tol = HARD_TOL_HZ * max(1.0, h)
+                for h in self.hard_harmonics:
+                    tol = HARD_TOL_HZ * max(1.0, h / 2)
                     hd = (fk[None, None, :] - h * f0[:, :, None]).abs() <= tol
                     hard |= (hd & strong[:, :, None]).any(0)
                 hard &= (target < 0.1) & (weight > 0)
@@ -673,6 +675,11 @@ def main(argv=None):
     )
     p.add_argument("--harm-snr", type=float, default=10.0)
     p.add_argument(
+        "--hard-harmonics",
+        default="1/3,1/2,2,3,4,5",
+        help="multiples of strong fish that are hard negatives",
+    )
+    p.add_argument(
         "--focal", type=float, default=0.0, help="focal-loss exponent (0: BCE)"
     )
     p.add_argument("--checkpoint", action="store_true", help="recompute layers")
@@ -723,6 +730,9 @@ def main(argv=None):
         tilt_p=args.tilt_p,
         harm_weight=args.harm_weight,
         harm_snr=args.harm_snr,
+        hard_harmonics=tuple(
+            float(Fraction(h)) for h in args.hard_harmonics.split(",")
+        ),
         workers=args.workers,
     )
     val = Batches(
