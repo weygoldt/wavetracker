@@ -39,7 +39,8 @@ Usage::
 Mixture splits draw on sources by ``POOL``: ``dev`` and ``test`` on their
 library splits, ``train`` on the dev sources, and the splits of the learned
 detector on fish groups of the dev sources, ``ltrain`` (2019 group 3, 2022
-pairings 1-3) and ``ldev`` (2019 group 4, 2022 pairing 4).
+pairings 1-3) and ``ldev`` and ``ldev2`` (2019 group 4, 2022 pairing 4;
+``ldev2`` has the designs of ``ldev`` with other seeds).
 """
 
 from __future__ import annotations
@@ -61,18 +62,21 @@ from common import DATA, MIX_CHANNELS, RATE, Trial, Warp, common_drift
 
 SUITE = Path(__file__).with_name("suite.yaml")
 TRAIN_SUITE = Path(__file__).with_name("train.yaml")
-# splits of the learned detector (ldev, ltrain; see POOL)
+# splits of the learned detector (ldev, ldev2, ltrain; see POOL)
 LEARNED_DEV_SUITE = Path(__file__).with_name("learned_dev.yaml")
+LEARNED_DEV2_SUITE = Path(__file__).with_name("learned_dev2.yaml")
 LEARNED_TRAIN_SUITE = Path(__file__).with_name("learned_train.yaml")
 # Sources of a mixture split: (library split, fish groups or None for all).
 # Splits not listed draw on the library split of their own name.
+LDEV_GROUPS = {"2019-g4", "2022-p4"}  # 10 trials
 POOL = {
     "train": ("dev", None),  # training mixtures draw on the dev sources
     # The learned detector trains on crops of thousands of frames and could
     # memorise individual fish, so its train and dev mixtures come from
     # different fish groups of the dev sources (the test groups stay unseen)
     "ltrain": ("dev", {"2019-g3", "2022-p1", "2022-p2", "2022-p3"}),  # 20 trials
-    "ldev": ("dev", {"2019-g4", "2022-p4"}),  # 10 trials
+    "ldev": ("dev", LDEV_GROUPS),
+    "ldev2": ("dev", LDEV_GROUPS),  # the designs of ldev, other seeds
 }
 MIXTURES = DATA / "mixtures"
 TRUTH_RATE = 10.0  # Hz
@@ -787,7 +791,7 @@ def main(argv=None):
     p.add_argument("--suite", type=Path, default=SUITE)
     p.add_argument(
         "--split",
-        help="dev, test, train, ldev or ltrain (default: all of the suite)",
+        help="dev, test, train, ldev, ldev2 or ltrain (default: all of the suite)",
     )
     p.add_argument("--device", default="auto")
     p.add_argument("--worker", default="0/1", help="i/n: every n-th mixture from i")
