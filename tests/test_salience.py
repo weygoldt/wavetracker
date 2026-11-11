@@ -403,9 +403,10 @@ def test_decode_splits_a_pair_peak_into_two_detections():
     offset[0, 25] = -0.1
     poff[:, 0, 25] = torch.tensor([1.0, -1.0])  # ignored: pair probability low
     fr, b, f, s = decode(logits, offset, 0.5, 100, DF, pair, poff, 0.5)
-    np.testing.assert_allclose(f, np.array([109.3, 110.9, 124.9]) * DF)
+    # the peak's own detection stays, the pair offset farther from it is added
+    np.testing.assert_allclose(f, np.array([109.3, 110.2, 124.9]) * DF)
     assert list(fr) == [0, 0, 0]
-    assert list(b) == [109, 111, 125]  # the bin nearest each frequency
+    assert list(b) == [109, 110, 125]  # the bin nearest each frequency
     assert s[0] == s[1] and s[0] > 0.9
     # without the pair outputs (or below the pair threshold): one per peak
     one = decode(logits, offset, 0.5, 100, DF)
@@ -432,7 +433,7 @@ def test_decode_keeps_pair_detections_inside_the_window():
     pair[0, 0] = 3.0
     poff[:, 0, 0] = torch.tensor([-1.4, 0.3])
     _, b, f, _ = decode(logits, offset, 0.5, 100, DF, pair, poff, 0.5)
-    np.testing.assert_allclose(f, np.array([98.6, 100.3]) * DF)
+    np.testing.assert_allclose(f, np.array([98.6, 100.0]) * DF)
     assert list(b) == [100, 100]  # clamped to the candidate bins
 
 

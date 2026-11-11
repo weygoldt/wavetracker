@@ -418,9 +418,10 @@ def decode(
     With the pair head (`pair_logits`, `pair_offset` (2, frames, bins)), a
     peak whose pair probability reaches `pair_threshold` (default
     `threshold`) and that has no other peak within ``PAIR_SPACING`` bins
-    becomes two detections, at the two pair offsets (each with the peak's
-    salience and the bin nearest its frequency). A peak with a neighbour that
-    close is one fish of a pair the salience already resolves."""
+    gets a second detection: at the pair offset farther from the peak's own
+    detection, with the peak's salience and the bin nearest its frequency.
+    A peak with a neighbour that close is one fish of a pair the salience
+    already resolves."""
     p = torch.sigmoid(logits.float())
     left = F.pad(p, (1, 0), value=-1.0)[:, :-1]
     right = F.pad(p, (0, 1), value=-1.0)[:, 1:]
@@ -440,16 +441,21 @@ def decode(
             n_near[fr, kk] < 1.5
         )
         if bool(split.any()):
-            keep = ~split
             fs, ks = fr[split], kk[split]
             off = pair_offset.float()[:, fs, ks].double()  # (2, n)
-            k2 = (ks + k_lo).double()[None] + off
+            # the peak's own detection stays; the pair offset farther from
+            # it is the second fish
+            own = offset[fs, ks].double()
+            far = torch.where(
+                (off[0] - own).abs() >= (off[1] - own).abs(), off[0], off[1]
+            )
+            k2 = (ks + k_lo).double() + far
             n_bins = logits.shape[-1]
             b2 = torch.round(k2).long().clamp(k_lo, k_lo + n_bins - 1)
-            fr = torch.cat([fr[keep], fs, fs])
-            bins = torch.cat([bins[keep], b2[0], b2[1]])
-            freq = torch.cat([freq[keep], k2[0] * df, k2[1] * df])
-            sal = torch.cat([sal[keep], sal[split], sal[split]])
+            fr = torch.cat([fr, fs])
+            bins = torch.cat([bins, b2])
+            freq = torch.cat([freq, k2 * df])
+            sal = torch.cat([sal, sal[split]])
             order = torch.from_numpy(
                 np.lexsort((freq.cpu().numpy(), fr.cpu().numpy()))
             ).to(fr.device)
