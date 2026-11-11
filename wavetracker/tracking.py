@@ -569,6 +569,14 @@ def support(fund_v, idx_v, times, window: float, df: float) -> np.ndarray:
     )
 
 
+def _no_salience(key: str) -> str:
+    return (
+        f"tracking.{key} needs a salience per detection (sal_v), but these "
+        "detections have none (results of an older version?): run detect again, "
+        f"or set tracking.{key} to null"
+    )
+
+
 def drop_weak_identities(
     ident_v: np.ndarray, sal_v: np.ndarray, min_salience: float
 ) -> np.ndarray:
@@ -621,13 +629,8 @@ def track(
     ident_v
         Identity of every detection (float, NaN if unassigned).
     """
-    for key in ("start_salience", "min_identity_salience"):
-        if getattr(cfg, key) is not None and sal_v is None:
-            raise ValueError(
-                f"tracking.{key} needs a salience per detection (sal_v), but "
-                "these detections have none (results of an older version?): run "
-                f"detect again, or set tracking.{key} to null"
-            )
+    if cfg.start_salience is not None and sal_v is None:
+        raise ValueError(_no_salience("start_salience"))
     ident_v = np.full(len(fund_v), np.nan)
     valid = (fund_v >= min_freq) & (fund_v <= max_freq)
     if valid.sum() < 2 or len(times) < 2:

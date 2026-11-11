@@ -363,3 +363,6 @@ def test_identity_salience_filter_in_the_pipeline():
     assert np.isfinite(res.ident_v[label == 0]).mean() > 0.9
     with pytest.raises(ValueError, match="min_identity_salience"):
         TrackingConfig(min_identity_salience=1.5)
+    # the tracker alone does not need the salience (the linker's training
+    # tracks detections without it)
+    track(fund, idx, sign, times, cfg.tracking)

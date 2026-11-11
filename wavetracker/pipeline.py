@@ -33,7 +33,7 @@ from .spectrogram import (
     step_size,
 )
 from .stitching import stitch
-from .tracking import drop_weak_identities, track
+from .tracking import _no_salience, drop_weak_identities, track
 
 log = logging.getLogger(__name__)
 
@@ -547,6 +547,8 @@ def detect(
 def track_results(results: Results, cfg: Config) -> float:
     """Assign identities in place; returns the time it took."""
     t0 = time.perf_counter()
+    if cfg.tracking.min_identity_salience is not None and results.sal_v is None:
+        raise ValueError(_no_salience("min_identity_salience"))
     results.ident_v = track(
         results.fund_v,
         results.idx_v,

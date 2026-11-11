@@ -176,3 +176,20 @@ of its identity, and the second pass predicts along it. Lessons:
   of the new fragments (on `ldev-field/density-20,30`: joined 37 % -> 31 %
   of the breaks, more interleaved fragments at rises). Hence the retrained
   linker below.
+
+**Retraining the linker on the fragments of a new tracker.** `linker.py
+build` re-tracks a base run's detections with the tracking settings of `-c`
+and caches fragments and pairs under `$WT_BENCHMARK_DATA/linker/<base>/`, so
+every tracker variant needs its own base tag holding the `ltrain` detections
+of `A-learned` (step A's model, `salience/linker-learned-v1.npz`, is
+reproduced bit for bit by `train --base A-learned`):
+
+```bash
+python benchmarks/dense/run.py retrack --tag B-assoc-lt-motion2 --source A-learned -c benchmarks/dense/configs/learned-assoc.yaml --split ltrain   # and ltrain-field
+python benchmarks/dense/linker.py build --base B-assoc-lt-motion2 -c benchmarks/dense/configs/learned-assoc.yaml --splits ltrain ltrain-field
+python benchmarks/dense/linker.py train --base B-assoc-lt-motion2 --train-splits ltrain ltrain-field --val-splits ltrain-field --out $WT_BENCHMARK_DATA/assoc/linker-learned-v1-motion2.npz
+```
+
+(The runs here used base tags whose split folders link to the `A-learned`
+and `A-v1m-relinked` runs instead of copying them, and validated on `ldev`;
+the validation split does not change the model.)
