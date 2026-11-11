@@ -888,6 +888,25 @@ own electrode patterns (projected on the patterns of the two fish before the
 peaks merged) instead of the same spectra; and joining pair episodes as a
 unit in the linker.
 
+### Where the learned pipeline stands (51 dev mixtures)
+
+`ldev` + `ldev2` with their field variants (51 mixtures, 102 variants;
+`compare.py`, paired bootstrap over mixtures). Mean IDF1, lab / field:
+
+| pipeline | IDF1 |
+|---|---|
+| classic (`dense-linked.yaml`) | 0.635 / 0.598 |
+| v1 + step-A linker (`learned-relinked.yaml`) | 0.734 / 0.720 |
+| v1 + step-B association (`learned-assoc.yaml`) | 0.742 / 0.730 |
+| step-B detector + association (`learned-b.yaml`) | 0.748 / 0.738 |
+| + rise joiner (`learned-rises.yaml`) | **0.766 / 0.759** |
+
+`learned-rises` against classic: +0.146 [+0.132, +0.160] (better in 100 of
+102 variants); against `learned-b`: +0.019 [+0.015, +0.025] (92 better, 1
+worse); against v1 with the step-B association: +0.027 [+0.022, +0.032].
+Close pairs (two fish in one peak) are limited by association, not by
+detection (see "Two fish in one peak").
+
 ## Learned fragment linking
 
 On the dense mixtures, identities break much more often than detections
