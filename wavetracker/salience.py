@@ -85,6 +85,10 @@ class SalienceSpec:
     pair_reach: float = 2.5
     """Largest offset of a fish of a pair from its bin [bins of the model's
     grid] the pair head can give."""
+    pair_dilations: tuple[int, ...] = ()
+    """Time dilation of each layer of a branch between the trunk and the
+    pair head (residual convolutions as in the trunk; empty: the head reads
+    the trunk directly). Their context adds to the trunk's."""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> SalienceSpec:
@@ -198,6 +202,12 @@ class SalienceNet(nn.Module):
         )
         self.head = nn.Conv2d(c, 2, 1)
         self.pair = nn.Conv2d(c, 3, 1) if spec.pair_head else None
+        kt, kf = spec.kernel_frames, spec.kernel_bins
+        self.pair_convs = nn.ModuleList(
+            nn.Conv2d(c, c, (kt, kf), padding=(d * (kt // 2), kf // 2), dilation=(d, 1))
+            for d in (spec.pair_dilations if spec.pair_head else ())
+        )
+        self.pair_norms = nn.ModuleList(nn.BatchNorm2d(c) for _ in self.pair_convs)
         self.checkpoint = False
         """Training only: recompute each layer in the backward pass instead
         of keeping its activations (long crops of the temporal stack)."""
@@ -207,7 +217,10 @@ class SalienceNet(nn.Module):
         """Frames on each side that influence an output frame."""
         s = self.spec
         trunk = sum(d * (s.kernel_frames // 2) for d in s.dilations)
-        return trunk + sum(d * (s.temporal_kernel // 2) for d in s.temporal_dilations)
+        trunk += sum(d * (s.temporal_kernel // 2) for d in s.temporal_dilations)
+        if s.pair_head:
+            trunk += sum(d * (s.kernel_frames // 2) for d in s.pair_dilations)
+        return trunk
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Salience logits and sub-bin offset (see `outputs` for all heads)."""
@@ -223,10 +236,16 @@ class SalienceNet(nn.Module):
         o = self.head(y)
         out = {"logits": o[:, 0], "offset": 0.5 * torch.tanh(o[:, 1])}
         if self.pair is not None:
-            q = self.pair(y)
+            q = self.pair(self.pair_branch(y))
             out["pair_logits"] = q[:, 0]
             out["pair_offset"] = self.spec.pair_reach * torch.tanh(q[:, 1:3])
         return out
+
+    def pair_branch(self, y: torch.Tensor) -> torch.Tensor:
+        """Trunk features -> features of the pair head."""
+        for conv, norm in zip(self.pair_convs, self.pair_norms, strict=True):
+            y = y + _layer(conv, norm, y)
+        return y
 
     def trunk(self, x: torch.Tensor) -> torch.Tensor:
         """Features (batch, channels, frames, bins) before the heads."""

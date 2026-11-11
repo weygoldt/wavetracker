@@ -437,7 +437,9 @@ def test_decode_keeps_pair_detections_inside_the_window():
 
 def test_streaming_with_pair_head_equals_one_pass():
     torch.manual_seed(6)
-    spec = small_spec(dilations=(1, 2), temporal_dilations=(1, 4), pair_head=True)
+    spec = small_spec(
+        dilations=(1, 2), temporal_dilations=(1, 4), pair_head=True, pair_dilations=(2,)
+    )
     net = SalienceNet(spec).eval()
     with torch.no_grad():  # make the pair head fire often
         net.pair.bias[0] = 3.0
@@ -495,3 +497,24 @@ def test_detector_config_pair_threshold():
     assert cfg.detector.pair_threshold == 0.4
     with pytest.raises(ValueError, match="pair_threshold"):
         DetectorConfig(pair_threshold=1.5)
+
+
+def test_pair_branch_adds_its_context():
+    """Layers between the trunk and the pair head add their time context; the
+    salience itself does not depend on them."""
+    torch.manual_seed(8)
+    spec = small_spec(temporal_dilations=(1, 2), pair_head=True, pair_dilations=(1, 4))
+    net = SalienceNet(spec).eval()
+    assert net.context_frames == (1 + 2 + 1) + (1 + 2) + (1 + 4)
+    T, K = 60, 30
+    x = torch.zeros(1, len(spec.harmonics), T, K)
+    with torch.no_grad():
+        a = net.outputs(x)
+        x2 = x.clone()
+        x2[0, :, 30, 15] = 5.0
+        b = net.outputs(x2)
+    rows = torch.nonzero((a["pair_logits"] - b["pair_logits"]).abs()[0].amax(1) > 0)
+    assert rows.min() == 30 - net.context_frames
+    assert rows.max() == 30 + net.context_frames
+    sal = torch.nonzero((a["logits"] - b["logits"]).abs()[0].amax(1) > 0)
+    assert sal.min() == 30 - (net.context_frames - 5)
