@@ -555,6 +555,110 @@ more seeds or a larger dev split. `configs/learned-b.yaml` is the candidate
 (augmented model, seed 0, threshold 0.6): 0.752 / 0.741, against classic
 0.639 / 0.597 and v1 at the end of step A 0.739 / 0.723.
 
+### Rises (step B)
+
+With the detections of `learned-b.yaml` fixed (run `B-aug-s0-t0.6`) and,
+to separate tracking from detection, with truth detections >= 0 dB
+(`A-oracle-snr0` through `configs/oracle-b.yaml`, the same association with
+the packaged linker at 0.9), `benchmarks/dense/rise_diag.py` finds the rises
+in the truth (a jump of at least 2 Hz within 1 s that stays above half its
+size for 2 s, so chirps are left out; it ends when the frequency is back
+within 20 % of the jump, after at most 60 s or at the next onset) and checks
+each fish's identities there. `ldev` holds 1100 rises (65 per mixture; size
+quartiles 3.8 / 5.8 / 9.9 Hz, 99 % below 34 Hz, the largest 61 Hz; half the
+jump decays in a median 6 s). The cost of an outcome is the IDF1 gained by an
+oracle that repairs only those rises (joins every identity mostly of the fish
+during the rise to the one it had before, and moves its other detections
+there). Per mixture, lab / field noise:
+
+| outcome | learned: rises | cost | truth detections: rises | cost |
+|---|---|---|---|---|
+| kept by the tracker | 14.9 / 14.3 | 0.003 / 0.001 | 18.4 / 17.8 | 0.001 / 0.001 |
+| kept by the linker | 12.2 / 10.8 | 0.000 / 0.000 | 13.2 / 13.1 | 0.000 / 0.000 |
+| on own identities, never joined | 10.0 / 12.6 | **0.024 / 0.031** | 12.1 / 9.5 | 0.010 / 0.007 |
+| onto another fish's identity | 2.9 / 3.4 | 0.001 / 0.002 | 5.2 / 5.2 | 0.005 / 0.004 |
+| dropped (no identity) | 1.4 / 1.4 | 0.000 / 0.000 | 1.4 / 1.4 | 0.000 / 0.000 |
+| fish not on its own identity before / not detected | 23.4 / 22.2 | | 14.5 / 17.7 | |
+| **all rises** | | **0.025 / 0.032** | | 0.015 / 0.012 |
+
+Rises cost three times what the [association diagnosis](#association-for-the-learned-detector-step-b)
+gave them (0.008 / 0.009), which counted a break first as a crossing or a
+gap: a 10 Hz rise among 30 fish crosses other lines. The fish whose rises
+break are mostly in the density scenarios (0.056 / 0.071 there), where a fish
+with many rises ends on two identities that take turns at every rise. With
+learned detections 60 % of the unjoined breaks jump more than 5 Hz (beyond
+the linker's candidates) across a median 0.66 s; with truth detections 44 %
+jump less than 2 Hz across one frame (the climb is faster than the tracker's
+0.5 Hz gap tolerance). Identities hold 51 % of the fish's frames within
++-30 s of an onset, against 65 % elsewhere.
+
+**Rise joiner** (`rises.enabled`, [algorithms](algorithms.md#joining-across-rises)):
+an identity that stops is joined to one that starts within 5 s (or up to 4 s
+before), 1.5-35 Hz higher, with the same electrode pattern. On candidate
+pairs of `ldev` (a stop and a start, 1.5-100 Hz apart), the pattern
+separates one fish from two (rms difference median 3.7 vs 8.9 dB,
+correlation 0.89 vs 0.01); the jump helps (8.6 vs 46 Hz), the decay does not
+(slope of the later piece -0.24 vs -0.07 Hz/s, but requiring a falling slope
+lost IDF1: many rise pieces end, or the next rise starts, before they
+decay). A gradient-boosted classifier of 14 pair features trained on the
+`ltrain` candidates was no better than the rules (+0.021 / +0.023 at best).
+The learned detector reports the old frequency for 1-3.5 s after an onset (a
+ghost tail; its temporal stack sees +-26 s), and the new one up to a second
+before it, so the old identity stops after the new one starts: allowing 4 s
+of overlap, and dropping the old identity's tail on a join, took the field
+gain from +0.016 to +0.021. With truth detections the patterns of fish near
+the noise are noise and chained faint fish together (`ladder-30-s0` -0.038);
+both sides now need a mean salience of 0.4, which the learned detector
+(threshold 0.6) always has.
+
+`configs/learned-rises.yaml` (`learned-b.yaml` + `rises.enabled`), lab /
+field noise, means of 17 mixtures:
+
+| | learned-b | learned-rises | truth det., oracle-b | + rise joiner |
+|---|---|---|---|---|
+| IDF1 | 0.752 / 0.741 | **0.773 / 0.762** | 0.790 / 0.757 | 0.795 / 0.761 |
+| mixtures better / worse | | 15 / 0, 15 / 0 | | 14 / 0, 13 / 0 |
+| purity | 0.980 / 0.981 | 0.979 / 0.980 | 0.955 / 0.959 | 0.953 / 0.957 |
+| switches per fish and minute | 0.28 / 0.32 | 0.22 / 0.26 | 1.43 / 1.29 | 1.35 / 1.22 |
+| false identities >= 30 s | 0.47 / 0.59 | 0.47 / 0.59 | 0 / 0 | 0 / 0 |
+| identities >= 30 s | 24.5 / 24.6 | 22.4 / 22.5 | 30.7 / 29.1 | 29.3 / 27.8 |
+| identity coverage within +-30 s of rises | 0.51 / 0.51 | 0.58 / 0.58 | 0.61 / 0.59 | 0.63 / 0.60 |
+| IDF1 crowded | 0.745 / 0.746 | 0.760 / 0.762 | 0.626 / 0.643 | 0.649 / 0.654 |
+| IDF1 density | 0.895 / 0.875 | 0.946 / 0.924 | 0.929 / 0.924 | 0.935 / 0.929 |
+| IDF1 atten (+ ladder) | 0.587 / 0.583 | 0.595 / 0.592 | 0.666 / 0.596 | 0.666 / 0.596 |
+| IDF1 lowfreq (+ lowonly) | 0.903 / 0.884 | 0.910 / 0.891 | 0.957 / 0.930 | 0.962 / 0.937 |
+| rise cost left (oracle repair) | 0.025 / 0.032 | 0.004 / 0.011 | 0.015 / 0.012 | 0.011 / 0.009 |
+
+Detections are fixed, so recall and precision do not change. The joiner
+makes 5.6 / 6.0 joins per mixture; 0.47 / 0.59 of them join identities of
+two different fish (8 % / 10 %; one in ten of those are the two fish of one
+tube recording), mostly in `crowded`, where purity falls by 0.009-0.014 while
+IDF1 still rises. With truth detections, 29 % / 19 % of its 5.4 / 4.5 joins
+per mixture are wrong, again mostly in `crowded`: fish a few Hz apart share
+spectrogram bins and so read the same electrode pattern. What is left at rises with learned detections: in field
+noise mostly fish whose pattern changes within seconds (they move) and
+identities that run in parallel with others (shared frames). `min_jump` 3
+instead of 1.5 Hz trades a little IDF1 for a little purity (learned 0.772 /
+0.762, truth detections 0.795 / 0.760). With the classic detector
+(`classic-ldev` through `dense-linked.yaml`, detections without salience, so
+`rises.min_salience: null`) the joiner adds +0.006 / +0.006 (13 / 12 of 17
+better, 1 / 1 worse) at a purity cost of 0.004 / 0.008: its harmonic and
+false lines offer more false joins.
+`ldev/density-10-s0`, fish 2 (13 rises) goes from 4 identities to 1 (IDF1
+of the mixture +0.12).
+
+On `ldev2` (new seeds of the `ldev` designs; the 16 lab mixtures complete at
+the time: `atten-fish`, `crowded`, `density-30`, `lowfreq-30`, seeds 100-103;
+detections `B-rise-l2b` of the `learned-b` detector), `learned-rises.yaml`
+confirms: IDF1 0.778 -> 0.796 (+0.018), better in 16 of 16, purity 0.970 ->
+0.969, switches per fish and minute 0.39 -> 0.34, rise cost 0.029 -> 0.012,
+identity coverage within +-30 s of rises 0.55 -> 0.61, 6.5 joins per mixture
+of which 0.62 join two fish. A 2.5 s pattern window, which looked better in
+`ldev-field` (two mixtures with moving fish), gives the same (+0.018). Figures: `figures/rises_B-rise-j3.png` (outcomes,
+costs, IDF1 change per mixture), `figures/rises_example_ldev_density-10-s0_2.png`,
+`figures/rises_example_ldev-field_density-10-s0_6.png` (ghost tail),
+`figures/strata_rises.png`; notes in `$WT_BENCHMARK_DATA/assoc/B-rise-NOTES.md`.
+
 ## Learned fragment linking
 
 On the dense mixtures, identities break much more often than detections

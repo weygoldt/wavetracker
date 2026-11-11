@@ -269,6 +269,11 @@ rise candidates), `linker-v1-s1`, `linker-repro` (= step A's); pairs in
   follows the onset (the old frequency fades while the new one appears in the
   same 1.6 s window), or a dedicated rise joiner, would address the largest
   remaining break.
+  Done on branch `learned-rises`: a rise joiner after linking
+  (`wavetracker/rises.py`, `configs/learned-rises.yaml`), +0.021 / +0.021 on
+  the learned-b detections; see docs/benchmarks.md, "Rises (step B)". Rises
+  cost 0.025 / 0.032 there, more than the 0.008 / 0.009 above, which counted
+  a rise break as a crossing or a gap first.
 * Interleaved fragments at fast frequency modulation (two lines for one fish
   in one analysis window) are a detector issue; the temporal module of the
   detector track could remove them.
