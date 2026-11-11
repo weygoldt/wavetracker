@@ -587,6 +587,7 @@ def track_results(results: Results, cfg: Config) -> float:
             results.ident_v,
             results.times,
             cfg.rises,
+            sal_v=results.sal_v,
         )
     if cfg.tracking.min_identity_salience is not None:
         results.ident_v = drop_weak_identities(

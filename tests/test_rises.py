@@ -9,7 +9,7 @@ P1 = np.array([1.0, 2.0, 4.0, 8.0])  # electrode powers of one fish
 P2 = P1[::-1]  # another fish elsewhere on the grid
 
 
-def _piece(t0, t1, ident, f0, pattern=P1, rise=None, seed=0):
+def _piece(t0, t1, ident, f0, pattern=P1, rise=None, seed=0, sal=0.9):
     """Detections every frame from t0 to t1 at f0, optionally with a rise
     (size, tau) decaying from t0, and a slightly noisy electrode pattern."""
     rng = np.random.default_rng(seed)
@@ -18,24 +18,27 @@ def _piece(t0, t1, ident, f0, pattern=P1, rise=None, seed=0):
     if rise is not None:
         f += rise[0] * np.exp(-(t - t0) / rise[1])
     sign = np.asarray(pattern, float) * 10 ** (rng.normal(0, 0.1, (len(t), 4)) / 10)
-    return t, f, np.full(len(t), float(ident)), sign
+    return t, f, np.full(len(t), float(ident)), sign, np.full(len(t), sal)
 
 
-def _assemble(*pieces):
+def _assemble(*pieces, with_salience=False):
     t = np.concatenate([p[0] for p in pieces])
     order = np.argsort(t, kind="stable")
     times = np.arange(0, t.max() + 1, DT)
     idx = np.round(t[order] / DT).astype(np.int64)
-    return (
+    out = (
         np.concatenate([p[1] for p in pieces])[order],
         idx,
         np.concatenate([p[3] for p in pieces])[order],
         np.concatenate([p[2] for p in pieces])[order],
         times,
     )
+    if with_salience:
+        return (*out, np.concatenate([p[4] for p in pieces])[order])
+    return out
 
 
-ON = RisesConfig(enabled=True)
+ON = RisesConfig(enabled=True, min_salience=None)
 
 
 def _n_ids(ident):
@@ -156,10 +159,30 @@ def test_track_results_joins_rises_when_enabled():
         )
         cfg = Config.from_dict(
             {"linking": {"enabled": False}, "stitching": {"enabled": False}}
-            | ({"rises": {"enabled": True}} if rises else {})
+            | ({"rises": {"enabled": True, "min_salience": None}} if rises else {})
         )
         track_results(res, cfg)
         return res.ident_v
 
     assert _n_ids(run(False)) == 2
     assert _n_ids(run(True)) == 1
+
+
+def test_faint_fish_are_not_joined_by_their_noisy_patterns():
+    cfg = RisesConfig(enabled=True, min_salience=0.4)
+    for sal, n in ((0.9, 1), (0.2, 2)):
+        fund, idx, sign, ident, times, sal_v = _assemble(
+            _piece(0, 100, 0, 700.0, sal=sal),
+            _piece(100.5, 200, 1, 701.0, rise=(12.0, 8.0), sal=sal),
+            with_salience=True,
+        )
+        out = join_rises(fund, idx, sign, ident, times, cfg, sal_v=sal_v)
+        assert _n_ids(out) == n
+
+
+def test_salience_check_needs_salience():
+    fund, idx, sign, ident, times = _assemble(
+        _piece(0, 100, 0, 700.0), _piece(100.5, 200, 1, 701.0, rise=(12.0, 8.0))
+    )
+    with pytest.raises(ValueError, match="salience"):
+        join_rises(fund, idx, sign, ident, times, RisesConfig(enabled=True))

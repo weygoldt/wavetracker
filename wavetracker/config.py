@@ -430,6 +430,11 @@ class RisesConfig:
     """... and the smallest correlation."""
     min_duration: float = 1.0
     """The later identity spans at least this after its start [s]."""
+    min_salience: float | None = 0.4
+    """Both identities need a mean detection salience (0-1, `sal_v`) of at
+    least this over their pattern windows: the electrode pattern of a fish
+    near the noise is noise, and two faint fish look alike. None: not
+    checked."""
     max_shared: float = 0.3
     """Two identities may share at most this fraction of the smaller one's
     frames (one fish is detected once per frame)."""

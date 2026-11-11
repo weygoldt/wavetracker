@@ -11,15 +11,19 @@ After linking (or stitching), ``join_rises`` pairs every *stop* of an
 identity (no detection of it for ``stop_gap`` s after) with the *starts* of
 other identities (no detection for ``stop_gap`` s before) that follow
 within ``max_gap`` s (or begin up to ``max_overlap`` s earlier) between
-``min_jump`` and ``max_jump`` Hz higher. The learned detector often reports
-the old frequency for a few seconds after the onset (and the new one a little
-before it); when such a pair is joined, the earlier identity's detections
-after the later one's start are dropped, since a fish is at one frequency. Such a pair is one fish if the
+``min_jump`` and ``max_jump`` Hz higher. Such a pair is one fish if the
 electrode patterns before the stop and after the start agree
 (``max_pattern_rms``, ``min_pattern_corr``): a fish does not move far within
 a rise, while another fish that happens to start there sits elsewhere on the
-grid. Pairs are joined best first (smallest pattern difference), unless the
-two identities would share frames (``max_shared``).
+grid. Near the noise the patterns are noise and two faint fish look alike,
+so both sides need a mean detection salience of ``min_salience``. Pairs are
+joined best first (smallest pattern difference), unless the two identities
+would share frames (``max_shared``).
+
+The learned detector often reports the old frequency for a few seconds
+after the onset (and the new one a little before it). When such a pair is
+joined, the earlier identity's detections after the later one's start are
+dropped, since a fish is at one frequency.
 
 The decay that follows a rise is not required: on the dense benchmark many
 rise pieces end before they decay, or the next rise starts first, and
@@ -28,10 +32,13 @@ requiring a falling slope lost more true joins than false ones.
 
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 
 from .config import RisesConfig
 from .linking import _pattern, _pattern_distance
+from .tracking import _no_salience
 
 
 def _edges(t: np.ndarray, gap: float):
@@ -41,11 +48,15 @@ def _edges(t: np.ndarray, gap: float):
     return np.r_[0, brk + 1], np.r_[brk, len(t) - 1]
 
 
-def candidates(fund_v, sign_v, t_det, members, cfg: RisesConfig):
+def candidates(fund_v, sign_v, t_det, members, cfg: RisesConfig, sal_v=None):
     """Rise pairs (pattern rms, earlier identity, later identity, the later
     one's start, the earlier one's stop [s]) by position in `members`, the
     detection indices of every identity sorted by time."""
     stops, starts = [], []
+
+    def weak(m):
+        return cfg.min_salience is not None and sal_v[m].mean() < cfg.min_salience
+
     for p, m in enumerate(members):
         t, f = t_det[m], fund_v[m]
         first, last = _edges(t, cfg.stop_gap)
@@ -54,10 +65,14 @@ def candidates(fund_v, sign_v, t_det, members, cfg: RisesConfig):
                 continue
             edge = (t >= t[s]) & (t <= t[s] + cfg.edge_window)
             pat = (t >= t[s]) & (t <= t[s] + cfg.pattern_window)
+            if weak(m[pat]):
+                continue
             starts.append((t[s], float(np.median(f[edge])), p, m[pat]))
         for e in last:
             edge = (t >= t[e] - cfg.edge_window) & (t <= t[e])
             pat = (t >= t[e] - cfg.pattern_window) & (t <= t[e])
+            if weak(m[pat]):
+                continue
             stops.append((t[e], float(np.median(f[edge])), p, m[pat]))
     if not stops or not starts:
         return []
@@ -88,19 +103,23 @@ def join_rises(
     ident_v: np.ndarray,
     times: np.ndarray,
     cfg: RisesConfig,
+    sal_v: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Identities with the two sides of rise onsets joined (see module doc)."""
+    """Identities with the two sides of rise onsets joined (see module doc).
+    `sal_v` (salience per detection) is needed for ``cfg.min_salience``."""
     from .stitching import resolve_duplicates
 
     if not cfg.enabled or not np.isfinite(ident_v).any():
         return ident_v.copy()
+    if cfg.min_salience is not None and sal_v is None:
+        raise ValueError(_no_salience("min_salience").replace("tracking.", "rises."))
     t_det = times[idx_v]
     valid = np.flatnonzero(np.isfinite(ident_v))
     order = valid[np.lexsort((t_det[valid], ident_v[valid]))]
     ids, first = np.unique(ident_v[order], return_index=True)
     bounds = np.append(first, len(order))
-    members = [order[a:b] for a, b in zip(bounds[:-1], bounds[1:], strict=True)]
-    pairs = candidates(fund_v, sign_v, t_det, members, cfg)
+    members = [order[a:b] for a, b in itertools.pairwise(bounds)]
+    pairs = candidates(fund_v, sign_v, t_det, members, cfg, sal_v)
     if not pairs:
         return ident_v.copy()
 
