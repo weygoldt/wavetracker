@@ -12,6 +12,7 @@ Usage::
     python benchmarks/dense/run.py report --tags default dense   # dev and dev-field
     python benchmarks/dense/run.py report --tags default --splits test test-field
     python benchmarks/dense/run.py track  --tag mine -c ... --split ldev   # learned-detector dev
+    python benchmarks/dense/run.py track  --tag mine -c ... --split ldev2  # and its second set
     python benchmarks/dense/run.py retrack --tag mine-dt20 --source mine -c ... --set tracking.max_dt=20 --split ldev
 """
 
@@ -29,6 +30,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent))
 from common import DATA
 from mixture import (
+    LEARNED_DEV2_SUITE,
     LEARNED_DEV_SUITE,
     LEARNED_TRAIN_SUITE,
     MIXTURES,
@@ -61,11 +63,16 @@ def merge(a: dict, b: dict) -> dict:
 
 
 def mixtures(split: str | None, only=None) -> list[str]:
-    """Complete mixtures of a split: dev, test, train, ldev, ltrain (lab
-    noise) or their -field variants (the same fish in field noise, see
+    """Complete mixtures of a split: dev, test, train, ldev, ldev2, ltrain
+    (lab noise) or their -field variants (the same fish in field noise, see
     noise.py)."""
     suite = list(expand_suite())
-    for path in (TRAIN_SUITE, LEARNED_DEV_SUITE, LEARNED_TRAIN_SUITE):
+    for path in (
+        TRAIN_SUITE,
+        LEARNED_DEV_SUITE,
+        LEARNED_DEV2_SUITE,
+        LEARNED_TRAIN_SUITE,
+    ):
         if path.exists():
             suite += list(expand_suite(path))
     names = suite + [n.replace("/", "-field/", 1) for n in suite]
