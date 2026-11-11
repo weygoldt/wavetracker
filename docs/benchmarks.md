@@ -555,6 +555,131 @@ more seeds or a larger dev split. `configs/learned-b.yaml` is the candidate
 (augmented model, seed 0, threshold 0.6): 0.752 / 0.741, against classic
 0.639 / 0.597 and v1 at the end of step A 0.739 / 0.723.
 
+### Two fish in one peak
+
+Two fundamentals closer than about 1.2 Hz make one peak in the 1.64 s
+window. Of the visible fish (>= 6 dB) with another *fundamental* that close
+(`strata.py`, stratum `pair < 1.2 Hz`; `nn < 1.2 Hz` also counts harmonics),
+`learned-b` finds 0.49 / 0.49 (lab / field): one fish per pair. Notes and
+runs: `$WT_BENCHMARK_DATA/salience/B-pair-NOTES.md`.
+
+**The cue** (`benchmarks/dense/pair_cues.py`). Windows of 1.5-6 s of every
+pair of truth fish closer than 1.2 Hz throughout (the weaker fish >= 6 dB)
+against single fish with no other line within 3 Hz, weighted to the same
+SNR. The truth's SNR of a fish in a close pair is the power of both (it is
+read from the mixture at the fish's bin), so the script takes each fish's SNR
+from the frames where it is clear of others. Cross-validated AUC (logistic
+regression, folds by mixture) of the cues of one bin, 3 s windows, lab /
+field, 9 electrodes:
+
+| cues | < 0.6 Hz apart | 0.6-1.2 Hz apart |
+|---|---|---|
+| beat of the summed power | 0.59 / 0.57 | 0.66 / 0.65 |
+| electrodes: spatial covariance (lambda2/lambda1, complex and real), non-realness | 0.71 / 0.73 | 0.74 / 0.76 |
+| both | 0.74 / 0.74 | 0.78 / 0.79 |
+
+With 2 or 4 electrodes and 1.5 or 6 s windows the picture is the same
+(electrodes -0.02 to +0.17 over the beat, both 0.68-0.83). The cue is weak
+because the single fish are not static: in these recordings a fish's share
+of the summed power moves between electrodes within 1-3 s and its level by
+10-50 dB, and the phases between electrodes are not only 0 or pi. Figures:
+`figures/B-pair-cues.png`, `figures/B-pair-cues-combined.png`,
+`figures/B-pair-single-fish.png`.
+
+**What was built** (all optional, see
+[algorithms](algorithms.md#learned-detector); old models load and give
+bit-identical detections):
+
+- a *pair head* (`SalienceSpec.pair_head`): per bin the probability of two
+  fish and the offsets of both; a salience peak without a neighbouring peak
+  that reaches `detector.pair_threshold` gets a second detection at the far
+  offset, with the pair probability as salience. Chosen over a finer
+  frequency grid because two fish 0.1 Hz apart (crossings) need no
+  narrower targets or sub-bin peaks, and over a count head on every bin
+  because peak picking stays as it is for single fish. Trained on a frozen
+  `learned-b` trunk (a 3-layer branch, 25 min) or with all weights
+  (`salience_train.py --pair-head --init ... [--freeze-trunk]`, half of the
+  crops centred on a close pair: only 0.3 % of the loss bins are pair bins
+  otherwise);
+- an *electrode branch* (`SalienceSpec.electrode_channels`): per electrode
+  its share of the summed power and its phase to the strongest electrode at
+  the candidate bins, one shared encoder, mean and max over any number of
+  electrodes, gated (from zero) into the pair branch or the trunk; trained
+  on random subsets of 2-9 electrodes.
+
+Before tracking (`pair_eval.py`: lone salience peaks that hide a second fish,
+6 % of them, against single-fish peaks), the pair probability separates them
+with AUC 0.75 / 0.72 (frozen trunk), 0.76 / 0.71 (all weights) and 0.73 /
+0.66 (electrodes into the pair branch); at a pair threshold of 0.3 about a
+tenth of the hidden fish are found (median error 0.2-0.3 Hz) at 0.1-0.3 %
+of single-fish peaks split.
+
+**Results** through `learned-b.yaml` (only `detector.*` changed; threshold
+0.6), lab / field:
+
+| detector | IDF1 | recall, pair < 1.2 Hz | recall, line 1.2-3 Hz | precision | harmonic / frame | false ids >= 30 s | switches / fish / min | mean IDF1 |
+|---|---|---|---|---|---|---|---|---|
+| learned-b s0 | 0.752 / 0.741 | 0.49 / 0.49 | 0.85 / 0.87 | 0.972 / 0.966 | 0.11 / 0.18 | 0.5 / 0.6 | 0.28 / 0.32 | 0.7466 |
+| learned-b s1 | 0.748 / 0.739 | 0.49 / 0.49 | 0.84 / 0.87 | 0.977 / 0.967 | 0.11 / 0.20 | 0.5 / 0.7 | 0.28 / 0.32 | 0.7434 |
+| pair head s0, p 0.2 | 0.736 / 0.735 | 0.57 / 0.56 | 0.86 / 0.87 | 0.956 / 0.957 | 0.19 / 0.22 | 0.5 / 0.6 | 0.77 / 0.65 | 0.7355 |
+| pair head s0, p 0.3 | 0.750 / 0.739 | 0.53 / 0.52 | 0.85 / 0.87 | 0.969 / 0.964 | 0.13 / 0.19 | 0.5 / 0.6 | 0.42 / 0.45 | 0.7443 |
+| pair head s0, p 0.5 | 0.753 / 0.740 | 0.50 / 0.50 | 0.85 / 0.87 | 0.972 / 0.965 | 0.11 / 0.18 | 0.5 / 0.6 | 0.29 / 0.34 | 0.7465 |
+| pair head s1, p 0.3 | 0.747 / 0.741 | 0.53 / 0.53 | 0.85 / 0.87 | 0.965 / 0.963 | 0.19 / 0.22 | 0.5 / 0.8 | 0.48 / 0.51 | 0.7440 |
+| pair head s1, p 0.5 | 0.750 / 0.740 | 0.50 / 0.50 | 0.84 / 0.87 | 0.976 / 0.967 | 0.12 / 0.20 | 0.5 / 0.7 | 0.30 / 0.33 | 0.7448 |
+| pair head s0, p 0.2, start_salience 0.6 | 0.738 / 0.734 | 0.57 / 0.56 | 0.86 / 0.87 | 0.956 / 0.957 | 0.19 / 0.22 | 0.5 / 0.6 | 0.76 / 0.65 | 0.7361 |
+| pair head s0, p 0.3, start_salience 0.6 | 0.751 / 0.738 | 0.53 / 0.52 | 0.85 / 0.87 | 0.969 / 0.964 | 0.13 / 0.19 | 0.5 / 0.6 | 0.40 / 0.44 | 0.7445 |
+| pair head + electrodes s0, p 0.3 | 0.748 / 0.739 | 0.54 / 0.53 | 0.85 / 0.87 | 0.969 / 0.964 | 0.13 / 0.20 | 0.5 / 0.6 | 0.43 / 0.42 | 0.7437 |
+| all weights fine-tuned s0, p 0.3 | 0.750 / 0.743 | 0.53 / 0.52 | 0.82 / 0.84 | 0.961 / 0.960 | 0.16 / 0.23 | 0.1 / 0.4 | 0.28 / 0.27 | 0.7462 |
+| all weights fine-tuned s0, no splits | 0.755 / 0.743 | 0.48 / 0.49 | 0.82 / 0.84 | 0.963 / 0.960 | 0.15 / 0.22 | 0.1 / 0.4 | 0.18 / 0.22 | 0.7488 |
+| pair oracle s0 | 0.735 / 0.725 | 0.98 / 0.98 | 0.85 / 0.87 | 0.973 / 0.966 | 0.11 / 0.18 | 0.5 / 0.6 | 1.26 / 1.36 | 0.7301 |
+| pair oracle s1 | 0.736 / 0.731 | 0.98 / 0.98 | 0.84 / 0.87 | 0.977 / 0.968 | 0.11 / 0.20 | 0.5 / 0.7 | 1.37 / 1.40 | 0.7333 |
+| pair oracle s0, exact frequencies | 0.740 / 0.727 | 0.98 / 0.98 | 0.85 / 0.87 | 0.973 / 0.966 | 0.11 / 0.18 | 0.5 / 0.6 | 1.04 / 1.07 | 0.7337 |
+
+(pair head: frozen `learned-b` trunk of the same seed, `p` the pair
+threshold; "pair oracle": see below.) The pair head turns about a tenth of
+the hidden fish into detections at a pair threshold of 0.3 (pair recall
++0.04, both seeds) and a few percent at 0.5, but IDF1 does not follow: over
+two seeds 0.7442 (0.3) and 0.7457 (0.5) against 0.7450 for `learned-b`,
+within the seed spread of 0.003. Every split near a tracked fish adds
+switches (0.28 -> 0.42-0.48 per fish and minute at 0.3); fish in pairs do
+not spend more frames on their own identity (0.36 either way). The electrode
+branch finds slightly more pairs (0.54 / 0.53 at 0.3) with the same IDF1;
+`tracking.start_salience` changes nothing. Fine-tuning all weights with the
+pair head changes the salience itself (lower recall of faint fish, fewer
+false identities, fewer switches): without splits it scores 0.755 / 0.743
+on seed 0, which is not a pair effect.
+
+**A perfect pair head would not help either** (`pair_oracle.py`): adding
+every hidden fish of a close pair from the truth to `learned-b`'s detections
+(with its partner's electrode spectra and salience, as a pair head would)
+raises the pair recall to 0.98 / 0.98 but lowers IDF1 to 0.735 / 0.725 (seed
+1: 0.736 / 0.731 from 0.748 / 0.739). Identity switches in pair frames go
+from 871 to 10,616 (both splits); fish in pairs spend more frames on their
+own identity (0.36 -> 0.49 / 0.47), but purity falls from 0.98 to 0.95 and
+fish away from pairs lose coverage too. Moving the partner's detection to
+its truth frequency as well changes little (0.740 / 0.727, 7,986 switches):
+the tracker's link error is two thirds the difference of the electrode
+patterns, the same for two detections of one peak, and one third a Boltzmann
+of the frequency difference that costs nothing below about 0.2 Hz, so the
+two fish of a pair tie and swap. A frequency term that already costs at
+0.15 Hz (Boltzmann x0 0.15, dx 0.04 instead of 0.35, 0.08; an uncommitted
+experiment) does not help either (oracle 0.734, learned-b 0.751 with it, lab),
+nor does switching the linker off (0.659 / 0.635 against 0.677 / 0.652), so
+the swaps happen where the tracker joins its temporary identities. On the 17
+mixtures of `ldev2` that exist so far (lab noise) the oracle loses as well:
+0.747 against 0.765. Finding the second fish is not what limits close pairs;
+keeping the two apart is. Figure: `figures/B-pair-results.png`.
+
+Next: the pair head is worth using once the tracker keeps the two fish of a
+pair apart, and `pair_oracle.py` (tracking only, minutes on CPU) tells when
+that is the case: a tracker change that lets the oracle beat `learned-b`.
+Candidates: assigning the two detections of a split peak jointly and keeping
+their frequency order through a pair episode unless the slopes before and
+after it say the fish crossed; giving the two detections of one peak their
+own electrode patterns (projected on the patterns of the two fish before the
+peaks merged) instead of the same spectra; and joining pair episodes as a
+unit in the linker.
+
 ## Learned fragment linking
 
 On the dense mixtures, identities break much more often than detections
