@@ -11,7 +11,10 @@ After linking (or stitching), ``join_rises`` pairs every *stop* of an
 identity (no detection of it for ``stop_gap`` s after) with the *starts* of
 other identities (no detection for ``stop_gap`` s before) that follow
 within ``max_gap`` s (or begin up to ``max_overlap`` s earlier) between
-``min_jump`` and ``max_jump`` Hz higher. Such a pair is one fish if the
+``min_jump`` and ``max_jump`` Hz higher. The learned detector often reports
+the old frequency for a few seconds after the onset (and the new one a little
+before it); when such a pair is joined, the earlier identity's detections
+after the later one's start are dropped, since a fish is at one frequency. Such a pair is one fish if the
 electrode patterns before the stop and after the start agree
 (``max_pattern_rms``, ``min_pattern_corr``): a fish does not move far within
 a rise, while another fish that happens to start there sits elsewhere on the
@@ -39,8 +42,9 @@ def _edges(t: np.ndarray, gap: float):
 
 
 def candidates(fund_v, sign_v, t_det, members, cfg: RisesConfig):
-    """Rise pairs (pattern rms, earlier identity, later identity) by position
-    in `members`, the detection indices of every identity sorted by time."""
+    """Rise pairs (pattern rms, earlier identity, later identity, the later
+    one's start, the earlier one's stop [s]) by position in `members`, the
+    detection indices of every identity sorted by time."""
     stops, starts = [], []
     for p, m in enumerate(members):
         t, f = t_det[m], fund_v[m]
@@ -64,7 +68,7 @@ def candidates(fund_v, sign_v, t_det, members, cfg: RisesConfig):
         lo = np.searchsorted(t_start, t_e - cfg.max_overlap, "left")
         hi = np.searchsorted(t_start, t_e + cfg.max_gap, "right")
         pat_e = None
-        for _, f_s, p_s, m_s in starts[lo:hi]:
+        for t_s, f_s, p_s, m_s in starts[lo:hi]:
             jump = f_s - f_e
             if p_s == p_e or not cfg.min_jump <= jump <= cfg.max_jump:
                 continue
@@ -72,8 +76,8 @@ def candidates(fund_v, sign_v, t_det, members, cfg: RisesConfig):
                 pat_e = _pattern(sign_v[m_e])[0]
             rms, corr = _pattern_distance(pat_e, _pattern(sign_v[m_s])[0])
             if rms <= cfg.max_pattern_rms and corr >= cfg.min_pattern_corr:
-                pairs.append((rms, p_e, p_s))
-    pairs.sort(key=lambda x: (x[0], x[1], x[2]))
+                pairs.append((rms, p_e, p_s, t_s, t_e))
+    pairs.sort(key=lambda x: x[:3])
     return pairs
 
 
@@ -109,16 +113,22 @@ def join_rises(
             i = parent[i]
         return i
 
-    for _, a, b in pairs:
+    drop = []
+    for _, a, b, t_s, t_e in pairs:
         ra, rb = find(a), find(b)
         if ra == rb:
             continue
-        fa, fb = frames[ra], frames[rb]
+        # the earlier identity's tail after the later one starts (a ghost)
+        m = members[a]
+        tail = m[(t_det[m] >= t_s) & (t_det[m] <= t_e)]
+        fa = np.setdiff1d(frames[ra], idx_v[tail], assume_unique=True)
+        fb = frames[rb]
         shared = len(np.intersect1d(fa, fb, assume_unique=True))
         if shared > cfg.max_shared * min(len(fa), len(fb)):
             continue
+        drop.append(tail)
         if len(fa) < len(fb) or (len(fa) == len(fb) and rb < ra):
-            ra, rb = rb, ra
+            ra, rb, fa, fb = rb, ra, fb, fa
         parent[rb] = ra
         frames[ra] = np.union1d(fa, fb)
         frames[rb] = None
@@ -127,4 +137,6 @@ def join_rises(
         r = find(p)
         if r != p:
             out[m] = ids[r]
+    for tail in drop:
+        out[tail] = np.nan
     return resolve_duplicates(fund_v, idx_v, out)

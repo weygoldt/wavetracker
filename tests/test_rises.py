@@ -113,6 +113,20 @@ def test_joins_identities_that_alternate_at_rises():
     assert _n_ids(join_rises(fund, idx, sign, ident, times, ON)) == 1
 
 
+def test_joins_across_a_ghost_tail_and_drops_it():
+    # the detector reports the old frequency for 3 s after the onset
+    fund, idx, sign, ident, times = _assemble(
+        _piece(0, 103, 0, 700.0),
+        _piece(100.2, 200, 1, 701.0, rise=(12.0, 8.0), seed=1),
+    )
+    out = join_rises(fund, idx, sign, ident, times, ON)
+    assert _n_ids(out) == 1
+    tail = (ident == 0) & (times[idx] >= 100.2)
+    assert tail.sum() > 10
+    assert np.isnan(out[tail]).all()  # one fish, one frequency
+    assert np.isfinite(out[~tail]).all()
+
+
 def test_identities_that_share_frames_are_not_joined():
     fund, idx, sign, ident, times = _assemble(
         _piece(0, 100, 0, 700.0),

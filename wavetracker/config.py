@@ -410,8 +410,10 @@ class RisesConfig:
     max_gap: float = 5.0
     """The later identity starts at most this long after the earlier one
     stops [s] ..."""
-    max_overlap: float = 1.0
-    """... or at most this long before it [s]."""
+    max_overlap: float = 4.0
+    """... or at most this long before it [s]: detectors with temporal
+    context report the old frequency for a few seconds after the onset. The
+    earlier identity's detections after the later one's start are dropped."""
     min_jump: float = 1.5
     """Smallest jump up from the earlier identity's last to the later one's
     first frequencies (medians over edge_window) [Hz] ..."""
