@@ -603,6 +603,7 @@ def track(
     *,
     v6_compat: bool = False,
     sal_v: np.ndarray | None = None,
+    cplx_v: np.ndarray | None = None,
 ) -> np.ndarray:
     """Assign identities to detections.
 
@@ -623,6 +624,10 @@ def track(
         ``cfg.start_salience``, which lets only temporary identities with
         enough confident detections start a new identity (ByteTrack-style).
         Weak detections still join identities that exist.
+    cplx_v
+        Complex spectra of every detection (n, channels); the learned
+        association (``cfg.method == "learned"``) takes the relative signs of
+        the electrodes from them (without: all in phase).
 
     Returns
     -------
@@ -637,6 +642,8 @@ def track(
         return ident_v
     if np.any(np.diff(idx_v) < 0):
         raise ValueError("idx_v must be sorted")
+    if cfg.method == "learned":
+        return _track_learned(fund_v, idx_v, sign_v, cplx_v, sal_v, times, cfg, valid)
     if cfg.min_support > 0:  # isolated detections are not tracked
         valid &= (
             support(fund_v, idx_v, times, cfg.support_window, cfg.support_freq)
@@ -682,4 +689,27 @@ def track(
         )
         ident = _track(*args, slope, float(dt), True, float(cfg.motion_window))
     ident_v[valid] = np.where(ident >= 0, ident, np.nan)
+    return ident_v
+
+
+def _track_learned(fund_v, idx_v, sign_v, cplx_v, sal_v, times, cfg, valid):
+    """`track` with the learned association (wavetracker.assocnet)."""
+    from . import assocnet
+
+    model = assocnet.load_model(cfg.assoc_model, cfg.assoc_device)
+    sel = np.flatnonzero(valid)
+    ident = assocnet.track_learned(
+        fund_v[sel],
+        idx_v[sel],
+        sign_v[sel],
+        None if cplx_v is None else cplx_v[sel],
+        None if sal_v is None else sal_v[sel],
+        times,
+        model,
+        threshold=cfg.assoc_threshold,
+        min_detections=cfg.assoc_min_detections,
+        device=cfg.assoc_device,
+    )
+    ident_v = np.full(len(fund_v), np.nan)
+    ident_v[sel] = ident
     return ident_v

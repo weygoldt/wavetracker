@@ -559,6 +559,7 @@ def track_results(results: Results, cfg: Config) -> float:
         min_freq=cfg.harmonic_groups.min_freq,
         max_freq=cfg.harmonic_groups.max_freq,
         sal_v=results.sal_v,
+        cplx_v=results.cplx_v,
     )
     if cfg.linking.enabled:
         results.ident_v = link(
