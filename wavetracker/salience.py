@@ -439,9 +439,7 @@ def decode(
             F.pad(peak.float(), (r, r))[:, None], 2 * r + 1, stride=1
         )[:, 0] * (2 * r + 1)
         q = torch.sigmoid(pair_logits.float()[fr, kk])
-        split = (q >= thr) & (
-            n_near[fr, kk] < 1.5
-        )
+        split = (q >= thr) & (n_near[fr, kk] < 1.5)
         if bool(split.any()):
             fs, ks = fr[split], kk[split]
             off = pair_offset.float()[:, fs, ks].double()  # (2, n)
