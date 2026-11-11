@@ -72,6 +72,10 @@ def nearest_fundamental(split: str, mixture: str, times: np.ndarray) -> np.ndarr
 
 
 def frames(tag: str, split: str) -> dict[str, np.ndarray]:
+    from types import SimpleNamespace
+
+    from pair_strata import pair_frames
+
     paths = sorted((RUNS / tag / split).glob("*/frames.npz"))
     parts = []
     for p in paths:
@@ -79,6 +83,10 @@ def frames(tag: str, split: str) -> dict[str, np.ndarray]:
         times = np.load(p.parent / "times.npy")
         nf = nearest_fundamental(split, p.parent.name, times)
         part["nf_hz"] = nf[part["fish"], part["frame"]].astype(np.float32)
+        # own SNR of the weaker fish of the pair (the truth's holds both)
+        mix = DATA / "mixtures" / split / p.parent.name
+        weak = pair_frames(mix, SimpleNamespace(times=times))["weaker"]
+        part["pair_weak_db"] = weak[part["fish"], part["frame"]].astype(np.float32)
         parts.append(part)
     return {k: np.concatenate([p[k] for p in parts]) for k in parts[0]} if parts else {}
 
@@ -107,6 +115,14 @@ def strata(fr: dict) -> dict[str, float]:
     m = (fr["nf_hz"] < PAIR_HZ) & (fr["snr_db"] >= 6)
     out["pair < 1.2 Hz"] = float(fr["matched"][m].mean()) if m.any() else np.nan
     out["id pair < 1.2 Hz"] = float(fr["assigned"][m].mean()) if m.any() else np.nan
+    # the same with the weaker fish of the pair >= 6 dB on its own (own_snr.py)
+    m = (fr["nf_hz"] < PAIR_HZ) & (fr["pair_weak_db"] >= 6)
+    out["pair < 1.2 Hz, own SNR"] = (
+        float(fr["matched"][m].mean()) if m.any() else np.nan
+    )
+    out["id pair < 1.2 Hz, own SNR"] = (
+        float(fr["assigned"][m].mean()) if m.any() else np.nan
+    )
     for lo, hi, name in NN_BANDS:  # on the fish's own (IDF1) identity
         m = (fr["nn_hz"] >= lo) & (fr["nn_hz"] < hi) & (fr["snr_db"] >= 6)
         out[f"id nn {name}"] = float(fr["assigned"][m].mean()) if m.any() else np.nan
