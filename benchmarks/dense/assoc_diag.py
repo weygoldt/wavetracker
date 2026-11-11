@@ -20,6 +20,7 @@ bound of (a) with all switches cut is the IDF1 of pure fragments; what is left
 to the truth identities is what the tracker leaves unassigned.
 
     python benchmarks/dense/assoc_diag.py --tag A-oracle-snr0 -c benchmarks/dense/configs/dense-linked.yaml --split ldev
+    python benchmarks/dense/assoc_diag.py plot diag_A-v1m-relinked_ldev "learned, lab" ...
 """
 
 from __future__ import annotations
@@ -474,7 +475,49 @@ def summarize(results, label):
         )
 
 
+def plot(stems, labels, path):
+    """IDF1 cost of each situation, switches and breaks, one bar per run."""
+    import matplotlib.pyplot as plt
+
+    colors = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")
+    data = [json.loads((FIG / "assoc" / f"{s}.json").read_text()) for s in stems]
+    panels = [
+        ("switches inside fragments\n(cut there, then perfect joining)", SITUATIONS, "cost_majority"),
+        ("breaks left open by the linker\n(oracle join of those breaks)", BREAKS, "cost_break"),
+    ]
+    fig, axs = plt.subplots(1, 2, figsize=(13, 5.2), layout="constrained")
+    for ax, (title, cats, key) in zip(axs, panels, strict=True):
+        y = np.arange(len(cats))[::-1]
+        h = 0.8 / len(data)
+        for i, (res, lab) in enumerate(zip(data, labels, strict=True)):
+            v = [np.mean([r[key].get(c, 0.0) for r in res]) for c in cats]
+            yy = y + (len(data) - 1) / 2 * h - i * h
+            ax.barh(yy, v, h * 0.85, color=colors[i], label=lab)
+            for yv, vv in zip(yy, v, strict=True):
+                if vv >= 0.002:
+                    ax.text(vv + 0.0003, yv, f"{vv:.3f}", va="center", fontsize=7, color="#52514e")
+        ax.set_yticks(y, cats, fontsize=9)
+        ax.set_xlabel("IDF1 lost (mean of 17 mixtures)", fontsize=9, color="#52514e")
+        ax.set_title(title, loc="left", fontsize=10)
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.grid(axis="x", color="#e6e5e0", lw=0.6)
+        ax.set_axisbelow(True)
+        ax.set_xlim(left=0)
+    axs[0].legend(frameon=False, fontsize=8, loc="lower right")
+    fig.suptitle(
+        "where association loses IDF1 on ldev (raw tracker fragments vs truth)",
+        x=0.01, ha="left", fontsize=11,
+    )
+    fig.savefig(path, dpi=140)
+    print(path)
+
+
 def main(argv=None):
+    if argv is None and len(sys.argv) > 1 and sys.argv[1] == "plot":
+        stems = sys.argv[2::2]
+        labels = sys.argv[3::2]
+        plot(stems, labels, FIG / "assoc_diagnosis.png")
+        return
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--tag", required=True, help="run with the detections")
     p.add_argument("-c", "--config", required=True)

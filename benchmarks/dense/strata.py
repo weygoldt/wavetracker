@@ -32,13 +32,21 @@ NN_BANDS = [
 ]
 SCORES = [
     "idf1",
+    "purity",
     "recall",
     "precision",
     "false_per_frame",
     "harmonic_per_frame",
     "false_ids_30s",
+    "switches_per_fish_min",
     "ids_30s",
 ]
+GROUPS = {  # IDF1 by scenario group
+    "crowded": ("crowded",),
+    "density": ("density",),
+    "atten": ("atten", "ladder"),
+    "lowfreq": ("lowfreq", "lowonly"),
+}
 
 
 def frames(tag: str, split: str) -> dict[str, np.ndarray]:
@@ -53,7 +61,11 @@ def scores(tag: str, split: str) -> dict[str, float]:
         json.loads(p.read_text())
         for p in sorted((RUNS / tag / split).glob("*/score.json"))
     ]
-    return {k: float(np.mean([r[k] for r in rows])) for k in SCORES} | {"n": len(rows)}
+    out = {k: float(np.mean([r[k] for r in rows])) for k in SCORES} | {"n": len(rows)}
+    for g, prefixes in GROUPS.items():
+        v = [r["idf1"] for r in rows if r["mixture"].split("/")[1].startswith(prefixes)]
+        out[f"idf1 {g}"] = float(np.mean(v)) if v else np.nan
+    return out
 
 
 def strata(fr: dict) -> dict[str, float]:
@@ -82,14 +94,18 @@ def main(argv=None):
                 continue
             table[(t, sp)] = scores(t, sp) | strata(fr)
     keys = (
-        SCORES + [f"snr {b[2]}" for b in SNR_BANDS] + [f"nn {b[2]}" for b in NN_BANDS]
+        SCORES
+        + [f"idf1 {g}" for g in GROUPS]
+        + [f"snr {b[2]}" for b in SNR_BANDS]
+        + [f"nn {b[2]}" for b in NN_BANDS]
     )
     print(
         "recall by SNR band (all frames) and by nearest-line distance (frames with SNR ≥ 6 dB)"
     )
-    print(f"{'':28s}" + "".join(f"{k:>14s}" for k in keys))
+    w = max([len(t + " / " + sp) for t, sp in table] + [28]) + 1
+    print(f"{'':{w}s}" + "".join(f"{k[:13]:>14s}" for k in keys))
     for (t, sp), row in table.items():
-        print(f"{t + ' / ' + sp:28s}" + "".join(f"{row[k]:14.3f}" for k in keys))
+        print(f"{t + ' / ' + sp:{w}s}" + "".join(f"{row[k]:14.4f}" for k in keys))
     stem = args.out or "strata_" + "_".join(args.tags)
     (FIG / f"{stem}.json").write_text(
         json.dumps({f"{t}/{sp}": r for (t, sp), r in table.items()}, indent=1)
