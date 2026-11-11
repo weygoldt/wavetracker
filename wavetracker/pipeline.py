@@ -20,6 +20,7 @@ from .interference import CombCanceller, merge_tooth_neighbours
 from .io import FrameLayout, iter_blocks, open_recording, resolve_input
 from .linking import link
 from .results import Results
+from .rises import join_rises
 from .salience import StreamingSalience
 from .spectrogram import (
     PowerSpectrogram,
@@ -578,6 +579,15 @@ def track_results(results: Results, cfg: Config) -> float:
             results.times,
             cfg.stitching,
         )
+    if cfg.rises.enabled:
+        results.ident_v = join_rises(
+            results.fund_v,
+            results.idx_v,
+            results.sign_v,
+            results.ident_v,
+            results.times,
+            cfg.rises,
+        )
     if cfg.tracking.min_identity_salience is not None:
         results.ident_v = drop_weak_identities(
             results.ident_v, results.sal_v, cfg.tracking.min_identity_salience
@@ -587,4 +597,6 @@ def track_results(results: Results, cfg: Config) -> float:
     results.meta["tracking_config"] = vars(cfg.tracking)
     results.meta["stitching_config"] = vars(cfg.stitching)
     results.meta["linking_config"] = vars(cfg.linking)
+    if cfg.rises.enabled:
+        results.meta["rises_config"] = vars(cfg.rises)
     return dt

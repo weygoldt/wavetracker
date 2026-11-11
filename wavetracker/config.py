@@ -393,6 +393,47 @@ class LinkingConfig:
 
 
 @dataclass
+class RisesConfig:
+    """Joining identities across rise onsets (see wavetracker.rises), after
+    linking (or stitching) and before `tracking.min_identity_salience`.
+
+    At a rise the frequency jumps up by a few to about 60 Hz within about a
+    second, too far for the tracker and the linker's candidates, and the fish
+    goes on as a new identity. An identity that stops is joined to one that
+    starts shortly after, a rise-sized jump above it, with the same electrode
+    pattern."""
+
+    enabled: bool = False
+    stop_gap: float = 2.0
+    """An identity stops (or starts) where it has no detection for this long
+    after (before) a detection [s]."""
+    max_gap: float = 5.0
+    """The later identity starts at most this long after the earlier one
+    stops [s] ..."""
+    max_overlap: float = 1.0
+    """... or at most this long before it [s]."""
+    min_jump: float = 1.5
+    """Smallest jump up from the earlier identity's last to the later one's
+    first frequencies (medians over edge_window) [Hz] ..."""
+    max_jump: float = 35.0
+    """... and the largest [Hz]."""
+    edge_window: float = 1.0
+    """Frequencies at a stop or start: median over this [s]."""
+    pattern_window: float = 5.0
+    """Electrode patterns: mean power over this before the stop and after the
+    start [s]."""
+    max_pattern_rms: float = 7.0
+    """Largest rms difference of the two electrode patterns [dB] ..."""
+    min_pattern_corr: float = 0.5
+    """... and the smallest correlation."""
+    min_duration: float = 1.0
+    """The later identity spans at least this after its start [s]."""
+    max_shared: float = 0.3
+    """Two identities may share at most this fraction of the smaller one's
+    frames (one fish is detected once per frame)."""
+
+
+@dataclass
 class OutputConfig:
     save_fine_spec: bool = False
     """Store the full-resolution summed spectrogram (large!)."""
@@ -540,6 +581,7 @@ class Config:
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
     stitching: StitchingConfig = field(default_factory=StitchingConfig)
     linking: LinkingConfig = field(default_factory=LinkingConfig)
+    rises: RisesConfig = field(default_factory=RisesConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     position_merging: PositionMergingConfig = field(
         default_factory=PositionMergingConfig
