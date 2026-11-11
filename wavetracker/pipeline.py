@@ -19,6 +19,7 @@ from .harmonics import Detections, absolute_limit_binds, detect_harmonic_groups
 from .interference import CombCanceller, merge_tooth_neighbours
 from .io import FrameLayout, iter_blocks, open_recording, resolve_input
 from .linking import link
+from .pairs import resolve_pairs
 from .results import Results
 from .rises import join_rises
 from .salience import StreamingSalience
@@ -560,6 +561,19 @@ def track_results(results: Results, cfg: Config) -> float:
         max_freq=cfg.harmonic_groups.max_freq,
         sal_v=results.sal_v,
     )
+
+    def pairs(stage):
+        if cfg.pairs.enabled and cfg.pairs.stage == stage:
+            results.ident_v = resolve_pairs(
+                results.fund_v,
+                results.idx_v,
+                results.sign_v,
+                results.ident_v,
+                results.times,
+                cfg.pairs,
+            )
+
+    pairs("tracking")
     if cfg.linking.enabled:
         results.ident_v = link(
             results.fund_v,
@@ -589,6 +603,7 @@ def track_results(results: Results, cfg: Config) -> float:
             cfg.rises,
             sal_v=results.sal_v,
         )
+    pairs("linking")
     if cfg.tracking.min_identity_salience is not None:
         results.ident_v = drop_weak_identities(
             results.ident_v, results.sal_v, cfg.tracking.min_identity_salience
@@ -600,4 +615,6 @@ def track_results(results: Results, cfg: Config) -> float:
     results.meta["linking_config"] = vars(cfg.linking)
     if cfg.rises.enabled:
         results.meta["rises_config"] = vars(cfg.rises)
+    if cfg.pairs.enabled:
+        results.meta["pairs_config"] = vars(cfg.pairs)
     return dt

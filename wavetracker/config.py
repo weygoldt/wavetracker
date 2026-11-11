@@ -447,6 +447,61 @@ class RisesConfig:
     frames (one fish is detected once per frame)."""
 
 
+PAIRS_STAGES = ("tracking", "linking")
+
+
+@dataclass
+class PairsConfig:
+    """Two fish in one spectral peak (see wavetracker.pairs).
+
+    Where two identities run closer than `max_df`, a pair episode, the two
+    detections of a shared peak carry the same electrode spectra and the
+    tracker may hand each fish's future to the other. Each episode is
+    decided as a unit: the electrode patterns of the two identities just
+    before and just after it, from detections clear of other lines, say
+    whether the fish left on the identities they entered with; if the
+    exchanged assignment fits better, the two identities swap everything
+    after the episode's closest approach."""
+
+    enabled: bool = False
+    stage: str = "linking"
+    """Where: "tracking" (on the tracker's identities, before linking or
+    stitching) or "linking" (after linking and the rise joiner, before
+    `tracking.min_identity_salience`)."""
+    max_df: float = 2.0
+    """Two identities with detections in one frame closer than this are in a
+    pair episode [Hz]."""
+    merge_gap: float = 2.0
+    """Close frames of two identities less than this apart are one episode
+    [s]."""
+    clear_df: float = 3.0
+    """Patterns are taken from detections with no other detection in their
+    frame within this [Hz]."""
+    pattern_window: float = 5.0
+    """Patterns: mean power over the clear detections of an identity within
+    this of its last clear detection before the episode, and of its first
+    after it [s] ..."""
+    pattern_reach: float = 30.0
+    """... found at most this far from the episode [s]."""
+    min_pattern: int = 5
+    """Clear detections each of the four patterns needs; otherwise the
+    episode is left as it is."""
+    margin: float = 1.0
+    """Swap only if the exchanged assignment's pattern differences (sum of
+    two rms differences [dB]) are smaller by at least this."""
+    order: bool = False
+    """Also order the detections inside an episode: in frames where both
+    identities have one, the two are given by frequency, in the order the
+    identities had before the episode up to its closest approach and in the
+    order after it from there (two fish that crossed swap order once)."""
+
+    def __post_init__(self):
+        if self.stage not in PAIRS_STAGES:
+            raise ValueError(
+                f"pairs.stage must be one of {PAIRS_STAGES}, not {self.stage!r}"
+            )
+
+
 @dataclass
 class OutputConfig:
     save_fine_spec: bool = False
@@ -596,6 +651,7 @@ class Config:
     stitching: StitchingConfig = field(default_factory=StitchingConfig)
     linking: LinkingConfig = field(default_factory=LinkingConfig)
     rises: RisesConfig = field(default_factory=RisesConfig)
+    pairs: PairsConfig = field(default_factory=PairsConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     position_merging: PositionMergingConfig = field(
         default_factory=PositionMergingConfig

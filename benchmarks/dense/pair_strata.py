@@ -44,7 +44,12 @@ from wavetracker.results import Results
 RUNS = DATA / "runs"
 MIXTURES = DATA / "mixtures"
 FIG = DATA / "figures"
-DF_BANDS = [(0.0, 0.6, "< 0.6 Hz"), (0.6, 1.2, "0.6-1.2 Hz"), (1.2, 3.0, "1.2-3 Hz")]
+DF_BANDS = [
+    (0.0, 0.6, "< 0.6 Hz"),
+    (0.6, 1.2, "0.6-1.2 Hz"),
+    (1.2, 3.0, "1.2-3 Hz"),
+    (3.0, np.inf, ">= 3 Hz"),  # away from pairs: for regressions
+]
 SNR_BANDS = [
     (-99.0, 6.0, "weaker < 6 dB"),
     (6.0, 15.0, "weaker 6-15 dB"),
@@ -52,11 +57,21 @@ SNR_BANDS = [
     (6.0, 99.0, "weaker >= 6 dB"),
 ]
 METRICS = ("recall", "id", "both", "switches")
+VERSION = 3  # of pair_score.json: older files are scored again
 SPLITS = ["ldev", "ldev-field", "ldev2", "ldev2-field"]
 
 
 def stratum_keys():
     return [(d[2], s[2]) for d in DF_BANDS for s in SNR_BANDS]
+
+
+def episode_keys(visible_only=False):
+    out = []
+    for name in EPISODE_CLASSES:
+        if not visible_only:
+            out.append(f"episodes {name}")
+        out.append(f"episodes {name} | weaker >= 6 dB")
+    return out
 
 
 def pair_frames(mix_dir: Path, res: Results) -> dict:
@@ -81,7 +96,100 @@ def pair_frames(mix_dir: Path, res: Results) -> dict:
     p = np.where(partner >= 0, partner, 0)
     weaker = np.fmin(own, own[p, cols[None, :]])
     weaker[(partner < 0) | ~np.isfinite(own)] = np.nan
-    return {"F": F, "df": df, "partner": partner, "weaker": weaker, "own": own}
+    return {
+        "F": F,
+        "Ff": Ff,
+        "df": df,
+        "partner": partner,
+        "weaker": weaker,
+        "own": own,
+    }
+
+
+EPISODE_CLASSES = {
+    "all": lambda e: True,
+    "min df < 0.3 Hz": lambda e: e["min_df"] < 0.3,
+    "min df >= 0.3 Hz": lambda e: e["min_df"] >= 0.3,
+    "shorter than 10 s": lambda e: e["dur"] < 10,
+    "10 s or longer": lambda e: e["dur"] >= 10,
+    "crossed": lambda e: e["crossed"],
+    "not crossed": lambda e: not e["crossed"],
+}
+OUTCOMES = ("kept", "swapped", "changed")
+
+
+def _mode(x):
+    u, c = np.unique(x, return_counts=True)
+    return u[c.argmax()]
+
+
+def episode_outcomes(pf, fish, res, pair_hz=1.2, merge_s=2.0, min_s=1.0, win_s=10.0):
+    """Every truth episode of two fish closer than pair_hz (frames less than
+    merge_s apart joined, at least min_s long): for each fish, the identity
+    (mode of its detections) over win_s before and after it is the same
+    (kept), the partner's from before (swapped) or another (changed); fish
+    without 5 identified detections on both sides are left out."""
+    Ff, own = pf["Ff"], pf["own"]
+    dt = float(res.times[1] - res.times[0])
+    ident = res.ident_v
+    w, g = round(win_s / dt), round(0.5 / dt)
+    n, n_frames = Ff.shape
+    rows = []
+    for k in range(n):
+        mk = (fish == k) & np.isfinite(ident)
+        for j in range(k + 1, n):
+            fr = np.flatnonzero(np.abs(Ff[k] - Ff[j]) < pair_hz)
+            if not len(fr):
+                continue
+            brk = np.flatnonzero(np.diff(fr) > merge_s / dt)
+            mj = (fish == j) & np.isfinite(ident)
+            for a, b in zip(
+                np.r_[fr[0], fr[brk + 1]], np.r_[fr[brk], fr[-1]], strict=True
+            ):
+                if (b - a) * dt < min_s:
+                    continue
+                sides = {}
+                for f, m in ((k, mk), (j, mj)):
+                    pre = ident[m & (res.idx_v >= a - w) & (res.idx_v < a - g)]
+                    post = ident[m & (res.idx_v > b + g) & (res.idx_v <= b + w)]
+                    sides[f] = (
+                        _mode(pre) if len(pre) >= 5 else None,
+                        _mode(post) if len(post) >= 5 else None,
+                    )
+                a0, b1 = max(a - 1, 0), min(b + 1, n_frames - 1)
+                crossed = np.sign(Ff[k, a0] - Ff[j, a0]) != np.sign(
+                    Ff[k, b1] - Ff[j, b1]
+                )
+                with np.errstate(all="ignore"):
+                    weaker = np.nanmedian(np.fmin(own[k, a : b + 1], own[j, a : b + 1]))
+                min_df = float(np.min(np.abs(Ff[k, a : b + 1] - Ff[j, a : b + 1])))
+                for f, o in ((k, j), (j, k)):
+                    pre, post = sides[f]
+                    if pre is None or post is None:
+                        continue
+                    if pre == post:
+                        outcome = "kept"
+                    elif post == sides[o][0]:
+                        outcome = "swapped"
+                    else:
+                        outcome = "changed"
+                    rows.append(
+                        {
+                            "outcome": outcome,
+                            "dur": (b - a) * dt,
+                            "crossed": bool(crossed),
+                            "min_df": min_df,
+                            "visible": bool(weaker >= 6),
+                        }
+                    )
+    out = {}
+    for name, sel in EPISODE_CLASSES.items():
+        for vis in (False, True):
+            r = [e for e in rows if sel(e) and (e["visible"] or not vis)]
+            key = f"episodes {name}" + (" | weaker >= 6 dB" if vis else "")
+            out[key] = {o: sum(e["outcome"] == o for e in r) for o in OUTCOMES}
+            out[key]["frames"] = len(r)  # the denominator: fish sides
+    return out
 
 
 def score_mixture(mix_dir: Path, run_dir: Path) -> dict:
@@ -145,6 +253,7 @@ def score_mixture(mix_dir: Path, run_dir: Path) -> dict:
         "old_id": int(assigned[m_old].sum()),
         "new_id": int(assigned[m_new].sum()),
     }
+    out |= episode_outcomes(pf, fish, res)
     return out
 
 
@@ -167,10 +276,11 @@ def load_scores(spec: str, splits, overwrite: bool = False) -> dict[str, dict]:
             path.exists()
             and path.stat().st_mtime < (rdir / "ident_v.npy").stat().st_mtime
         )
-        if overwrite or not path.exists() or stale:
-            s = score_mixture(mdir, rdir)
-            path.write_text(json.dumps(s, indent=1))
-        out[name] = json.loads(path.read_text())
+        old = json.loads(path.read_text()) if path.exists() and not stale else {}
+        if overwrite or old.get("version") != VERSION:
+            old = score_mixture(mdir, rdir) | {"version": VERSION}
+            path.write_text(json.dumps(old, indent=1))
+        out[name] = old
     return out
 
 
@@ -202,6 +312,17 @@ def report(args):
             fr = sum(s[n][key]["frames"] for n in names)
             vals = " ".join(f"{pooled(s, names, key, m):8.3f}" for m in METRICS)
             print(f"{key:40s} {fr:8d} {vals}")
+        print(
+            f"{'pair episodes < 1.2 Hz (fish sides)':40s} {'n':>8s} "
+            + " ".join(f"{o:>8s}" for o in OUTCOMES)
+        )
+        for key in episode_keys():
+            tot = sum(s[n][key]["frames"] for n in names)
+            vals = " ".join(
+                f"{sum(s[n][key][o] for n in names) / max(tot, 1):8.3f}"
+                for o in OUTCOMES
+            )
+            print(f"{key:40s} {tot:8d} {vals}")
         lab = {
             k: sum(s[n]["labels < 1.2 Hz"][k] for n in names)
             for k in s[names[0]]["labels < 1.2 Hz"]
@@ -254,6 +375,14 @@ def compare(args):
             rows[(key, m)] = (a, b, diff, lo, hi)
             print(
                 f"{key:40s} {m:>8s} {a:8.3f} {b:8.3f} {diff:+8.3f} [{lo:+8.3f}, {hi:+8.3f}]"
+            )
+    for key in episode_keys(visible_only=not args.all):
+        for m in ("kept", "swapped"):
+            a, b, diff, lo, hi = bootstrap_diff(sa, sb, names, key, m, args.n_boot, rng)
+            rows[(key, m)] = (a, b, diff, lo, hi)
+            print(
+                f"{key:40s} {m:>8s} {a:8.3f} {b:8.3f} {diff:+8.3f} "
+                f"[{lo:+8.3f}, {hi:+8.3f}]"
             )
     if args.json:
         Path(args.json).write_text(
