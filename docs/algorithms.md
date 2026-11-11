@@ -54,6 +54,26 @@ trace. The model stores the spectrogram resolution and frame step it was
 trained on; a different resolution is refused. Training and benchmark:
 docs/benchmarks.md, "Learned detector (v1)".
 
+**Two fish in one peak (optional; not in the packaged model).** Two
+fundamentals closer than about 1.2 Hz make one peak in the 1.64 s window,
+and peak picking gives one detection for both. A model can carry a *pair
+head* (`SalienceSpec.pair_head`): a second output per bin, the probability
+that two fish are there, with the offsets of both. A salience peak without
+another peak within 2 bins whose pair probability reaches
+`detector.pair_threshold` (default: `detector.threshold`) gets a second
+detection at the pair offset farther from its own, with the pair probability
+as its salience; with `tracking.start_salience` such detections can extend an
+identity but not start one. A model can also read the electrodes
+(`SalienceSpec.electrode_channels`): for every electrode, its share of the
+summed power at the candidate bins and its phase relative to the strongest
+electrode (one fish: fixed shares and phases near 0 or pi, as the field is
+quasi-static; two fish in one bin: both move with their beat). One encoder
+with shared weights reads every electrode; the mean and maximum over the
+electrodes (any number, in any order) join the network through a gate that
+starts at zero, either into the pair head's branch or into the trunk. Both
+are exact block by block like the rest of the detector. Whether they help:
+docs/benchmarks.md, "Two fish in one peak".
+
 ## Interference removal
 
 Electrical interference often forms a *comb* of persistent lines at

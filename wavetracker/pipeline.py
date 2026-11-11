@@ -461,7 +461,7 @@ def detect(
                     teeth,
                 )
                 for (fr, b, f, s), pl in streamer.push(
-                    streamer.features(log_spec), payload
+                    streamer.features(log_spec, stft), payload
                 ):
                     collect(Detections(fr, b, f), s, *pl)
             del stft, power, summed, log_spec

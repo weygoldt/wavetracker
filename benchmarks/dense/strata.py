@@ -49,10 +49,37 @@ GROUPS = {  # IDF1 by scenario group
 }
 
 
+PAIR_HZ = 1.2
+_PAIR_CACHE: dict[tuple[str, str], np.ndarray] = {}
+
+
+def nearest_fundamental(split: str, mixture: str, times: np.ndarray) -> np.ndarray:
+    """Distance [Hz] of every fish (fish, frames) to the closest fundamental
+    of another fish (not its harmonics): close pairs that make one peak."""
+    key = (split, mixture)
+    if key not in _PAIR_CACHE:
+        from score import truth_at
+
+        truth = dict(np.load(DATA / "mixtures" / split / mixture / "truth.npz"))
+        F = truth_at(truth, times, "freqs_filled")
+        d = np.full(F.shape, np.inf)
+        for k in range(len(F)):
+            for j in range(len(F)):
+                if j != k:
+                    d[k] = np.fmin(d[k], np.abs(F[k] - F[j]))
+        _PAIR_CACHE[key] = d
+    return _PAIR_CACHE[key]
+
+
 def frames(tag: str, split: str) -> dict[str, np.ndarray]:
-    parts = [
-        dict(np.load(p)) for p in sorted((RUNS / tag / split).glob("*/frames.npz"))
-    ]
+    paths = sorted((RUNS / tag / split).glob("*/frames.npz"))
+    parts = []
+    for p in paths:
+        part = dict(np.load(p))
+        times = np.load(p.parent / "times.npy")
+        nf = nearest_fundamental(split, p.parent.name, times)
+        part["nf_hz"] = nf[part["fish"], part["frame"]].astype(np.float32)
+        parts.append(part)
     return {k: np.concatenate([p[k] for p in parts]) for k in parts[0]} if parts else {}
 
 
@@ -76,6 +103,10 @@ def strata(fr: dict) -> dict[str, float]:
     for lo, hi, name in NN_BANDS:
         m = (fr["nn_hz"] >= lo) & (fr["nn_hz"] < hi) & (fr["snr_db"] >= 6)
         out[f"nn {name}"] = float(fr["matched"][m].mean()) if m.any() else np.nan
+    # another fundamental closer than PAIR_HZ: one peak for two fish
+    m = (fr["nf_hz"] < PAIR_HZ) & (fr["snr_db"] >= 6)
+    out["pair < 1.2 Hz"] = float(fr["matched"][m].mean()) if m.any() else np.nan
+    out["id pair < 1.2 Hz"] = float(fr["assigned"][m].mean()) if m.any() else np.nan
     for lo, hi, name in NN_BANDS:  # on the fish's own (IDF1) identity
         m = (fr["nn_hz"] >= lo) & (fr["nn_hz"] < hi) & (fr["snr_db"] >= 6)
         out[f"id nn {name}"] = float(fr["assigned"][m].mean()) if m.any() else np.nan

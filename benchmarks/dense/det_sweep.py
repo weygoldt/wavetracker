@@ -35,21 +35,24 @@ SPLITS = ("ldev", "ldev-field")
 
 
 def run(args):
-    base = yaml.safe_load(BASE.read_text())
+    base = yaml.safe_load(Path(args.base).read_text())
     cfg_dir = DATA / "salience" / "sweep-configs"
     cfg_dir.mkdir(parents=True, exist_ok=True)
     jobs = []
     for thr in args.thresholds:
-        tag = f"{args.tag}-t{thr:g}"
-        cfg = dict(base)
-        cfg["detector"] = dict(base["detector"]) | {
-            "model": str(Path(args.model).expanduser().resolve()),
-            "threshold": float(thr),
-        }
-        path = cfg_dir / f"{tag}.yaml"
-        path.write_text(yaml.safe_dump(cfg, sort_keys=False))
-        for sp in args.splits:
-            jobs.append((tag, path, sp))
+        for pthr in args.pair_thresholds or [None]:
+            tag = f"{args.tag}-t{thr:g}" + ("" if pthr is None else f"-p{pthr:g}")
+            cfg = dict(base)
+            cfg["detector"] = dict(base["detector"]) | {
+                "model": str(Path(args.model).expanduser().resolve()),
+                "threshold": float(thr),
+            }
+            if pthr is not None:
+                cfg["detector"]["pair_threshold"] = float(pthr)
+            path = cfg_dir / f"{tag}.yaml"
+            path.write_text(yaml.safe_dump(cfg, sort_keys=False))
+            for sp in args.splits:
+                jobs.append((tag, path, sp))
 
     def one(job):
         tag, path, sp = job
@@ -65,6 +68,8 @@ def run(args):
             str(path),
             "--split",
             sp,
+            "--device",
+            args.device,
         ]
         with open(log, "w") as f:
             r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
@@ -80,6 +85,7 @@ COLS = [
     ("idf1", "IDF1"),
     ("snr 0-6 dB", "rec 0-6dB"),
     ("nn < 1.2 Hz", "rec nn<1.2"),
+    ("pair < 1.2 Hz", "rec pair<1.2"),
     ("nn 1.2-3 Hz", "rec nn1.2-3"),
     ("recall", "recall"),
     ("precision", "precision"),
@@ -141,7 +147,7 @@ def best(rows: dict, prefix: str) -> tuple[str, dict] | None:
 def summary(args):
     """Per setting (models named <setting>-s<seed>): the best threshold of
     each seed, and mean and spread over seeds."""
-    rows = table(argparse.Namespace(tags=["B-det-*"], json=None))
+    rows = table(argparse.Namespace(tags=args.tags, json=None))
     models = sorted({t.rsplit("-t", 1)[0] for t in rows})
     settings: dict[str, list] = {}
     for m in models:
@@ -169,12 +175,23 @@ def main(argv=None):
     a.add_argument("--model", required=True)
     a.add_argument("--tag", required=True)
     a.add_argument("--thresholds", type=float, nargs="+", default=[0.5, 0.6, 0.7])
+    a.add_argument(
+        "--pair-thresholds",
+        type=float,
+        nargs="+",
+        help="models with a pair head: pair thresholds (tags <tag>-t<thr>-p<pthr>)",
+    )
+    a.add_argument(
+        "--base", default=str(BASE), help="config of everything but the detector"
+    )
     a.add_argument("--splits", nargs="+", default=list(SPLITS))
     a.add_argument("--jobs", type=int, default=6)
+    a.add_argument("--device", default="auto", help="of the runs (cpu: GPU busy)")
     b = sub.add_parser("table")
     b.add_argument("--tags", nargs="+", required=True)
     b.add_argument("--json")
-    sub.add_parser("summary")
+    c = sub.add_parser("summary")
+    c.add_argument("--tags", nargs="+", default=["B-det-*"])
     args = p.parse_args(argv)
     {"run": run, "table": table, "summary": summary}[args.cmd](args)
 

@@ -140,6 +140,11 @@ class DetectorConfig:
     threshold: float = 0.6
     """Learned detector: minimum salience (0-1) of a detection (0.6 was best
     for the packaged model on the dense benchmark, lab and field noise)."""
+    pair_threshold: float | None = None
+    """Learned detector with a pair head: minimum pair probability (0-1) at
+    which a salience peak becomes two detections, two fish closer than the
+    spectrogram resolves. None: the same as `threshold`. Models without a
+    pair head ignore it."""
 
     def __post_init__(self):
         if self.method not in ("classic", "learned"):
@@ -148,6 +153,8 @@ class DetectorConfig:
             )
         if not 0.0 < self.threshold < 1.0:
             raise ValueError("detector.threshold must be between 0 and 1")
+        if self.pair_threshold is not None and not 0.0 < self.pair_threshold <= 1.0:
+            raise ValueError("detector.pair_threshold must be between 0 and 1")
 
 
 @dataclass
