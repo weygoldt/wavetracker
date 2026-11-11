@@ -59,7 +59,9 @@ DATA = Path(
     os.environ.get("WT_FIELD_CHECK", "~/wrk/data/wavetracker_benchmark/field_check")
 ).expanduser()
 FIG = Path("~/wrk/data/wavetracker_benchmark/figures/field_side_by_side").expanduser()
-DETECTORS = ("classic", "learned")
+DETECTORS = ["classic", "learned"]
+# extra learned models to compare (`--candidate NAME MODEL THRESHOLD`)
+CANDIDATES: dict[str, tuple[str, float]] = {}
 
 # Grid files evenly spaced over the night with fish (19:18-05:00 by the survey):
 # 20:18, 22:58, 01:38 and 04:18. The boat take is the extra recording.
@@ -119,6 +121,9 @@ def config_dict(recording: str, detector: str) -> dict:
     for sec, vals in BASE[recording].items():
         d.setdefault(sec, {}).update(vals)
     d["detector"] = {"method": detector}
+    if detector in CANDIDATES:
+        model, thr = CANDIDATES[detector]
+        d["detector"] = {"method": "learned", "model": model, "threshold": thr}
     return {k: d[k] for k in sorted(d, key=_SECTION_ORDER.index)}
 
 
@@ -510,8 +515,9 @@ def side_by_side(name, win, kind):
     from wavetracker.results import Results
 
     spec = spectrogram(name, *win)
+    n = len(DETECTORS) + 1  # the detectors and a reference without tracks
     fig, axs = plt.subplots(
-        1, 3, figsize=(22, 8.0), sharex=True, sharey=True, layout="constrained"
+        1, n, figsize=(7.4 * n, 8.0), sharex=True, sharey=True, layout="constrained"
     )
     for ax, det in zip(axs, DETECTORS, strict=False):
         res = Results.load(run_dir(name, det))
@@ -530,8 +536,8 @@ def side_by_side(name, win, kind):
             fontsize=9,
         )
     times, freqs, db = spec
-    _spec_image(axs[2], (times, freqs, db - np.median(db, axis=0)), lo=50)
-    axs[2].set_title(
+    _spec_image(axs[-1], (times, freqs, db - np.median(db, axis=0)), lo=50)
+    axs[-1].set_title(
         "reference: the same spectrogram without tracks, each frame minus its\n"
         "median over the band (removes broadband noise such as clicks and rain)",
         loc="left",
@@ -576,8 +582,8 @@ def overview(names: list[str], title: str):
 
     fig, axs = plt.subplots(
         len(names),
-        2,
-        figsize=(20, max(4.6 * len(names) + 0.6, 9.0)),
+        len(DETECTORS),
+        figsize=(10 * len(DETECTORS), max(4.6 * len(names) + 0.6, 9.0)),
         sharey=True,
         layout="constrained",
         squeeze=False,
@@ -619,8 +625,9 @@ def plot(args):
     from matplotlib.backends.backend_pdf import PdfPages
 
     FIG.mkdir(parents=True, exist_ok=True)
-    grid = [n for n, s in SEGMENTS.items() if s["recording"] == "grid"]
-    boat = [n for n, s in SEGMENTS.items() if s["recording"] == "boat"]
+    done = [n for n in SEGMENTS if all(_has_run(n, d) for d in DETECTORS)]
+    grid = [n for n in done if SEGMENTS[n]["recording"] == "grid"]
+    boat = [n for n in done if SEGMENTS[n]["recording"] == "boat"]
     figs = [
         (
             "overview_grid01_night",
@@ -641,7 +648,9 @@ def plot(args):
             ),
         ),
     ]
-    for k, (name, win, kind) in enumerate(windows()):
+    figs = [f for f in figs if not f[0].endswith("night") or grid]
+    figs = [f for f in figs if not f[0].startswith("overview_boat") or boat]
+    for k, (name, win, kind) in enumerate(w for w in windows() if w[0] in done):
         tag = f"{k + 1:02d}_{name}_{win[2]:.0f}-{win[3]:.0f}Hz"
         figs.append((tag, lambda n=name, w=win, c=kind: side_by_side(n, w, c)))
     survey_png = FIG / "survey_grid01_night.png"
@@ -681,6 +690,8 @@ def counts(args):
     for name in SEGMENTS:
         f0, f1 = fish_band(name)
         for det in DETECTORS:
+            if not _has_run(name, det):
+                continue
             res = Results.load(run_dir(name, det))
             dt = res.times[1] - res.times[0]
             t, end = res.times[res.idx_v], res.times[-1]
@@ -734,6 +745,10 @@ def counts(args):
     print(text)
 
 
+def _has_run(name: str, detector: str) -> bool:
+    return (run_dir(name, detector) / "ident_v.npy").exists()
+
+
 def _segments(args) -> list[str]:
     names = args.segments or list(SEGMENTS)
     bad = set(names) - set(SEGMENTS)
@@ -744,6 +759,12 @@ def _segments(args) -> list[str]:
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument(
+        "--candidate",
+        nargs=3,
+        metavar=("NAME", "MODEL", "THRESHOLD"),
+        help="a further learned model, shown as a third detector",
+    )
     sub = p.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("survey", help="spectral lines over the night of the grid")
     a.add_argument("--files", type=int, nargs=3, default=[84, 244, 4], metavar="N")
@@ -764,6 +785,17 @@ def main(argv=None):
     a = sub.add_parser("counts", help="counts per segment and detector")
     a.set_defaults(func=counts)
     args = p.parse_args(argv)
+    if args.candidate:
+        global FIG
+        name, model, thr = args.candidate
+        if name in ("classic", "learned"):
+            raise ValueError("candidate names classic and learned are taken")
+        CANDIDATES[name] = (str(Path(model).expanduser().resolve()), float(thr))
+        DETECTORS.append(name)
+        LABELS[name] = f"{name} (threshold {float(thr):g})"
+        FIG = FIG.with_name(f"{FIG.name}_{name}")
+        if getattr(args, "detectors", None) == ["classic", "learned"]:
+            args.detectors = list(DETECTORS)
     args.func(args)
 
 
