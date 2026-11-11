@@ -404,7 +404,9 @@ def frags(args):
     for split in args.splits:
         for name in mixtures(split, args.only):
             mix = name.split("/", 1)[1]
-            z = np.load(WORK / "data" / split / f"{mix}.npz")
+            z = np.load(
+                WORK / "data" / split / f"{mix}{'-pairs' if args.pairs else ''}.npz"
+            )
             band = yaml.safe_load((MIXTURES / name / "band.yaml").read_text())
             cfg = Config.from_dict(merge(variant, band))
             truth = dict(np.load(MIXTURES / name / "truth.npz"))
@@ -440,6 +442,75 @@ def frags(args):
     print("mean " + " ".join(f"{k} {np.mean([r[k] for r in rows]):.4f}" for k in keys))
     if args.out:
         Path(args.out).write_text(json.dumps(rows, indent=1))
+
+
+# --- figures ---------------------------------------------------------------------
+
+INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e6e5e0"
+SERIES = ("#2a78d6", "#eb6834", "#1baf7a")
+
+
+def _style(ax):
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_color(MUTED)
+    ax.tick_params(colors=MUTED, labelsize=8)
+    ax.grid(axis="y", color=GRID, lw=0.6)
+    ax.set_axisbelow(True)
+
+
+def plot_switches(runs: list[tuple[str, str]], path: Path):
+    """Switches per mixture by the two fish's distance (frags JSONs)."""
+    import matplotlib.pyplot as plt
+
+    keys = [f"switches {lo}-{hi} Hz" for lo, hi in SEP_BANDS]
+    names = ["< 0.25 Hz\n(one line)", "0.25-1.2 Hz", "1.2-3 Hz", ">= 3 Hz"]
+    fig, ax = plt.subplots(figsize=(6.4, 3.2), layout="constrained")
+    width = 0.8 / len(runs)
+    for i, (label, f) in enumerate(runs):
+        rows = json.loads(Path(f).read_text())
+        v = [np.mean([r[k] for r in rows]) for k in keys]
+        x = np.arange(len(keys)) + (i - (len(runs) - 1) / 2) * width
+        ax.bar(x, v, width * 0.92, color=SERIES[i], label=label)
+        for xx, vv in zip(x, v, strict=True):
+            ax.text(
+                xx, vv, f"{vv:.0f}", ha="center", va="bottom", fontsize=7, color=MUTED
+            )
+    ax.set_xticks(np.arange(len(keys)), names)
+    ax.set_ylabel("switches inside fragments\nper mixture", fontsize=8, color=INK)
+    ax.set_title(
+        "Raw tracker fragments: where they switch fish (ldev, lab noise)",
+        fontsize=9,
+        color=INK,
+        loc="left",
+    )
+    _style(ax)
+    ax.legend(frameon=False, fontsize=8)
+    fig.savefig(path, dpi=160)
+    print(path)
+
+
+def plot_pair_oracle(rows: list[tuple[str, float, float]], path: Path):
+    """IDF1 without and with the pair oracle: rows of (label, plain, oracle)."""
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(4.6, 3.4), layout="constrained")
+    for i, (label, a, b) in enumerate(rows):
+        c = SERIES[i]
+        ax.plot([0, 1], [a, b], color=c, lw=2, marker="o", ms=7)
+        ax.text(
+            1.05, b, f"{label}  {a:.3f} -> {b:.3f}", va="center", fontsize=8, color=INK
+        )
+    ax.set_xticks(
+        [0, 1], ["detections\n(learned-b)", "+ hidden fish of\nclose pairs (oracle)"]
+    )
+    ax.set_xlim(-0.2, 2.6)
+    ax.set_ylabel("IDF1 (mean, lab and field)", fontsize=8, color=INK)
+    ax.set_title("Does a perfect pair head pay off?", fontsize=9, color=INK, loc="left")
+    _style(ax)
+    fig.savefig(path, dpi=160)
+    print(path)
 
 
 def main(argv=None):
@@ -482,6 +553,7 @@ def main(argv=None):
     f.add_argument("--splits", nargs="+", default=["ldev", "ldev-field"])
     f.add_argument("--only", nargs="*")
     f.add_argument("--set", nargs="*", help="tracking.<key>=<value>")
+    f.add_argument("--pairs", action="store_true", help="with the pair oracle's fish")
     f.add_argument("--out")
     args = p.parse_args(argv)
     {"build": build, "train": train, "frags": frags}[args.cmd](args)
