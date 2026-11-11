@@ -264,6 +264,7 @@ class Batches:
         harm_weight: float = 1.0,
         harm_snr: float = 10.0,
         hard_harmonics: tuple[float, ...] = HARD_HARMONICS,
+        sigma_hz: float = SIGMA_HZ,
         workers: int = 4,
     ):
         splits = split.split(",")
@@ -288,6 +289,7 @@ class Batches:
         self.tilt_db, self.tilt_p = tilt_db, tilt_p
         self.harm_weight, self.harm_snr = harm_weight, harm_snr
         self.hard_harmonics = tuple(hard_harmonics)
+        self.sigma_hz = sigma_hz
         self.spec = PowerSpectrogram(NFFT, STEP, RATE, dev)
         self.rng = np.random.default_rng(seed)
         self.lines = {}
@@ -488,7 +490,7 @@ class Batches:
                 * DF
             )
             d = fk[None, None, :] - f0[:, :, None]  # (fish, frames, bins)
-            gauss = torch.exp(-0.5 * (d / SIGMA_HZ) ** 2) * ok[:, :, None]
+            gauss = torch.exp(-0.5 * (d / self.sigma_hz) ** 2) * ok[:, :, None]
             target = gauss.amax(0)
             around = (fk[None, None, :] - gs[:, :, None]).abs() <= half
             ignore = ((~ok)[:, :, None] & around).any(0)
@@ -682,6 +684,9 @@ def main(argv=None):
     p.add_argument(
         "--focal", type=float, default=0.0, help="focal-loss exponent (0: BCE)"
     )
+    p.add_argument(
+        "--sigma-hz", type=float, default=SIGMA_HZ, help="width of the target bumps"
+    )
     p.add_argument("--checkpoint", action="store_true", help="recompute layers")
     p.add_argument("--workers", type=int, default=4, help="reader threads")
     p.add_argument("--val-every", type=int, default=500)
@@ -733,6 +738,7 @@ def main(argv=None):
         hard_harmonics=tuple(
             float(Fraction(h)) for h in args.hard_harmonics.split(",")
         ),
+        sigma_hz=args.sigma_hz,
         workers=args.workers,
     )
     val = Batches(
