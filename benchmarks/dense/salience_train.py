@@ -159,6 +159,18 @@ class Mixture:
         return f"{split.removesuffix('-field')}/{name}"
 
 
+def _smooth(n: int) -> int:
+    """The smallest number >= n whose prime factors are 2, 3 and 5."""
+    while True:
+        m = n
+        for p in (2, 3, 5):
+            while m % p == 0:
+                m //= p
+        if m == 1:
+            return n
+        n += 1
+
+
 def _fill(t, tt, f):
     ok = np.isfinite(f)
     if ok.sum() < 2:
@@ -312,10 +324,12 @@ class Batches:
         a = crop.j0 * STEP
         if crop.r == 1.0 and crop.tilt == 0.0:
             return a, N, N, 0, a, N
-        M = NFFT // 2
-        n_out = N + 2 * M
-        n_in = round(n_out * crop.r)
-        s0 = a - round(M * crop.r)
+        # FFT lengths with small prime factors only (cuFFT fails on some
+        # large primes); the exact ratio n_in / n_out is the speed used
+        n_out = _smooth(N + 2 * (NFFT // 2))
+        M = (n_out - N) // 2
+        n_in = _smooth(round(n_out * crop.r))
+        s0 = a - round(M * n_in / n_out)
         return s0, n_in, n_out, M, a, N
 
     def draw(self) -> Crop:
