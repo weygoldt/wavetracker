@@ -106,16 +106,17 @@ def build(args):
 
 
 class Mixture:
-    """One mixture on the device: inputs, labels, edges."""
+    """One mixture in memory (CPU): inputs, labels, edges; crops go to the
+    training device."""
 
-    def __init__(self, path: Path, device):
+    def __init__(self, path: Path, device, hard_weight: float = 1.0):
         import torch
 
         z = np.load(path)
         self.name = path.stem
         self.idx = z["idx"]
         self.d = assocnet.detection_inputs(
-            z["fund"], z["idx"], z["times"], z["sign"], z["cplx"], z["sal"], device
+            z["fund"], z["idx"], z["times"], z["sign"], z["cplx"], z["sal"], "cpu"
         )
         fish = z["fish"].astype(np.int64)
         cls = z["cls"]
@@ -123,11 +124,22 @@ class Mixture:
         fa, fb = fish[src], fish[dst]
         y = (fa == fb) & (fa >= 0)
         w = ((fa >= 0) | (fb >= 0)) & (cls[src] != 1) & (cls[dst] != 1)
-        self.src = torch.as_tensor(src, device=device)
-        self.dst = torch.as_tensor(dst, device=device)
-        self.y = torch.as_tensor(y, dtype=torch.float32, device=device)
-        self.w = torch.as_tensor(w, dtype=torch.float32, device=device)
-        self.frame_src = torch.as_tensor(self.idx[src], device=device)
+        w = w.astype(np.float32)
+        if hard_weight != 1.0:  # edges of detections with true and false candidates
+            n = len(fish)
+            pos, neg = (w > 0) & y, (w > 0) & ~y
+            hard_in = (np.bincount(dst[pos], minlength=n) > 0) & (
+                np.bincount(dst[neg], minlength=n) > 0
+            )
+            hard_out = (np.bincount(src[pos], minlength=n) > 0) & (
+                np.bincount(src[neg], minlength=n) > 0
+            )
+            w[hard_in[dst] | hard_out[src]] *= hard_weight
+        self.src = torch.as_tensor(src)
+        self.dst = torch.as_tensor(dst)
+        self.y = torch.as_tensor(y, dtype=torch.float32)
+        self.w = torch.as_tensor(w, dtype=torch.float32)
+        self.device = device
         self.n_frames = int(self.idx[-1]) + 1
         self.fs = np.searchsorted(self.idx, np.arange(self.n_frames + 1))
 
@@ -136,18 +148,25 @@ class Mixture:
         import torch
 
         lo, hi = int(self.fs[f0]), int(self.fs[min(f1, self.n_frames)])
-        e0 = int(torch.searchsorted(self.src, torch.tensor(lo, device=self.src.device)))
-        e1 = int(torch.searchsorted(self.src, torch.tensor(hi, device=self.src.device)))
+        e0 = int(torch.searchsorted(self.src, torch.tensor(lo)))
+        e1 = int(torch.searchsorted(self.src, torch.tensor(hi)))
         s, t = self.src[e0:e1], self.dst[e0:e1]
         ok = t < hi
         s, t = s[ok] - lo, t[ok] - lo
-        nodes = torch.arange(lo, hi, device=self.src.device)
+        sub = self.d.subset(torch.arange(lo, hi))
+        dev = self.device
+        sub = assocnet.Detections(
+            **{
+                k: getattr(sub, k).to(dev, non_blocking=True)
+                for k in assocnet.Detections.__dataclass_fields__
+            }
+        )
         return (
-            self.d.subset(nodes),
-            s,
-            t,
-            self.y[e0:e1][ok],
-            self.w[e0:e1][ok],
+            sub,
+            s.to(dev),
+            t.to(dev),
+            self.y[e0:e1][ok].to(dev),
+            self.w[e0:e1][ok].to(dev),
         )
 
 
@@ -173,12 +192,14 @@ def concat(parts):
     return d, torch.cat(ss), torch.cat(ts), torch.cat(ys), torch.cat(ws)
 
 
-def load_split(split: str, device, pairs: bool, only=None) -> list[Mixture]:
+def load_split(
+    split: str, device, pairs: bool, only=None, hard_weight: float = 1.0
+) -> list[Mixture]:
     files = sorted((WORK / "data" / split).glob("*.npz"))
     files = [f for f in files if f.stem.endswith("-pairs") == pairs]
     if only:
         files = [f for f in files if any(o in f.stem for o in only)]
-    return [Mixture(f, device) for f in files]
+    return [Mixture(f, device, hard_weight) for f in files]
 
 
 def evaluate(net, mixes, crop_frames, device):
@@ -215,9 +236,12 @@ def train(args):
     out = WORK / args.tag
     out.mkdir(parents=True, exist_ok=True)
     (out / "args.json").write_text(json.dumps(vars(args), indent=1))
-    mixes = [m for sp in args.train_splits for m in load_split(sp, device, False)]
+    hw = args.hard_weight
+    mixes = [
+        m for sp in args.train_splits for m in load_split(sp, device, False, None, hw)
+    ]
     pair_mixes = (
-        [m for sp in args.train_splits for m in load_split(sp, device, True)]
+        [m for sp in args.train_splits for m in load_split(sp, device, True, None, hw)]
         if args.pair_frac > 0
         else []
     )
@@ -252,12 +276,20 @@ def train(args):
             f0 = int(rng.integers(0, max(1, m.n_frames - args.crop_frames)))
             parts.append(m.crop(f0, f0 + args.crop_frames))
         d, s, t, y, w = concat(parts)
-        logit = net(d, s, t)
-        loss = torch.nn.functional.binary_cross_entropy_with_logits(
-            logit, y, weight=w, reduction="sum"
-        ) / w.sum().clamp_min(1.0)
-        opt.zero_grad()
-        loss.backward()
+        try:
+            logit = net(d, s, t)
+            loss = torch.nn.functional.binary_cross_entropy_with_logits(
+                logit, y, weight=w, reduction="sum"
+            ) / w.sum().clamp_min(1.0)
+            opt.zero_grad()
+            loss.backward()
+        except torch.OutOfMemoryError:  # the GPU is shared: skip this batch
+            print(f"step {step}: out of memory, skipped", flush=True)
+            opt.zero_grad()
+            del d, s, t, y, w
+            torch.cuda.empty_cache()
+            time.sleep(5)
+            continue
         torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
         opt.step()
         sched.step()
@@ -278,6 +310,97 @@ def train(args):
                 best = vl
                 model.save(out / "best.pt")
     log.close()
+
+
+# --- raw fragments ---------------------------------------------------------------
+
+
+SEP_BANDS = [(0, 0.25), (0.25, 1.2), (1.2, 3.0), (3.0, np.inf)]
+
+
+def frag_stats(ident, fish, cls, n_known, idx, F=None) -> dict:
+    """Quality of a tracker's raw fragments (before linking); with the truth
+    F (fish, frames), switches by the two fish's distance at the switch."""
+    from assoc_diag import idf1, majority
+
+    has = np.isfinite(ident)
+    m = has & (fish >= 0)
+    order = np.lexsort((idx[m], ident[m]))
+    i_s, f_s, x_s = ident[m][order], fish[m][order], idx[m][order]
+    same = i_s[1:] == i_s[:-1]
+    sw = same & (f_s[1:] != f_s[:-1])
+    switches = int(sw.sum())
+    by_sep = {}
+    if F is not None:
+        j = np.flatnonzero(sw) + 1
+        sep = np.abs(F[f_s[j], x_s[j]] - F[f_s[j - 1], x_s[j]])
+        sep = np.where(np.isfinite(sep), sep, np.inf)
+        for lo, hi in SEP_BANDS:
+            by_sep[f"switches {lo}-{hi} Hz"] = int(((sep >= lo) & (sep < hi)).sum())
+    _, cnt = np.unique(ident[has], return_counts=True)
+    long = cnt >= 10
+    return by_sep | {
+        "switches": switches,
+        "fragments_10": int(long.sum()),
+        "dets_in_short": float(cnt[~long].sum() / max(has.sum(), 1)),
+        "assigned": float(has.mean()),
+        "idf1_raw": idf1(ident, fish, cls, n_known),
+        "idf1_majority": idf1(majority(ident, fish), fish, cls, n_known),
+    }
+
+
+def frags(args):
+    """Raw fragments of a tracker config on the detections of every split."""
+    import yaml
+    from run import merge
+
+    from wavetracker.config import Config
+    from wavetracker.tracking import track
+
+    variant = yaml.safe_load(Path(args.config).read_text())
+    for kv in args.set or []:
+        k, v = kv.split("=", 1)
+        variant.setdefault("tracking", {})[k] = yaml.safe_load(v)
+    rows = []
+    for split in args.splits:
+        for name in mixtures(split, args.only):
+            mix = name.split("/", 1)[1]
+            z = np.load(WORK / "data" / split / f"{mix}.npz")
+            band = yaml.safe_load((MIXTURES / name / "band.yaml").read_text())
+            cfg = Config.from_dict(merge(variant, band))
+            truth = dict(np.load(MIXTURES / name / "truth.npz"))
+            n_known = int(np.isfinite(truth_at(truth, z["times"])).sum())  # frames
+            t0 = time.perf_counter()
+            ident = track(
+                z["fund"],
+                z["idx"],
+                z["sign"],
+                z["times"],
+                cfg.tracking,
+                cfg.harmonic_groups.min_freq,
+                cfg.harmonic_groups.max_freq,
+                sal_v=z["sal"],
+                cplx_v=z["cplx"],
+            )
+            F = truth_at(truth, z["times"])
+            r = frag_stats(ident, z["fish"].astype(int), z["cls"], n_known, z["idx"], F)
+            r |= {"mixture": name, "s": time.perf_counter() - t0}
+            rows.append(r)
+            print(
+                f"{name}: switches {r['switches']} fragments {r['fragments_10']} "
+                f"raw {r['idf1_raw']:.3f} majority {r['idf1_majority']:.3f} "
+                f"({r['s']:.1f} s)",
+                flush=True,
+            )
+    keys = [k for k in rows[0] if k.startswith("switches")] + [
+        "fragments_10",
+        "dets_in_short",
+        "idf1_raw",
+        "idf1_majority",
+    ]
+    print("mean " + " ".join(f"{k} {np.mean([r[k] for r in rows]):.4f}" for k in keys))
+    if args.out:
+        Path(args.out).write_text(json.dumps(rows, indent=1))
 
 
 def main(argv=None):
@@ -302,11 +425,23 @@ def main(argv=None):
     t.add_argument("--rounds", type=int, default=3)
     t.add_argument("--el-hidden", type=int, default=32)
     t.add_argument("--pair-frac", type=float, default=0.0)
+    t.add_argument(
+        "--hard-weight",
+        type=float,
+        default=1.0,
+        help="weight of edges at detections with true and false candidates",
+    )
     t.add_argument("--val-every", type=int, default=500)
     t.add_argument("--seed", type=int, default=0)
     t.add_argument("--device", default="cuda")
+    f = sub.add_parser("frags")
+    f.add_argument("-c", "--config", required=True)
+    f.add_argument("--splits", nargs="+", default=["ldev", "ldev-field"])
+    f.add_argument("--only", nargs="*")
+    f.add_argument("--set", nargs="*", help="tracking.<key>=<value>")
+    f.add_argument("--out")
     args = p.parse_args(argv)
-    {"build": build, "train": train}[args.cmd](args)
+    {"build": build, "train": train, "frags": frags}[args.cmd](args)
 
 
 if __name__ == "__main__":

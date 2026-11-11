@@ -169,3 +169,27 @@ def test_tracking_method_config():
         TrackingConfig(method="hungarian")
     cfg = Config.from_dict({"tracking": {"method": "learned", "assoc_model": "x.pt"}})
     assert cfg.tracking.assoc_threshold == 0.5
+
+
+def test_cost_mode_keeps_the_rule_based_tracker_with_learned_errors(tmp_path):
+    fund, idx, sign, cplx, sal, times, fish = _lines(n_frames=300, drop=0.3)
+    model = assocnet.AssocModel(_RuleNet(), 1.0, 2.5)
+    key = (str((tmp_path / "rule.pt").resolve()), "cpu")
+    assocnet._MODELS[key] = model  # a stand-in for a trained network
+    cfg = TrackingConfig(
+        method="learned", assoc_mode="cost", assoc_model=str(tmp_path / "rule.pt")
+    )
+    try:
+        ident = track(fund, idx, sign, times, cfg, sal_v=sal, cplx_v=cplx)
+    finally:
+        del assocnet._MODELS[key]
+    for k in range(3):  # the rule-based tracker never assigns the first frame
+        ids = ident[(fish == k) & (idx > idx[0])]
+        assert np.isfinite(ids).all() and len(np.unique(ids)) == 1
+    assert len(np.unique(ident[np.isfinite(ident)])) == 3
+
+
+def test_assoc_mode_config():
+    assert TrackingConfig().assoc_mode == "link"
+    with pytest.raises(ValueError, match="assoc_mode"):
+        TrackingConfig(assoc_mode="both")

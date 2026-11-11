@@ -313,6 +313,13 @@ class TrackingConfig:
     of the next few seconds and a frame-by-frame linking builds the tracks
     (wavetracker.assocnet); of the options above only min_identity_salience
     applies. Needs assoc_model."""
+    assoc_mode: str = "link"
+    """Learned association: "link" builds tracks from the learned links alone
+    (frame by frame, links up to the model's horizon of a few seconds); "cost"
+    keeps the rule-based tracker (windows, temporary identities, gaps up to
+    max_dt and the options above) and replaces its error for links within the
+    model's horizon by 1 - the learned probability, dropping links below
+    assoc_threshold."""
     assoc_model: str | None = None
     """Weights of the learned association (method "learned"), trained with
     benchmarks/dense/assocnet.py; not packaged."""
@@ -331,6 +338,10 @@ class TrackingConfig:
         if self.method not in ("classic", "learned"):
             raise ValueError(
                 f"tracking.method must be 'classic' or 'learned', not {self.method!r}"
+            )
+        if self.assoc_mode not in ("link", "cost"):
+            raise ValueError(
+                f"tracking.assoc_mode must be 'link' or 'cost', not {self.assoc_mode!r}"
             )
         if self.method == "learned" and not self.assoc_model:
             raise ValueError("tracking.method 'learned' needs tracking.assoc_model")
