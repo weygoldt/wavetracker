@@ -523,6 +523,38 @@ learned detections it needs the retrained linker. Tracking takes twice as
 long. Figures: `figures/assoc_diagnosis.png`, `figures/assoc_results.png`,
 `figures/strata_assoc.png`.
 
+### Detector and association together (step B)
+
+The detector track (`salience_train.py` options `--temporal-dilations`,
+`--channels`, augmentations; `det_sweep.py`; notes in
+`$WT_BENCHMARK_DATA/salience/B-det-NOTES.md`) added a temporal stack to the
+network: 7 residual layers along time per frequency bin (dilations 1-64,
+about 52 s of context) on a trunk of width 64. Training is 4x faster (data
+prepared on the GPU). Through the step-A tracker and linker, two seeds give
+mean IDF1 (lab and field) 0.742 against 0.730 for v1, best at threshold 0.7.
+Most misses near close lines are a decoding limit: two fundamentals one bin
+apart give one peak.
+
+Through the step-B association (`configs/learned-assoc.yaml`), mean IDF1 of
+lab and field, best of thresholds 0.6 / 0.7:
+
+| detector | seed 0 | seed 1 | harmonic/frame | false ids >= 30 s |
+|---|---|---|---|---|
+| v1 (association only) | 0.744 | | 0.28 / 0.37 | 0.9 / 0.9 |
+| temporal stack | 0.746 | 0.751 | 0.31 / 0.40 | 1.1 / 1.5 |
+| temporal stack + augmentations | 0.747 | 0.743 | 0.11 / 0.18 | 0.5 / 0.6 |
+
+(harmonics and false identities lab / field, seed 0, threshold 0.6.) The
+augmented model (speed perturbation 0.85-1.18, spectral tilt, hard negatives
+at 1/5-5 times strong fish, harmonic channels 1/5 ... 5) is as good in IDF1
+and much cleaner: a third of the harmonic detections, half the false
+identities, at slightly lower recall of faint fish. On the field grid it no
+longer reports the 2nd harmonic of a masked fish as a fish. The seed spread
+(about 0.005) is now as large as the differences: further decisions need
+more seeds or a larger dev split. `configs/learned-b.yaml` is the candidate
+(augmented model, seed 0, threshold 0.6): 0.752 / 0.741, against classic
+0.639 / 0.597 and v1 at the end of step A 0.739 / 0.723.
+
 ## Learned fragment linking
 
 On the dense mixtures, identities break much more often than detections

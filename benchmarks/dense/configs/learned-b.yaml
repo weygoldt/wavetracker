@@ -1,0 +1,25 @@
+# learned-assoc.yaml with the step-B detector: width 64, a temporal stack of
+# 7 dilated layers (~52 s context), trained with speed perturbation, spectral
+# tilt and hard negatives at harmonics (salience_train.py, tag B-det-tcn64aug-s0;
+# not packaged). ldev / ldev-field IDF1 0.752 / 0.741 at threshold 0.6, with
+# about a third of v1's harmonic detections and half its false identities.
+detector:
+  method: learned
+  threshold: 0.6
+  model: /home/weygoldt/wrk/data/wavetracker_benchmark/salience/B-det-tcn64aug-s0/last.pt
+harmonic_groups:
+  high_thresh_factor: 7.0
+  low_thresh_factor: 4.0
+  min_group_size: 2
+linking:
+  enabled: true
+  max_parallel: 0.6
+  max_shared: 0.3
+  model: /home/weygoldt/wrk/data/wavetracker_benchmark/assoc/linker-learned-v1-motion2.npz
+  threshold: 0.6
+tracking:
+  gap_tolerance: 0.5
+  gap_tolerance_rate: 0.1
+  min_identity_salience: 0.75
+  min_support: 3
+  motion_window: 2.0
