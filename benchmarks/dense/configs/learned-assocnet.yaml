@@ -1,10 +1,16 @@
 # learned-rises.yaml with the learned association (wavetracker.assocnet,
 # tracking.method: learned) instead of the rule-based tracker: a message-passing
 # network scores the links between detections of the next 2 s (within 2.5 Hz),
-# trained on the learned-b detections of ltrain (benchmarks/dense/assocnet.py;
-# weights not packaged), and a frame-by-frame linking builds the fragments.
-# The fragment linker, rise joiner and identity salience filter follow as in
+# trained on the learned-b detections of ltrain (benchmarks/dense/assocnet.py,
+# tag C-an-v0; weights not packaged), and a frame-by-frame linking builds the
+# fragments from links of probability >= 0.7; tracks of fewer than 10
+# detections stay unassigned. The fragment linker (retrained on this tracker's
+# ltrain fragments), rise joiner and identity salience filter follow as in
 # learned-rises.yaml.
+# 51 dev mixtures (ldev + ldev2), lab / field: IDF1 0.776 / 0.769 against
+# 0.766 / 0.759 for learned-rises (+0.0099 [+0.0042, +0.0162]), 41 % fewer
+# identity switches; against the rule-based tracker with a linker retrained the
+# same way +0.0092 [+0.0036, +0.0154].
 detector:
   method: learned
   threshold: 0.6
@@ -17,13 +23,13 @@ linking:
   enabled: true
   max_parallel: 0.6
   max_shared: 0.3
-  model: /home/weygoldt/wrk/data/wavetracker_benchmark/assoc/linker-learned-v1-motion2.npz
+  model: /home/weygoldt/wrk/data/wavetracker_benchmark/assocnet/C-an-v0/linker.npz
   threshold: 0.6
 rises:
   enabled: true
 tracking:
   method: learned
   assoc_model: /home/weygoldt/wrk/data/wavetracker_benchmark/assocnet/C-an-v0/best.pt
-  assoc_threshold: 0.5
-  assoc_min_detections: 1
+  assoc_threshold: 0.7
+  assoc_min_detections: 10
   min_identity_salience: 0.75

@@ -348,9 +348,14 @@ tracker.
 The weights are not packaged. `benchmarks/dense/assocnet.py` trains them on
 the benchmark's `ltrain` mixtures: the detections of the learned detector are
 matched to the truth, a link is "same fish" when both ends are on one fish,
-and half of the training crops also hold the hidden fish of close pairs (two
-detections of one peak with the same spectra), so that the network learns to
-keep them apart.
+and half of the training crops can also hold the hidden fish of close pairs
+(two detections of one peak with the same spectra), so that the network
+learns to keep them apart. On the dense benchmark (threshold 0.7, tracks
+of fewer than 10 detections unassigned, a fragment linker retrained on its
+fragments) it raises IDF1 by 0.009 over the rule-based tracker with a linker
+retrained the same way, most in crowded scenes, with 41 % fewer identity
+switches (see [benchmarks](benchmarks.md#learned-association-step-c)).
+`assoc_mode: cost` was worse than the rule-based tracker there.
 
 ## Recordings without fish
 

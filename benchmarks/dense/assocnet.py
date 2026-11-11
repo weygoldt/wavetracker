@@ -460,12 +460,19 @@ def _style(ax):
     ax.set_axisbelow(True)
 
 
-def plot_switches(runs: list[tuple[str, str]], path: Path):
+def plot_switches(
+    runs: list[tuple[str, str]],
+    path: Path,
+    title: str = "Raw tracker fragments: where they switch fish (ldev, lab noise)",
+    one_line: bool = True,
+):
     """Switches per mixture by the two fish's distance (frags JSONs)."""
     import matplotlib.pyplot as plt
 
     keys = [f"switches {lo}-{hi} Hz" for lo, hi in SEP_BANDS]
-    names = ["< 0.25 Hz\n(one line)", "0.25-1.2 Hz", "1.2-3 Hz", ">= 3 Hz"]
+    names = ["< 0.25 Hz", "0.25-1.2 Hz", "1.2-3 Hz", ">= 3 Hz"]
+    if one_line:
+        names[0] += "\n(one line)"
     fig, ax = plt.subplots(figsize=(6.4, 3.2), layout="constrained")
     width = 0.8 / len(runs)
     for i, (label, f) in enumerate(runs):
@@ -479,8 +486,9 @@ def plot_switches(runs: list[tuple[str, str]], path: Path):
             )
     ax.set_xticks(np.arange(len(keys)), names)
     ax.set_ylabel("switches inside fragments\nper mixture", fontsize=8, color=INK)
+    ax.set_xlabel("distance of the two fish at the switch", fontsize=8, color=INK)
     ax.set_title(
-        "Raw tracker fragments: where they switch fish (ldev, lab noise)",
+        title,
         fontsize=9,
         color=INK,
         loc="left",
@@ -495,17 +503,22 @@ def plot_pair_oracle(rows: list[tuple[str, float, float]], path: Path):
     """IDF1 without and with the pair oracle: rows of (label, plain, oracle)."""
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(4.6, 3.4), layout="constrained")
+    fig, ax = plt.subplots(figsize=(6.4, 3.6), layout="constrained")
     for i, (label, a, b) in enumerate(rows):
         c = SERIES[i]
         ax.plot([0, 1], [a, b], color=c, lw=2, marker="o", ms=7)
         ax.text(
-            1.05, b, f"{label}  {a:.3f} -> {b:.3f}", va="center", fontsize=8, color=INK
+            1.06,
+            b,
+            f"{label}\n{a:.4f} -> {b:.4f} ({b - a:+.4f})",
+            va="center",
+            fontsize=8,
+            color=INK,
         )
     ax.set_xticks(
         [0, 1], ["detections\n(learned-b)", "+ hidden fish of\nclose pairs (oracle)"]
     )
-    ax.set_xlim(-0.2, 2.6)
+    ax.set_xlim(-0.2, 2.2)
     ax.set_ylabel("IDF1 (mean, lab and field)", fontsize=8, color=INK)
     ax.set_title("Does a perfect pair head pay off?", fontsize=9, color=INK, loc="left")
     _style(ax)
