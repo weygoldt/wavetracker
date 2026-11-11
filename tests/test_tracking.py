@@ -244,3 +244,122 @@ def test_start_threshold_needs_a_salience():
     res.sal_v = sal
     track_results(res, cfg)
     assert np.all(np.isnan(res.ident_v[sal < 0.5][fund[sal < 0.5] > 800]))
+
+
+def _crossing_scene(seed=0):
+    """Two fish whose lines cross at 30 s: A rises at +0.1 Hz/s from 597 Hz,
+    B falls at -0.1 Hz/s from 603 Hz, 0.2 s per frame, both detected in 60 %
+    of the frames, with the same electrode pattern (no amplitude cue), among
+    eight other fish at 650-860 Hz with patterns of their own."""
+    rng = np.random.default_rng(seed)
+    dt, n = 0.2, 300
+    times = np.arange(n) * dt
+    fish = [(0, 597.0, 0.1, 0.6), (1, 603.0, -0.1, 0.6)]
+    fish += [(2 + j, 650.0 + 30 * j, 0.0, 1.0) for j in range(8)]
+    patterns = rng.random((10, 6))
+    patterns[1] = patterns[0]
+    rows = []
+    for k in range(n):
+        for lab, f0, s, p in fish:
+            if rng.random() < p:
+                rows.append((k, f0 + s * k * dt + 0.01 * rng.normal(), lab))
+    rows.sort(key=lambda r: (r[0], r[1]))
+    idx = np.array([r[0] for r in rows])
+    fund = np.array([r[1] for r in rows])
+    label = np.array([r[2] for r in rows])
+    sign = patterns[label] * rng.uniform(0.95, 1.05, (len(rows), 6))
+    return fund, idx, sign, times, label
+
+
+def _pure(ident, label, of=(0, 1)):
+    """Fraction of identified detections on their identity's majority label,
+    over the identities holding detections of the fish `of`."""
+    good = total = 0
+    for i in np.unique(ident[np.isfinite(ident) & np.isin(label, of)]):
+        lab = label[ident == i]
+        good += np.bincount(lab).max()
+        total += len(lab)
+    return good / total
+
+
+def test_local_slopes_follow_each_identity():
+    from wavetracker.tracking import _local_slopes
+
+    idx = np.arange(40, dtype=np.int64)
+    ident = np.where(idx < 20, 0, 1).astype(np.int64)
+    ident[5] = -1
+    fund = np.where(ident == 1, 700.0 - 0.3 * idx * 0.1, 600.0 + 0.5 * idx * 0.1)
+    inner = (idx % 20 >= 3) & (idx % 20 < 17)  # 3 frames from either end
+    for past, future in ((True, True), (True, False), (False, True)):
+        s = _local_slopes(fund, idx, ident, 0.1, 3, 2.0, past, future)
+        np.testing.assert_allclose(s[(ident == 0) & inner], 0.5, atol=1e-9)
+        np.testing.assert_allclose(s[(ident == 1) & inner], -0.3, atol=1e-9)
+        assert s[5] == 0.0  # no identity, no slope
+    clipped = _local_slopes(fund * 10, idx, ident, 0.1, 3, 2.0, True, True)
+    assert clipped.max() <= 2.0 and clipped.min() >= -2.0
+    # one-sided: a kink at frame 30 does not reach the slopes before it
+    kink = fund.copy()
+    kink[30:] += 2.0 * (idx[30:] - 30) * 0.1
+    past = _local_slopes(kink, idx, ident, 0.1, 3, 5.0, True, False)
+    np.testing.assert_allclose(past[25:31], -0.3, atol=1e-9)
+
+
+def test_motion_keeps_crossing_fish_apart():
+    """Without amplitude cues, two fish crossing at different slopes are often
+    swapped by frequency proximity; predicting along each fish's slope (from
+    its side of the crossing) keeps them apart in most draws."""
+    common = dict(max_dt=2.0, gap_tolerance=0.5, gap_tolerance_rate=0.1)
+    plain, moving = [], []
+    for seed in range(8):
+        fund, idx, sign, times, label = _crossing_scene(seed)
+        plain.append(
+            _pure(track(fund, idx, sign, times, TrackingConfig(**common)), label)
+        )
+        cfg = TrackingConfig(**common, motion_window=1.0)
+        moving.append(_pure(track(fund, idx, sign, times, cfg), label))
+    assert sum(p > 0.95 for p in plain) <= 3
+    assert sum(m > 0.95 for m in moving) >= 7
+
+
+@pytest.mark.parametrize("v6_compat", [False, True])
+def test_motion_off_changes_nothing(detections, v6_compat):
+    """motion_window: None is the tracker as before (also checked against the
+    original by the equivalence tests above)."""
+    r = detections
+    a = track(r.fund_v, r.idx_v, r.sign_v, r.times, TrackingConfig(), 400, 1200)
+    b = track(
+        r.fund_v,
+        r.idx_v,
+        r.sign_v,
+        r.times,
+        TrackingConfig(motion_window=None, motion_max_slope=0.5),
+        400,
+        1200,
+    )
+    assert _same(a, b)
+
+
+def test_weak_identities_are_dropped_after_linking():
+    from wavetracker.tracking import drop_weak_identities
+
+    ident = np.array([0, 0, 0, 1, 1, np.nan, 2, 2])
+    sal = np.array([0.9, 0.9, 0.3, 0.5, 0.6, 0.1, 0.8, 0.7])
+    out = drop_weak_identities(ident, sal, 0.7)
+    # identity 0 (mean 0.7) keeps its weak detection, 1 (0.55) goes
+    assert _same(out, np.array([0, 0, 0, np.nan, np.nan, np.nan, 2, 2]))
+
+
+def test_identity_salience_filter_in_the_pipeline():
+    fund, idx, sign, sal, times, label = _salience_scene()
+    cfg = Config()
+    cfg.linking.enabled = False
+    res = Results(fund, idx, sign, np.full(len(fund), np.nan), times)
+    cfg.tracking.min_identity_salience = 0.5
+    with pytest.raises(ValueError, match="sal_v"):
+        track_results(res, cfg)
+    res.sal_v = sal
+    track_results(res, cfg)
+    assert np.all(np.isnan(res.ident_v[label == 2]))  # clutter: mean salience 0.2
+    assert np.isfinite(res.ident_v[label == 0]).mean() > 0.9
+    with pytest.raises(ValueError, match="min_identity_salience"):
+        TrackingConfig(min_identity_salience=1.5)

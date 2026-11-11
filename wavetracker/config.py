@@ -283,10 +283,29 @@ class TrackingConfig:
     """With start_salience: a new identity needs confident detections in this
     many seconds of frames (round(start_evidence / frame step), at least 1)
     of the temporary track it starts from, which spans at most 3 * max_dt [s]."""
+    motion_window: float | None = None
+    """If set, links follow each fish's frequency slope: a first pass tracks as
+    usual, every detection gets the slopes of its identity over the
+    motion_window [s] before and after it, and the second pass compares the
+    later detection of a link with the frequency predicted from the earlier
+    one's past slope, and the earlier with the later one's future slope (the
+    mean of both errors), in the link error and the tolerances. Slopes from
+    either side of a crossing are not mixed, so two fish that cross keep their
+    own. Each slope is shrunk by its own uncertainty, and a prediction reaches
+    at most motion_window ahead. None: off (frequencies compared directly)."""
+    motion_max_slope: float = 2.0
+    """Slopes are clipped to +-this [Hz/s] (rise onsets are jumps, not slopes)."""
+    min_identity_salience: float | None = None
+    """If set, identities whose mean detection salience (0-1, `sal_v`) is
+    below this are dropped after linking (or stitching): lines of harmonics
+    and clutter that no confident detection supports. Weak detections inside a
+    confident identity stay. None: off."""
 
     def __post_init__(self):
-        if self.start_salience is not None and not 0.0 <= self.start_salience <= 1.0:
-            raise ValueError("tracking.start_salience must be between 0 and 1")
+        for key in ("start_salience", "min_identity_salience"):
+            v = getattr(self, key)
+            if v is not None and not 0.0 <= v <= 1.0:
+                raise ValueError(f"tracking.{key} must be between 0 and 1")
 
 
 @dataclass

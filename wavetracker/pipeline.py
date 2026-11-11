@@ -33,7 +33,7 @@ from .spectrogram import (
     step_size,
 )
 from .stitching import stitch
-from .tracking import track
+from .tracking import drop_weak_identities, track
 
 log = logging.getLogger(__name__)
 
@@ -575,6 +575,10 @@ def track_results(results: Results, cfg: Config) -> float:
             results.ident_v,
             results.times,
             cfg.stitching,
+        )
+    if cfg.tracking.min_identity_salience is not None:
+        results.ident_v = drop_weak_identities(
+            results.ident_v, results.sal_v, cfg.tracking.min_identity_salience
         )
     dt = time.perf_counter() - t0
     results.meta.setdefault("timings", {})["tracking"] = dt

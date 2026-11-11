@@ -93,8 +93,37 @@ def _error_distribution_start(frame_start, start, last, comp_range):
 
 
 @njit(cache=True)
+def _freq_error(fund, idx, a, b, slope, frame_dt, motion, horizon):
+    """|f_a - f_b|, or with `motion` the mean error of predicting the later
+    detection b from a along a's slope over its past (slope[0]) and a from b
+    along b's slope over its future (slope[1]) [Hz/s], at most `horizon` [s]
+    ahead (as far as the slopes were measured)."""
+    if not motion:
+        return abs(fund[a] - fund[b])
+    d = fund[b] - fund[a]
+    t = min(max((idx[b] - idx[a]) * frame_dt, -horizon), horizon)
+    if t < 0:  # b before a: a's future, b's past
+        return 0.5 * (abs(d - slope[1, a] * t) + abs(d - slope[0, b] * t))
+    return 0.5 * (abs(d - slope[0, a] * t) + abs(d - slope[1, b] * t))
+
+
+@njit(cache=True)
 def _connections(
-    fund, idx, nsign, frame_start, f0, f1, comp_range, freq_tol, tol0, tol_rate, a_dist
+    fund,
+    idx,
+    nsign,
+    frame_start,
+    f0,
+    f1,
+    comp_range,
+    freq_tol,
+    tol0,
+    tol_rate,
+    a_dist,
+    slope,
+    frame_dt,
+    motion,
+    horizon,
 ):
     """Candidate links (a, b, error) for origins in frames [f0, f1), sorted by
     error; ties keep the (origin, target) order of the original error cube."""
@@ -103,7 +132,7 @@ def _connections(
     for i in range(f0, f1):
         for a in range(frame_start[i], frame_start[i + 1]):
             for b in range(frame_start[i + 1], frame_start[i + comp_range + 1]):
-                df = abs(fund[a] - fund[b])
+                df = _freq_error(fund, idx, a, b, slope, frame_dt, motion, horizon)
                 if df < freq_tol and df < tol0 + tol_rate * (idx[b] - idx[a]):
                     n += 1
     ca = np.empty(n, dtype=np.int64)
@@ -114,7 +143,7 @@ def _connections(
     for i in range(f0, f1):
         for a in range(frame_start[i], frame_start[i + 1]):
             for b in range(frame_start[i + 1], frame_start[i + comp_range + 1]):
-                df = abs(fund[a] - fund[b])
+                df = _freq_error(fund, idx, a, b, slope, frame_dt, motion, horizon)
                 if df < freq_tol and df < tol0 + tol_rate * (idx[b] - idx[a]):
                     if n_dist > 0:
                         rel_a = (
@@ -133,7 +162,9 @@ def _connections(
 
 
 @njit(cache=True)
-def _tmp_identities(idx, fund, ca, cb, lo, hi, n_window_frames, f_lo):
+def _tmp_identities(
+    idx, fund, ca, cb, lo, hi, n_window_frames, f_lo, slope, frame_dt, motion, horizon
+):
     """Greedily link detections in [lo, hi] into temporary identities."""
     w = hi - lo + 1
     tmp = np.full(w, -1, dtype=np.int64)
@@ -153,23 +184,26 @@ def _tmp_identities(idx, fund, ca, cb, lo, hi, n_window_frames, f_lo):
                 continue
             # attach a to b's trace if a's frame is free and freqs are close
             clash = False
-            f_after = np.nan
-            f_before = np.nan
+            j_after = -1
+            j_before = -1
             for j in range(w):
                 if tmp[j] == tb:
                     if idx[lo + j] == idx[lo + a]:
                         clash = True
                         break
-                    if j > a and np.isnan(f_after):
-                        f_after = fund[lo + j]
+                    if j > a and j_after < 0:
+                        j_after = j
                     if j < a:
-                        f_before = fund[lo + j]
+                        j_before = j
             if clash:
                 continue
-            fa = fund[lo + a]
-            close = (not np.isnan(f_after) and abs(f_after - fa) <= 0.5) or (
-                not np.isnan(f_before) and abs(f_before - fa) <= 0.5
-            )
+            close = False
+            for j in (j_after, j_before):
+                if j >= 0:
+                    e = _freq_error(
+                        fund, idx, lo + a, lo + j, slope, frame_dt, motion, horizon
+                    )
+                    close = close or e <= 0.5
             if not close:
                 continue
             tmp[a] = tb
@@ -323,6 +357,10 @@ def _track(
     v6_compat,
     confident,
     start_count,
+    slope,
+    frame_dt,
+    motion,
+    horizon,
 ):
     n_frames = idx[-1] + 4 * comp_range + 2
     frame_start = np.searchsorted(idx, np.arange(n_frames + 1))
@@ -357,8 +395,25 @@ def _track(
             tol0,
             tol_rate,
             a_dist,
+            slope,
+            frame_dt,
+            motion,
+            horizon,
         )
-        tmp = _tmp_identities(idx, fund, ca, cb, lo, hi, n_window_frames, s)
+        tmp = _tmp_identities(
+            idx,
+            fund,
+            ca,
+            cb,
+            lo,
+            hi,
+            n_window_frames,
+            s,
+            slope,
+            frame_dt,
+            motion,
+            horizon,
+        )
         if s == start:
             startable = _startable(tmp, confident, lo, start_count)
             for t in range(startable.shape[0]):
@@ -380,6 +435,10 @@ def _track(
             tol0,
             tol_rate,
             a_dist,
+            slope,
+            frame_dt,
+            motion,
+            horizon,
         )
         next_identity = _assign(
             ident,
@@ -399,6 +458,64 @@ def _track(
             start_count,
         )
     return ident
+
+
+@njit(cache=True)
+def _local_slopes(fund, idx, ident, frame_dt, window, max_slope, past, future):
+    """Slope [Hz/s] of a straight line through the detections of the same
+    identity within `window` frames before (`past`) and/or after (`future`)
+    each detection, itself included (0 without an identity or with fewer than
+    3 such detections), clipped to +-max_slope. The slope is shrunk towards 0
+    by its own uncertainty, s * s^2 / (s^2 + var(s)), so that the scatter of
+    a flat track is not taken for a slope."""
+    n = fund.shape[0]
+    out = np.zeros(n)
+    order = np.argsort(ident, kind="mergesort")  # by identity, then by frame
+    k = 0
+    while k < n:
+        if ident[order[k]] < 0:
+            k += 1
+            continue
+        e = k
+        while e < n and ident[order[e]] == ident[order[k]]:
+            e += 1
+        lo = k
+        hi = k
+        for c in range(k, e):
+            i = order[c]
+            while idx[order[lo]] < idx[i] - (window if past else 0):
+                lo += 1
+            while hi < e and idx[order[hi]] <= idx[i] + (window if future else 0):
+                hi += 1
+            m = hi - lo
+            if m < 3:
+                continue
+            st = 0.0
+            sf = 0.0
+            for q in range(lo, hi):
+                st += idx[order[q]]
+                sf += fund[order[q]]
+            st /= m
+            sf /= m
+            num = 0.0
+            den = 0.0
+            for q in range(lo, hi):
+                dt = idx[order[q]] - st
+                num += dt * (fund[order[q]] - sf)
+                den += dt * dt
+            if den > 0:
+                b = num / den  # Hz per frame
+                res = 0.0
+                for q in range(lo, hi):
+                    r = fund[order[q]] - sf - b * (idx[order[q]] - st)
+                    res += r * r
+                var_b = res / max(m - 2, 1) / den
+                if b * b + var_b > 0:
+                    b *= b * b / (b * b + var_b)
+                s = b / frame_dt
+                out[i] = min(max(s, -max_slope), max_slope)
+        k = e
+    return out
 
 
 def normalize_signatures(sign_v: np.ndarray, feature: str = "minmax") -> np.ndarray:
@@ -452,6 +569,21 @@ def support(fund_v, idx_v, times, window: float, df: float) -> np.ndarray:
     )
 
 
+def drop_weak_identities(
+    ident_v: np.ndarray, sal_v: np.ndarray, min_salience: float
+) -> np.ndarray:
+    """The identities, without those whose mean salience is below
+    `min_salience` (their detections become NaN)."""
+    out = np.array(ident_v, dtype=float)
+    has = np.isfinite(out)
+    if not has.any():
+        return out
+    _, inv = np.unique(out[has], return_inverse=True)
+    mean = np.bincount(inv, np.asarray(sal_v, dtype=float)[has]) / np.bincount(inv)
+    out[np.flatnonzero(has)[mean[inv] < min_salience]] = np.nan
+    return out
+
+
 def track(
     fund_v: np.ndarray,
     idx_v: np.ndarray,
@@ -489,12 +621,13 @@ def track(
     ident_v
         Identity of every detection (float, NaN if unassigned).
     """
-    if cfg.start_salience is not None and sal_v is None:
-        raise ValueError(
-            "tracking.start_salience needs a salience per detection (sal_v), but "
-            "these detections have none (results of an older version?): run "
-            "detect again, or set tracking.start_salience to null"
-        )
+    for key in ("start_salience", "min_identity_salience"):
+        if getattr(cfg, key) is not None and sal_v is None:
+            raise ValueError(
+                f"tracking.{key} needs a salience per detection (sal_v), but "
+                "these detections have none (results of an older version?): run "
+                f"detect again, or set tracking.{key} to null"
+            )
     ident_v = np.full(len(fund_v), np.nan)
     valid = (fund_v >= min_freq) & (fund_v <= max_freq)
     if valid.sum() < 2 or len(times) < 2:
@@ -518,9 +651,11 @@ def track(
     else:
         confident = np.asarray(sal_v)[valid] >= cfg.start_salience
         start_count = max(1, int(np.round(cfg.start_evidence / dt)))
-    ident = _track(
-        np.ascontiguousarray(fund_v[valid], dtype=np.float64),
-        np.ascontiguousarray(idx_v[valid], dtype=np.int64),
+    fund = np.ascontiguousarray(fund_v[valid], dtype=np.float64)
+    idx = np.ascontiguousarray(idx_v[valid], dtype=np.int64)
+    args = (
+        fund,
+        idx,
         np.ascontiguousarray(
             normalize_signatures(sign_v[valid], cfg.amplitude_feature), dtype=np.float64
         ),
@@ -532,5 +667,16 @@ def track(
         confident,
         start_count,
     )
+    ident = _track(*args, np.zeros((2, len(fund))), float(dt), False, 0.0)
+    if cfg.motion_window is not None:  # second pass along the slopes of the first
+        w = max(1, int(np.round(cfg.motion_window / dt)))
+        m = float(cfg.motion_max_slope)
+        slope = np.stack(
+            [
+                _local_slopes(fund, idx, ident, float(dt), w, m, True, False),
+                _local_slopes(fund, idx, ident, float(dt), w, m, False, True),
+            ]
+        )
+        ident = _track(*args, slope, float(dt), True, float(cfg.motion_window))
     ident_v[valid] = np.where(ident >= 0, ident, np.nan)
     return ident_v

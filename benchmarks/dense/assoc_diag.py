@@ -95,9 +95,9 @@ def majority(ident, fish):
 def baselines(F, times, win_s=60.0):
     """10th percentile of each fish's frequency over +-win_s/2 (rolling)."""
     dt = times[1] - times[0]
-    h = max(1, int(round(win_s / 2 / dt)))
+    h = max(1, round(win_s / 2 / dt))
     out = np.full(F.shape, np.nan)
-    step = max(1, int(round(2.0 / dt)))
+    step = max(1, round(2.0 / dt))
     for k in range(len(F)):
         f = F[k]
         cs = np.arange(0, F.shape[1], step)
@@ -115,12 +115,25 @@ def baselines(F, times, win_s=60.0):
     return out
 
 
+def _rising(Ff, base, k, j, slope_n, dt):
+    """Fish k at frame j changes faster than RISE_SLOPE or is more than
+    RISE_DF above its baseline."""
+    a, b = max(0, j - slope_n), min(Ff.shape[1] - 1, j + slope_n)
+    fast = (
+        np.isfinite(Ff[k, a])
+        and np.isfinite(Ff[k, b])
+        and abs(Ff[k, b] - Ff[k, a]) / ((b - a) * dt) > RISE_SLOPE
+    )
+    high = np.isfinite(Ff[k, j] - base[k, j]) and Ff[k, j] - base[k, j] > RISE_DF
+    return bool(fast or high)
+
+
 def switches(raw, fish, res, Ff, base):
     """All switches of the raw fragments, with their situation."""
     times = res.times
     dt = times[1] - times[0]
-    cross_n = int(round(CROSS_S / dt))
-    slope_n = max(1, int(round(1.0 / dt)))
+    cross_n = round(CROSS_S / dt)
+    slope_n = max(1, round(1.0 / dt))
     nfr = Ff.shape[1]
     rows = []
     has = np.isfinite(raw) & (fish >= 0)
@@ -137,18 +150,14 @@ def switches(raw, fish, res, Ff, base):
             diff = Ff[A, lo:hi] - Ff[B, lo:hi]
             diff = diff[np.isfinite(diff)]
             crossing = len(diff) > 1 and (diff.min() < 0 < diff.max())
-            sep = abs(Ff[A, j1] - Ff[B, j1]) if np.isfinite(Ff[A, j1] - Ff[B, j1]) else abs(
-                res.fund_v[d0] - res.fund_v[d1]
+            sep = (
+                abs(Ff[A, j1] - Ff[B, j1])
+                if np.isfinite(Ff[A, j1] - Ff[B, j1])
+                else abs(res.fund_v[d0] - res.fund_v[d1])
             )
-            rising = False
-            for k, j in ((A, j0), (B, j1)):
-                a, b = max(0, j - slope_n), min(nfr - 1, j + slope_n)
-                if np.isfinite(Ff[k, a]) and np.isfinite(Ff[k, b]):
-                    if abs(Ff[k, b] - Ff[k, a]) / ((b - a) * dt) > RISE_SLOPE:
-                        rising = True
-                if np.isfinite(Ff[k, j]) and np.isfinite(base[k, j]):
-                    if Ff[k, j] - base[k, j] > RISE_DF:
-                        rising = True
+            rising = _rising(Ff, base, A, j0, slope_n, dt) or _rising(
+                Ff, base, B, j1, slope_n, dt
+            )
             gap = (j1 - j0) * dt
             if crossing:
                 sit = "crossing"
@@ -197,8 +206,8 @@ def breaks(raw, final, fish, res, Ff, base, nn, max_dt):
     and whether the final identities join it."""
     times = res.times
     dt = times[1] - times[0]
-    cross_n = int(round(CROSS_S / dt))
-    slope_n = max(1, int(round(1.0 / dt)))
+    cross_n = round(CROSS_S / dt)
+    slope_n = max(1, round(1.0 / dt))
     nfr = Ff.shape[1]
     rows = []
     has = np.isfinite(raw) & (fish >= 0)
@@ -220,15 +229,9 @@ def breaks(raw, final, fish, res, Ff, base, nn, max_dt):
                 if len(d) > 1 and d.min() < 0 < d.max():
                     crossing = True
                     break
-            rising = False
-            for j in (j0, j1):
-                a, b = max(0, j - slope_n), min(nfr - 1, j + slope_n)
-                if np.isfinite(Ff[k, a]) and np.isfinite(Ff[k, b]):
-                    if abs(Ff[k, b] - Ff[k, a]) / ((b - a) * dt) > RISE_SLOPE:
-                        rising = True
-                if np.isfinite(Ff[k, j]) and np.isfinite(base[k, j]):
-                    if Ff[k, j] - base[k, j] > RISE_DF:
-                        rising = True
+            rising = _rising(Ff, base, k, j0, slope_n, dt) or _rising(
+                Ff, base, k, j1, slope_n, dt
+            )
             near = np.nanmin(nn[k, j0 : j1 + 1]) if j1 >= j0 else np.inf
             if gap >= max_dt:
                 sit = "dropout >=10 s"
@@ -266,7 +269,10 @@ def breaks(raw, final, fish, res, Ff, base, nn, max_dt):
                     "joined": bool(final[d0] == final[d1]),
                     "jump": float(res.fund_v[d1] - res.fund_v[d0]),
                     "slope": float(
-                        (Ff[k, min(nfr - 1, j1 + slope_n)] - Ff[k, max(0, j1 - slope_n)])
+                        (
+                            Ff[k, min(nfr - 1, j1 + slope_n)]
+                            - Ff[k, max(0, j1 - slope_n)]
+                        )
                         / (2 * slope_n * dt)
                     ),
                     "above": float(Ff[k, j1] - base[k, j1]),
@@ -295,10 +301,14 @@ def force_join(final, rows, keep, fish):
         return i
 
     for r in rows:
-        if r["situation"] in keep and not r["joined"]:
-            if np.isfinite(r["fa"]) and np.isfinite(r["fb"]):
-                if maj[r["fa"]] == r["fish"] == maj[r["fb"]]:
-                    parent[find(r["fa"])] = find(r["fb"])
+        if (
+            r["situation"] in keep
+            and not r["joined"]
+            and np.isfinite(r["fa"])
+            and np.isfinite(r["fb"])
+            and maj[r["fa"]] == r["fish"] == maj[r["fb"]]
+        ):
+            parent[find(r["fa"])] = find(r["fb"])
     out = final.copy()
     ok = np.isfinite(final)
     out[ok] = [find(i) for i in final[ok]]
@@ -380,16 +390,20 @@ def analyse(name, src_tag, cfg, with_linker=True):
         )
     for s in SITUATIONS:
         c = cut(raw, res, rows, {s})
-        out["cost_majority"][s] = idf1(majority(c, fish), fish, cls, n_known) - out[
-            "idf1_raw_majority"
-        ]
+        out["cost_majority"][s] = (
+            idf1(majority(c, fish), fish, cls, n_known) - out["idf1_raw_majority"]
+        )
         if with_linker:
-            out["cost_linker"][s] = idf1(lnk(c), fish, cls, n_known) - out["idf1_linked"]
+            out["cost_linker"][s] = (
+                idf1(lnk(c), fish, cls, n_known) - out["idf1_linked"]
+            )
     if with_linker:
         from score import nearest_line
 
         final = lnk(raw)
-        brows = breaks(raw, final, fish, res, Ff, base, nearest_line(Ff), cfg.tracking.max_dt)
+        brows = breaks(
+            raw, final, fish, res, Ff, base, nearest_line(Ff), cfg.tracking.max_dt
+        )
         out["breaks"] = brows
         out["cost_break"] = {
             s: idf1(force_join(final, brows, {s}, fish), fish, cls, n_known)
@@ -457,11 +471,12 @@ def summarize(results, label):
                 f"{np.mean([x['new_existed'] for x in xs]):11.2f} "
                 f"{np.mean([r['cost_break'][s] for r in results]):14.4f}"
             )
-    contam = {
-        k: sum(r["contam"][k] for r in results) for k in results[0]["contam"]
-    }
+    contam = {k: sum(r["contam"][k] for r in results) for k in results[0]["contam"]}
     tot_a = sum(contam.values())
-    print("  assigned detections: " + ", ".join(f"{k} {v / tot_a:.3f}" for k, v in contam.items()))
+    print(
+        "  assigned detections: "
+        + ", ".join(f"{k} {v / tot_a:.3f}" for k, v in contam.items())
+    )
     # by scenario group
     groups = {}
     for r in results:
@@ -482,8 +497,16 @@ def plot(stems, labels, path):
     colors = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100")
     data = [json.loads((FIG / "assoc" / f"{s}.json").read_text()) for s in stems]
     panels = [
-        ("switches inside fragments\n(cut there, then perfect joining)", SITUATIONS, "cost_majority"),
-        ("breaks left open by the linker\n(oracle join of those breaks)", BREAKS, "cost_break"),
+        (
+            "switches inside fragments\n(cut there, then perfect joining)",
+            SITUATIONS,
+            "cost_majority",
+        ),
+        (
+            "breaks left open by the linker\n(oracle join of those breaks)",
+            BREAKS,
+            "cost_break",
+        ),
     ]
     fig, axs = plt.subplots(1, 2, figsize=(13, 5.2), layout="constrained")
     for ax, (title, cats, key) in zip(axs, panels, strict=True):
@@ -495,7 +518,14 @@ def plot(stems, labels, path):
             ax.barh(yy, v, h * 0.85, color=colors[i], label=lab)
             for yv, vv in zip(yy, v, strict=True):
                 if vv >= 0.002:
-                    ax.text(vv + 0.0003, yv, f"{vv:.3f}", va="center", fontsize=7, color="#52514e")
+                    ax.text(
+                        vv + 0.0003,
+                        yv,
+                        f"{vv:.3f}",
+                        va="center",
+                        fontsize=7,
+                        color="#52514e",
+                    )
         ax.set_yticks(y, cats, fontsize=9)
         ax.set_xlabel("IDF1 lost (mean of 17 mixtures)", fontsize=9, color="#52514e")
         ax.set_title(title, loc="left", fontsize=10)
@@ -506,7 +536,9 @@ def plot(stems, labels, path):
     axs[0].legend(frameon=False, fontsize=8, loc="lower right")
     fig.suptitle(
         "where association loses IDF1 on ldev (raw tracker fragments vs truth)",
-        x=0.01, ha="left", fontsize=11,
+        x=0.01,
+        ha="left",
+        fontsize=11,
     )
     fig.savefig(path, dpi=140)
     print(path)
@@ -529,7 +561,9 @@ def main(argv=None):
     args = p.parse_args(argv)
     from run import overrides
 
-    variant = merge(yaml.safe_load(Path(args.config).read_text()) or {}, overrides(args.set))
+    variant = merge(
+        yaml.safe_load(Path(args.config).read_text()) or {}, overrides(args.set)
+    )
     results = []
     for name in mixtures(args.split, args.only):
         band = yaml.safe_load((MIXTURES / name / "band.yaml").read_text())
