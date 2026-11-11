@@ -142,6 +142,41 @@ a weak detection that fits an identity better than a confident one takes the
 link. With `start_salience: null` the tracker is the same as before, also in
 compatibility mode.
 
+A related filter acts at the end: with `tracking.min_identity_salience`,
+identities whose mean detection salience is below it are dropped after
+linking (or stitching). Lines of harmonics and clutter that no confident
+detection supports go; weak detections inside a confident identity stay. On
+the dense benchmark, identities of the learned detector with a mean salience
+below 0.75 are 79 % harmonic or false detections. Dropping them before
+linking would also drop weak fragments of real fish that the linker joins to
+their identities.
+
+## Following the frequency slope (motion model)
+
+The tracker scores links between pairs of detections, not between tracks and
+detections: the link error is 2/3 the rank of the electrode-pattern distance
+among all pairs and 1/3 a sigmoid of the frequency difference. Where two
+fish cross, their patterns can be alike and their frequencies are equal for a
+while, and the tracker may swap them. Object trackers for look-alike objects
+(DanceTrack, OC-SORT) found that motion is then the better cue.
+
+With `tracking.motion_window` (off by default) the tracker runs twice. The
+first pass tracks as before; every detection then gets the slope of its
+identity over `motion_window` seconds *before* it and over as many *after*
+it. In the second pass, a link from an earlier detection a to a later
+detection b compares b with the frequency predicted from a along a's past
+slope, and a with the frequency predicted back from b along b's future
+slope; the mean of the two errors replaces the frequency difference in the
+link error and in the tolerances. One-sided slopes keep the two fish of a
+crossing apart even where the first pass swapped them: before the crossing
+each detection's past belongs to its own fish, after it each detection's
+future does (OC-SORT keeps the motion estimate from before an occlusion for
+the same reason). Two guards keep noisy slopes from doing harm: each slope is
+shrunk towards 0 by its own uncertainty, `s * s^2 / (s^2 + var(s))`, so the
+scatter of a flat, faint track is not taken for a slope, and a prediction
+reaches at most `motion_window` ahead. Slopes are clipped to
+`motion_max_slope` (2 Hz/s); rise onsets are jumps, not slopes.
+
 ## Stitching
 
 The rule-based stitching joins fragments when the learned linker is off

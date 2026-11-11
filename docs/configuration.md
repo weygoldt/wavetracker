@@ -30,6 +30,8 @@ The most relevant parameters:
 | `tracking.amplitude_feature` | `minmax` | electrode pattern in the link error; `db` (level ratios) for few electrodes |
 | `tracking.min_support` | 0 | only track detections with ≥ n neighbours within `support_window` s and `support_freq` Hz |
 | `tracking.start_salience` / `start_evidence` | none / 0.5 | new identities need detections of at least this salience (0–1) in `start_evidence` s of frames; weaker ones only extend identities (see [Starting identities from confident detections](algorithms.md#starting-identities-from-confident-detections)) |
+| `tracking.motion_window` / `motion_max_slope` | none / 2 | second pass that predicts links along each fish's frequency slope, measured over this many s before and after a detection, clipped to ± `motion_max_slope` Hz/s (see [Following the frequency slope](algorithms.md#following-the-frequency-slope-motion-model)) |
+| `tracking.min_identity_salience` | none | after linking, drop identities whose mean salience (0–1) is below this |
 | `stitching.enabled` | true | rule-based joining of fragments across rises, dropouts and double detections; only used with `linking.enabled: false` |
 | `stitching.max_dropout` | 900 | longest gap bridged when nothing else is at that frequency [s] |
 | `linking.enabled` | true | join fragments with the learned linker instead of the stitching (see [Learned linking](algorithms.md#learned-linking)) |

@@ -103,3 +103,76 @@ item is the threshold 0.9 of the packaged linker (0.033).
 
 Near-duplicates (two detections of one fish in a frame) are not a cause:
 pairs closer than 1.25 Hz in a frame are 0.07 % of the detections.
+
+The rest of the rise breaks interleave: the fish's frequency wobbles by about
+1.5 Hz within one 1.64 s analysis window, the spectrogram shows both
+frequencies at once, and the detector reports two lines for one fish (e.g.
+`ldev/atten-dyad-30-s0`, fish 23, 125-130 s and 152-156 s); the tracker
+builds two parallel fragments, and the linker may not join them because they
+share frames.
+
+## Experiments (retracking the same detections)
+
+Run tags `B-assoc-<name>` (learned) and `B-assoc-<name>-oracle`. Retracking
+is deterministic and the baseline reproduces bit for bit, but the tracker is
+chaotic: a small change flips crossings and moves single mixtures by up to
+0.04 IDF1, so differences of the 17-mixture means below about 0.005 are not
+reliable. A change counts if it holds in lab and field noise.
+
+| change | learned IDF1 | oracle IDF1 |
+|---|---|---|
+| baseline (`base`) | 0.739 / 0.723 | 0.775 / 0.740 |
+| `linking.max_shared` 0.15 | 0.741 / 0.725 | 0.779 / 0.742 |
+| `linking.max_shared` 0.3 | 0.741 / 0.726 | 0.781 / 0.746 |
+| `linking.max_shared` 0.6 | 0.741 / 0.726 | |
+| `max_shared` 0.3 + `max_parallel` 0.6 | 0.742 / 0.728 | |
+| `max_shared` 0.3 + `min_detections` 5 | 0.741 / 0.726 | |
+| `max_shared` 0.3 + `threshold` 0.6 / 0.8 | 0.742 / 0.726, 0.740 / 0.724 | |
+| `max_shared` 0.3 + rise candidates (`rise_df` 30, `rise_gap` 5) | 0.736 / 0.723 | |
+| wider tolerance for isolated detections (1.0 Hz) | 0.739 / 0.721 | 0.777 / 0.744 |
+| the same, 1.5 Hz | 0.739 / 0.719 | 0.778 / 0.744 |
+| identity salience >= 0.75 after linking (offline) | 0.743 / 0.728 | |
+| motion, symmetric slopes +-2 s (first version) | 0.743 / 0.720 | **0.795 / 0.754** |
+| motion, symmetric slopes +-5 s | 0.740 / 0.719 | 0.790 / 0.750 |
+| motion, one-sided slopes, 1 s | 0.744 / 0.718 | 0.791 / 0.750 |
+| motion, one-sided slopes, 2 s | 0.742 / 0.720 | 0.790 / 0.746 |
+| motion, one-sided, shrunk slopes, horizon (`motion_window` 1) | 0.743 / 0.723 | 0.786 / 0.749 |
+| the same, `motion_window` 3 | 0.744 / 0.722 | 0.788 / 0.749 |
+
+* Isolated tolerance (`$WT_BENCHMARK_DATA/assoc/isolated-tolerance.patch`,
+  not kept): a detection with no other line within +-3 Hz for +-1 s may link
+  across up to 1-1.5 Hz instead of 0.5 Hz. Rise breaks fall from 73 to 56
+  per mixture, but only those the linker already joined; the IDF1 does not
+  move.
+* Rise candidates: the linker was never trained on such pairs, and the
+  candidates change the competition features of all pairs.
+* Identity salience: identities whose mean salience is below 0.75 are 79 %
+  harmonic or false detections. Dropping them before linking loses weak
+  fragments of real fish (-0.002); after linking it gains +0.004.
+
+**Motion model** (`tracking.motion_window`). The tracker compares detection
+pairs: its link error is 2/3 the *rank* of the electrode-pattern distance
+among all pairs plus 1/3 a sigmoid of the frequency difference (0.35 Hz
+midpoint). A first pass tracks as before; every detection then gets the slope
+of its identity, and the second pass predicts along it. Lessons:
+
+* Slopes over a window around the detection (first version) mix both fish at
+  a crossing, where the first pass may have swapped them. Slopes from the
+  detection's own side (the past of the earlier detection of a link, the
+  future of the later) are not mixed (OC-SORT's lesson: keep the motion
+  estimate from before the occlusion).
+* One-sided slopes over 1-2 s are noisy for faint fish in field noise
+  (0.3 Hz/s error for 0.2 Hz frequency scatter, 1.5 Hz after 5 s): field IDF1
+  fell by 0.003-0.005. Shrinking each slope by its own variance
+  (s * s^2 / (s^2 + var s)) and predicting at most `motion_window` ahead fixed
+  that.
+* A synthetic crossing (two fish, same pattern, 0.1 Hz/s apart, among eight
+  others) is swapped in 6 of 8 draws without motion and kept apart in 7 of 8
+  with it (`tests/test_tracking.py`). With only the two fish the pattern
+  ranks span 0-1 and drown the frequency term; in real mixtures most pairs
+  are between different fish, so the ranks of same-pattern pairs stay small.
+* With the linker trained on the old fragments, motion raises purity (learned
+  field 0.981 -> 0.984) and the raw tracker's IDF1, but the linker joins fewer
+  of the new fragments (on `ldev-field/density-20,30`: joined 37 % -> 31 %
+  of the breaks, more interleaved fragments at rises). Hence the retrained
+  linker below.

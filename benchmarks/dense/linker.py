@@ -144,7 +144,9 @@ def build_one(
 
 
 def build(args):
-    cfg = LinkingConfig()
+    cfg = LinkingConfig(
+        **{k: float(v) for k, v in (kv.split("=") for kv in args.set or [])}
+    )
     for split in args.splits:
         for name in mixtures(split, args.only):
             out = WORK / args.base / name / "pairs.npz"
@@ -618,6 +620,9 @@ def main(argv=None):
     )
     a.add_argument("--only", nargs="*")
     a.add_argument("--overwrite", action="store_true")
+    a.add_argument(
+        "--set", nargs="*", help="LinkingConfig overrides for the candidates, key=value"
+    )
     a.set_defaults(func=build)
     b = sub.add_parser("train")
     b.add_argument("--base", default="dense")
