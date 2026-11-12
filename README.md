@@ -46,10 +46,11 @@ A recording may start long before there is a fish in it, with the electrodes
 still out of the water or in empty water, for seconds or for hours: results for
 a fish [do not depend on what came before](docs/algorithms.md#recordings-without-fish).
 
-The classic pipeline runs at several hundred times realtime on an
-11-channel, 20 kHz recording (a 4 h recording takes about a minute on an RTX
-4080, mostly disk IO); the default pipeline is slower (a network over every
-frame) and benefits most from a GPU.
+On an RTX 4080 the default pipeline processes a 4 h, 11-channel, 20 kHz
+recording in 4.5 min (53x realtime, 4 GB of GPU memory) and a 5-min,
+16-channel, 48 kHz field file in 9 s (35x); the classic pipeline takes 1.7 min
+for the 4 h (139x, mostly disk IO). Without a GPU the default pipeline runs at
+about realtime.
 
 ## Installation
 

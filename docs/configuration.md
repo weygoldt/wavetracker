@@ -35,7 +35,9 @@ classic one. A model path may be a file name of a shipped model
 `linker.npz`).
 
 The default pipeline is slower than the classic one (a network over every
-frame) and benefits from a GPU (`run --device`). Models trained for other
+frame) and needs a GPU for long recordings (`run --device`): on an RTX 4080
+53x realtime for 4 h of 11 electrodes at 20 kHz (classic 139x), about
+realtime on a CPU. Models trained for other
 recordings (another species, more electrodes) can be given with
 `detector.model`, `tracking.assoc_model`, `linking.model` and
 `review.model`; the review model is only calibrated for the pipeline it was

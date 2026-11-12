@@ -137,6 +137,20 @@ perfect pair detector lowers IDF1 because the tracker swaps the two
 detections of a split peak (see `docs/benchmarks.md`, "Two fish in one
 peak"). The pair head and the electrode branch are built and off by default.
 
+## Speed (2026-11-12, measured on an RTX 4080)
+
+Default pipeline 53-95x realtime on 11 electrodes / 20 kHz, 35x on 16 / 48
+kHz (classic 139-173x / 57x); `$WT_BENCHMARK_DATA/timing/`,
+`figures/gpu_timing.png`. Two things to fix:
+- `tracking.assoc_device` is `cpu` by default: the association network
+  takes 60 s of a 4-h recording on the CPU and 10 s on the GPU, with
+  identical identities (1 h and 4 h, 0 detections differ). Make it follow
+  the run's device.
+- Linking, the rise joiner and review grow faster than the recording: from
+  1 h to 4 h (14 -> 67 identities) 1.5 -> 17-25 s, 0.2 -> 23-47 s and
+  1.9 -> 38 s (busy machine, CPU numbers vary 2x). For day-long recordings
+  they would dominate; profile the candidate loops.
+
 ## Smaller items
 
 - Truth SNR of a fish in a close pair includes the partner's power
