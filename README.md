@@ -187,12 +187,12 @@ history; tracks that are harmonics of another fish are flagged. Saving keeps
 the original identities as `ident_v.tracked.npy` and the directory stays
 readable by `Results.load`.
 
-To know where to look, set `review.enabled: true`: wavetracker then rates
-every identity and every join with the probability that it is right and
-writes the places most likely wrong, each with a suggested fix, to
-`review.json` (see [review flags](docs/review-flags.md)). On dense benchmark
-mixtures, fixing them in that order recovers half of what such fixes can
-gain after about 4 places per 10 minutes of recording.
+To know where to look: the default pipeline rates every identity and every
+join with the probability that it is right and writes the places most likely
+wrong, each with a suggested fix, to `review.json` (see [review
+flags](docs/review-flags.md)). On dense benchmark mixtures, fixing them in
+that order recovers half of what such fixes can gain after about 4 places per
+10 minutes of recording.
 
 New to it? The [quickstart](https://github.com/weygoldt/audian/blob/master/docs/wavetracker-quickstart.md)
 walks through tracking and correcting a demo recording in about 15 minutes.
