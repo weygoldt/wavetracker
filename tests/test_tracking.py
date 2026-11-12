@@ -12,7 +12,9 @@ from .legacy_tracking import freq_tracking_v6
 @pytest.fixture(scope="module")
 def detections(synthetic_wav, tmp_path_factory):
     path, _ = synthetic_wav
-    return detect(path, tmp_path_factory.mktemp("det"), Config.classic(), device="cpu").results
+    return detect(
+        path, tmp_path_factory.mktemp("det"), Config.classic(), device="cpu"
+    ).results
 
 
 def _same(a, b):
