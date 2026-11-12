@@ -87,7 +87,10 @@ def variants() -> dict[str, dict]:
     rises = _merge(rises, BOAT_SETTINGS)
     v1 = json.loads(json.dumps(rises))
     v1["detector"] = {"method": "learned", "threshold": 0.6}
-    return {"C-bf-rises": rises, "C-bf-v1": v1}
+    # learned-rises with the detector fine-tuned with the noise shelf
+    shelf = json.loads(json.dumps(rises))
+    shelf["detector"]["model"] = str(DATA / "salience/C-bf-shelf-s0/last.pt")
+    return {"C-bf-rises": rises, "C-bf-v1": v1, "C-bf-shelf": shelf}
 
 
 def config(tag: str, overrides: dict | None = None):
@@ -231,12 +234,12 @@ def run_stages(res, cfg, out: Path):
 def cmd_run(args):
     from wavetracker.pipeline import detect
 
-    for i, tag in enumerate(args.tags):
+    for tag in args.tags:
         out = OUT / tag
         out.mkdir(parents=True, exist_ok=True)
         cfg = config(tag)
         if not (out / "fund_v.npy").exists() or args.force:
-            cap = Capture(keep_features=(i == 0))
+            cap = Capture(keep_features=(tag == "C-bf-rises"))
             cap.install()
             res = detect(BOAT, out, cfg, device=args.device).results
             cap.save(out, float(res.meta["freq_resolution"]))
@@ -378,6 +381,12 @@ def main():
     p.add_argument("models", nargs="+")
     p.add_argument("--device", default="cpu")
     p.set_defaults(fn=cmd_fishsal)
+    p = sub.add_parser("shelfval")
+    p.add_argument("models", nargs="+")
+    p.add_argument("--crops", type=int, default=2)
+    p.add_argument("--raise-db", type=float, nargs="+", default=[20.0])
+    p.add_argument("--device", default="cuda")
+    p.set_defaults(fn=cmd_shelfval)
     p = sub.add_parser("coverage")
     p.add_argument("--crops", type=int, default=3)
     p.add_argument("--frames", type=int, default=300)
@@ -768,10 +777,19 @@ def cmd_plot(args):
         ls="--",
         label="learned-rises, synthetic 2nd + 3rd harmonic added",
     )
+    shelf = OUT / "along_C-bf-shelf-s0.npy"
+    if shelf.exists():
+        ax.plot(
+            t,
+            np.load(shelf),
+            color="#6250d6",
+            lw=0.7,
+            label="fine-tuned with noise shelf",
+        )
     ax.axhline(0.6, color="k", lw=0.8, ls=":")
     ax.set_xlim(0, t[-1])
     ax.set_ylabel("salience at the fish")
-    ax.legend(fontsize=8, loc="lower right", ncol=3)
+    ax.legend(fontsize=8, loc="lower right", ncol=4)
     ax.set_title(
         "b  network salience along the fish (max within 2 bins of the trace); threshold 0.6",
         loc="left",
@@ -799,10 +817,13 @@ def cmd_plot(args):
         fontsize=10,
     )
     ax = fig.add_subplot(gs[3, 0])
-    names = ["classic (field_check)", "C-bf-v1", "C-bf-rises"]
+    names = ["classic (field_check)", "C-bf-v1", "C-bf-rises", "C-bf-shelf"]
+    names = [n for n in names if n in stages]
+    colors = [blue, green, orange, "#6250d6"][: len(names)]
+    w = 0.8 / len(names)
     cols = ["detected", "track", "link", "rises", "drop"]
     x = np.arange(len(cols))
-    for i, (n, c) in enumerate(zip(names, [blue, green, orange], strict=True)):
+    for i, (n, c) in enumerate(zip(names, colors, strict=True)):
         s = stages[n]
         vals = [s["detected"]] + [
             s[k]["with_identity"]
@@ -810,7 +831,7 @@ def cmd_plot(args):
             else s.get("final", {}).get("with_identity", np.nan)
             for k in cols[1:]
         ]
-        ax.bar(x + (i - 1) * 0.27, vals, 0.27, color=c, label=n)
+        ax.bar(x + (i - (len(names) - 1) / 2) * w, vals, w, color=c, label=n)
     ax.set_xticks(
         x, ["detected", "tracked", "linked", "rise\njoiner", "salience\ndrop"]
     )
@@ -913,6 +934,90 @@ def cmd_fishsal(args):
         }
         print(name, res[name], flush=True)
     (OUT / "fishsal.json").write_text(json.dumps(res, indent=1))
+
+
+def cmd_shelfval(args):
+    """The boat fish's situation on held-out `ldev` mixtures: fixed crops
+    whose candidate window (156 Hz from f_lo, 200-900 Hz) lies below a noise
+    shelf (edge 20 Hz above the window, +raise dB), so every fundamental
+    keeps its level and every harmonic is under the raised floor. Recall at
+    threshold 0.6 of fish frames >= 6 dB (truth SNR) more than 15 Hz below
+    the edge, and precision, with and without the shelf."""
+    import torch
+
+    sys.path.insert(0, str(HERE / "dense"))
+    from salience_train import DF, MIX_CHANNELS, Batches, Crop
+
+    from wavetracker.salience import decode, load_model
+
+    dev = torch.device(args.device)
+    rng = np.random.default_rng(7)
+    res = {}
+    for path in args.models:
+        model, spec = load_model(path, dev)[:2]
+        ctx = model.context_frames
+        data = Batches(
+            "ldev", 300, ctx, 256, -3.0, dev, 2, harmonics=spec.harmonics, workers=0
+        )
+        if not res:  # the same crops for every model
+            crops = []
+            for m in data.mixes:
+                for _ in range(args.crops):
+                    j0 = int(rng.integers(0, m.n_frames - 300 - 2 * ctx))
+                    f_lo = float(rng.uniform(200, 900))
+                    crops.append((m.path.name, j0, f_lo))
+        name = Path(path).parent.name
+        res[name] = {}
+        by_name = {m.path.name: m for m in data.mixes}
+        for raise_db in (0.0, *args.raise_db):
+            for gain in (0.0, 1.0):
+                hit = tot = n_det = n_ok = 0
+                torch.manual_seed(0)
+                for mname, j0, f_lo in crops:
+                    mix = by_name[mname]
+                    k_lo = round(f_lo / DF)
+                    edge = (k_lo + 255) * DF + 20.0
+                    crop = Crop(mix, j0, list(range(MIX_CHANNELS)), gain, [k_lo])
+                    if raise_db:
+                        crop.shelf = (edge, raise_db, 20.0)
+                    ex = data.build(crop, data.read(crop))
+                    with torch.no_grad():
+                        out = model.outputs(ex["feats"][:1])
+                    sl = slice(ctx, ctx + 300)
+                    fr, _, fq, _ = decode(
+                        out["logits"][0, sl].float(),
+                        out["offset"][0, sl].float(),
+                        0.6,
+                        k_lo,
+                        DF,
+                    )
+                    rows = slice(j0 + ctx, j0 + ctx + 300)
+                    tf, snr = mix.freqs[:, rows], mix.snr_at(gain)[:, rows]
+                    lo, hi = k_lo * DF + 1.5, min((k_lo + 255) * DF, edge - 15) - 1.5
+                    for j in range(300):
+                        d = fq[fr == j]
+                        t = tf[:, j]
+                        vis = np.isfinite(t) & (t > lo) & (t < hi) & (snr[:, j] >= 6)
+                        tot += vis.sum()
+                        if len(d):
+                            hit += sum(np.abs(d - x).min() <= 1.2 for x in t[vis])
+                            dd = d[(d > lo) & (d < hi)]
+                            tt = t[np.isfinite(t)]
+                            n_det += len(dd)
+                            if len(tt):
+                                n_ok += (
+                                    np.abs(dd[:, None] - tt[None]).min(1) <= 1.2
+                                ).sum()
+                key = f"raise {raise_db:.0f} dB, {'field' if gain else 'lab'}"
+                res[name][key] = {
+                    "recall_visible": hit / max(tot, 1),
+                    "precision": n_ok / max(n_det, 1),
+                    "frames": int(tot),
+                }
+                print(name, key, res[name][key], flush=True)
+    out = OUT / "shelfval.json"
+    old = json.loads(out.read_text()) if out.exists() else {}
+    out.write_text(json.dumps(old | res, indent=1))
 
 
 if __name__ == "__main__":
