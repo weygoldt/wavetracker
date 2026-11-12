@@ -307,12 +307,46 @@ class TrackingConfig:
     below this are dropped after linking (or stitching): lines of harmonics
     and clutter that no confident detection supports. Weak detections inside a
     confident identity stay. None: off."""
+    method: str = "classic"
+    """"classic": the rule-based tracker (Raab et al. 2022, with the options
+    above). "learned": a trained network scores the links between detections
+    of the next few seconds and a frame-by-frame linking builds the tracks
+    (wavetracker.assocnet); of the options above only min_identity_salience
+    applies. Needs assoc_model."""
+    assoc_mode: str = "link"
+    """Learned association: "link" builds tracks from the learned links alone
+    (frame by frame, links up to the model's horizon of a few seconds); "cost"
+    keeps the rule-based tracker (windows, temporary identities, its
+    candidate tolerances, gaps up to max_dt and the options above) and
+    replaces its error for links within the model's horizon by 1 - the
+    learned probability, dropping links below assoc_threshold."""
+    assoc_model: str | None = None
+    """Weights of the learned association (method "learned"), trained with
+    benchmarks/dense/assocnet.py; not packaged."""
+    assoc_threshold: float = 0.5
+    """Learned association: minimum link probability (0-1)."""
+    assoc_min_detections: int = 1
+    """Learned association: tracks with fewer detections stay unassigned."""
+    assoc_device: str = "cpu"
+    """Learned association: torch device of the network."""
 
     def __post_init__(self):
         for key in ("start_salience", "min_identity_salience"):
             v = getattr(self, key)
             if v is not None and not 0.0 <= v <= 1.0:
                 raise ValueError(f"tracking.{key} must be between 0 and 1")
+        if self.method not in ("classic", "learned"):
+            raise ValueError(
+                f"tracking.method must be 'classic' or 'learned', not {self.method!r}"
+            )
+        if self.assoc_mode not in ("link", "cost"):
+            raise ValueError(
+                f"tracking.assoc_mode must be 'link' or 'cost', not {self.assoc_mode!r}"
+            )
+        if self.method == "learned" and not self.assoc_model:
+            raise ValueError("tracking.method 'learned' needs tracking.assoc_model")
+        if not 0.0 <= self.assoc_threshold <= 1.0:
+            raise ValueError("tracking.assoc_threshold must be between 0 and 1")
 
 
 @dataclass

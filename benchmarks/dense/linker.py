@@ -75,6 +75,8 @@ def tracked(base: str, name: str, config: str | None = None):
         cfg.tracking,
         hg.min_freq,
         hg.max_freq,
+        sal_v=res.sal_v,
+        cplx_v=res.cplx_v,
     )
     truth = dict(np.load(MIX / name / "truth.npz"))
     fish = match(res, truth_at(truth, res.times), TOL)

@@ -32,6 +32,11 @@ The most relevant parameters:
 | `tracking.start_salience` / `start_evidence` | none / 0.5 | new identities need detections of at least this salience (0–1) in `start_evidence` s of frames; weaker ones only extend identities (see [Starting identities from confident detections](algorithms.md#starting-identities-from-confident-detections)) |
 | `tracking.motion_window` / `motion_max_slope` | none / 2 | second pass that predicts links along each fish's frequency slope, measured over this many s before and after a detection, clipped to ± `motion_max_slope` Hz/s (see [Following the frequency slope](algorithms.md#following-the-frequency-slope-motion-model)) |
 | `tracking.min_identity_salience` | none | after linking, drop identities whose mean salience (0–1) is below this |
+| `tracking.method` | `classic` | `learned`: a trained network scores the links between detections of the next few seconds (see [Learned association](algorithms.md#learned-association)); needs `assoc_model` |
+| `tracking.assoc_model` | none | weights of the learned association (`benchmarks/dense/assocnet.py`; not packaged) |
+| `tracking.assoc_mode` | `link` | `link`: tracks from the learned links alone; `cost`: the rule-based tracker with 1 − the learned probability as the error of short links |
+| `tracking.assoc_threshold` / `assoc_min_detections` | 0.5 / 1 | minimum link probability; shorter tracks stay unassigned (`link` mode) |
+| `tracking.assoc_device` | `cpu` | torch device of the network |
 | `stitching.enabled` | true | rule-based joining of fragments across rises, dropouts and double detections; only used with `linking.enabled: false` |
 | `stitching.max_dropout` | 900 | longest gap bridged when nothing else is at that frequency [s] |
 | `linking.enabled` | true | join fragments with the learned linker instead of the stitching (see [Learned linking](algorithms.md#learned-linking)) |

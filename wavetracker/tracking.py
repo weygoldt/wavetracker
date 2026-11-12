@@ -108,6 +108,17 @@ def _freq_error(fund, idx, a, b, slope, frame_dt, motion, horizon):
 
 
 @njit(cache=True)
+def _learned_prob(l_start, l_dst, l_prob, a, b):
+    """Learned probability of the link a -> b (-1: not a learned edge)."""
+    lo = l_start[a]
+    hi = l_start[a + 1]
+    j = lo + np.searchsorted(l_dst[lo:hi], b)
+    if j < hi and l_dst[j] == b:
+        return l_prob[j]
+    return -1.0
+
+
+@njit(cache=True)
 def _connections(
     fund,
     idx,
@@ -124,9 +135,20 @@ def _connections(
     frame_dt,
     motion,
     horizon,
+    l_start,
+    l_dst,
+    l_prob,
+    l_frames,
+    l_threshold,
 ):
     """Candidate links (a, b, error) for origins in frames [f0, f1), sorted by
-    error; ties keep the (origin, target) order of the original error cube."""
+    error; ties keep the (origin, target) order of the original error cube.
+
+    With learned link probabilities (`l_frames` > 0: edges of a in
+    l_dst[l_start[a]:l_start[a + 1]], sorted), a candidate link up to
+    `l_frames` frames is kept if its probability is at least `l_threshold`,
+    with error 1 - probability; longer links keep the rule-based error plus
+    1, so that they come after every learned one."""
     # First pass: count, second pass: fill.
     n = 0
     for i in range(f0, f1):
@@ -134,7 +156,11 @@ def _connections(
             for b in range(frame_start[i + 1], frame_start[i + comp_range + 1]):
                 df = _freq_error(fund, idx, a, b, slope, frame_dt, motion, horizon)
                 if df < freq_tol and df < tol0 + tol_rate * (idx[b] - idx[a]):
-                    n += 1
+                    if l_frames > 0 and idx[b] - idx[a] <= l_frames:
+                        if _learned_prob(l_start, l_dst, l_prob, a, b) >= l_threshold:
+                            n += 1
+                    else:
+                        n += 1
     ca = np.empty(n, dtype=np.int64)
     cb = np.empty(n, dtype=np.int64)
     ce = np.empty(n)
@@ -145,6 +171,14 @@ def _connections(
             for b in range(frame_start[i + 1], frame_start[i + comp_range + 1]):
                 df = _freq_error(fund, idx, a, b, slope, frame_dt, motion, horizon)
                 if df < freq_tol and df < tol0 + tol_rate * (idx[b] - idx[a]):
+                    if l_frames > 0 and idx[b] - idx[a] <= l_frames:
+                        pr = _learned_prob(l_start, l_dst, l_prob, a, b)
+                        if pr >= l_threshold:
+                            ca[k] = a
+                            cb[k] = b
+                            ce[k] = 1.0 - pr
+                            k += 1
+                        continue
                     if n_dist > 0:
                         rel_a = (
                             A_WEIGHT
@@ -156,6 +190,8 @@ def _connections(
                     ca[k] = a
                     cb[k] = b
                     ce[k] = rel_a + F_WEIGHT * _boltzmann(df)
+                    if l_frames > 0:
+                        ce[k] += 1.0
                     k += 1
     order = np.argsort(ce, kind="mergesort")
     return ca[order], cb[order], ce[order]
@@ -361,6 +397,11 @@ def _track(
     frame_dt,
     motion,
     horizon,
+    l_start,
+    l_dst,
+    l_prob,
+    l_frames,
+    l_threshold,
 ):
     n_frames = idx[-1] + 4 * comp_range + 2
     frame_start = np.searchsorted(idx, np.arange(n_frames + 1))
@@ -399,6 +440,11 @@ def _track(
             frame_dt,
             motion,
             horizon,
+            l_start,
+            l_dst,
+            l_prob,
+            l_frames,
+            l_threshold,
         )
         tmp = _tmp_identities(
             idx,
@@ -439,6 +485,11 @@ def _track(
             frame_dt,
             motion,
             horizon,
+            l_start,
+            l_dst,
+            l_prob,
+            l_frames,
+            l_threshold,
         )
         next_identity = _assign(
             ident,
@@ -603,6 +654,7 @@ def track(
     *,
     v6_compat: bool = False,
     sal_v: np.ndarray | None = None,
+    cplx_v: np.ndarray | None = None,
 ) -> np.ndarray:
     """Assign identities to detections.
 
@@ -623,6 +675,10 @@ def track(
         ``cfg.start_salience``, which lets only temporary identities with
         enough confident detections start a new identity (ByteTrack-style).
         Weak detections still join identities that exist.
+    cplx_v
+        Complex spectra of every detection (n, channels); the learned
+        association (``cfg.method == "learned"``) takes the relative signs of
+        the electrodes from them (without: all in phase).
 
     Returns
     -------
@@ -637,6 +693,8 @@ def track(
         return ident_v
     if np.any(np.diff(idx_v) < 0):
         raise ValueError("idx_v must be sorted")
+    if cfg.method == "learned" and cfg.assoc_mode == "link":
+        return _track_learned(fund_v, idx_v, sign_v, cplx_v, sal_v, times, cfg, valid)
     if cfg.min_support > 0:  # isolated detections are not tracked
         valid &= (
             support(fund_v, idx_v, times, cfg.support_window, cfg.support_freq)
@@ -670,7 +728,16 @@ def track(
         confident,
         start_count,
     )
-    ident = _track(*args, np.zeros((2, len(fund))), float(dt), False, 0.0)
+    if cfg.method == "learned":  # assoc_mode "cost": learned errors of short links
+        learned = _learned_links(
+            fund, idx, sign_v[valid], cplx_v, sal_v, valid, times, cfg
+        )
+    else:
+        learned = (np.zeros(1, np.int64), np.zeros(0, np.int64), np.zeros(0), 0, 0.0)
+    args = (*args, *learned)
+    ident = _track(
+        *args[:10], np.zeros((2, len(fund))), float(dt), False, 0.0, *args[10:]
+    )
     if cfg.motion_window is not None:  # second pass along the slopes of the first
         w = max(1, int(np.round(cfg.motion_window / dt)))
         m = float(cfg.motion_max_slope)
@@ -680,6 +747,61 @@ def track(
                 _local_slopes(fund, idx, ident, float(dt), w, m, False, True),
             ]
         )
-        ident = _track(*args, slope, float(dt), True, float(cfg.motion_window))
+        ident = _track(
+            *args[:10], slope, float(dt), True, float(cfg.motion_window), *args[10:]
+        )
     ident_v[valid] = np.where(ident >= 0, ident, np.nan)
     return ident_v
+
+
+def _track_learned(fund_v, idx_v, sign_v, cplx_v, sal_v, times, cfg, valid):
+    """`track` with the learned association (wavetracker.assocnet)."""
+    from . import assocnet
+
+    model = assocnet.load_model(cfg.assoc_model, cfg.assoc_device)
+    sel = np.flatnonzero(valid)
+    ident = assocnet.track_learned(
+        fund_v[sel],
+        idx_v[sel],
+        sign_v[sel],
+        None if cplx_v is None else cplx_v[sel],
+        None if sal_v is None else sal_v[sel],
+        times,
+        model,
+        threshold=cfg.assoc_threshold,
+        min_detections=cfg.assoc_min_detections,
+        device=cfg.assoc_device,
+    )
+    ident_v = np.full(len(fund_v), np.nan)
+    ident_v[sel] = ident
+    return ident_v
+
+
+def _learned_links(fund, idx, sign, cplx_v, sal_v, valid, times, cfg):
+    """Learned link probabilities of the (valid) detections, as the arrays
+    `_connections` takes: (edge start per detection, targets, probabilities,
+    frames, threshold)."""
+    from . import assocnet
+
+    model = assocnet.load_model(cfg.assoc_model, cfg.assoc_device)
+    frame_dt = float(times[1] - times[0])
+    k = max(1, round(model.max_dt / frame_dt))
+    src, dst = assocnet.candidate_edges(idx, fund, k, model.max_df)
+    d = assocnet.detection_inputs(
+        fund,
+        idx,
+        times,
+        sign,
+        None if cplx_v is None else cplx_v[valid],
+        None if sal_v is None else sal_v[valid],
+        cfg.assoc_device,
+    )
+    prob = assocnet.edge_probabilities(model, d, idx, src, dst, frame_dt)
+    start = np.searchsorted(src, np.arange(len(fund) + 1)).astype(np.int64)
+    return (
+        start,
+        np.ascontiguousarray(dst, dtype=np.int64),
+        prob.astype(np.float64),
+        int(k),
+        float(cfg.assoc_threshold),
+    )

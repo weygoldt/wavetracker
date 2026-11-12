@@ -899,13 +899,164 @@ unit in the linker.
 | v1 + step-A linker (`learned-relinked.yaml`) | 0.734 / 0.720 |
 | v1 + step-B association (`learned-assoc.yaml`) | 0.742 / 0.730 |
 | step-B detector + association (`learned-b.yaml`) | 0.748 / 0.738 |
-| + rise joiner (`learned-rises.yaml`) | **0.766 / 0.759** |
+| + rise joiner (`learned-rises.yaml`) | 0.766 / 0.759 |
+| learned association instead of the tracker (`learned-assocnet.yaml`) | **0.776 / 0.769** |
 
 `learned-rises` against classic: +0.146 [+0.132, +0.160] (better in 100 of
 102 variants); against `learned-b`: +0.019 [+0.015, +0.025] (92 better, 1
 worse); against v1 with the step-B association: +0.027 [+0.022, +0.032].
 Close pairs (two fish in one peak) are limited by association, not by
-detection (see "Two fish in one peak").
+detection (see "Two fish in one peak"). The learned association
+(`learned-assocnet.yaml`, see below) adds +0.0099 [+0.0042, +0.0162] to
+`learned-rises` (72 better, 30 worse; a second network seed +0.0038
+[-0.0008, +0.0086], the mean of both +0.0068 [+0.0022, +0.0120]) with 41 %
+fewer identity switches.
+
+### Learned association (step C)
+
+The rule-based tracker swaps fish where their link errors tie: at crossings
+and in close pairs, and always for the two detections of one split peak
+(same spectra; see "Two fish in one peak"). `tracking.method: learned`
+([algorithms](algorithms.md#learned-association)) replaces it with a
+trained association: a message-passing network scores every candidate link
+between detections of the next 2 s (within 2.5 Hz) from salience, frame
+context, time and frequency steps, level change and the two electrode
+patterns compared electrode by electrode (any electrode count), and tracks
+are built frame by frame from the most probable links (`assoc_mode: link`).
+The fragment linker, rise joiner and identity salience filter follow
+unchanged, but the linker is retrained on the new tracker's fragments.
+
+**Design.** A graph network over a sparse candidate graph (Brasó &
+Leal-Taixé 2020; the windowed linking of Trackastra, Gallusser & Weigert
+2024) rather than a transformer over all detections of a window: links
+between fish more than a few Hz apart are never candidates, so attention
+over them would be wasted, and a local graph scores hours in chunks exactly
+(the receptive field is three rounds of 2 s). Electrode patterns enter only
+as pairwise comparisons pooled over electrodes, so nothing depends on the
+electrode layout. 156,000 weights; 4000 steps of four 66-s crops on one GPU
+take 6-9 min. The network runs at about 1.5 min per recording hour on CPU.
+
+**Training data**: the `learned-b` detections of `ltrain` and
+`ltrain-field` (run `B-rise-lt`; 52 mixtures, 3.65 M detections, 45 M
+candidate links, 89 % of them "same fish"), labelled by matching detections
+to the truth (`score.match`). Half of the crops of the pair model also hold
+the hidden fish of close pairs, made as `pair_oracle.py` makes them.
+
+**Results** (51 mixtures, lab and field; paired bootstrap over mixtures,
+`compare.py`). The control is the rule-based tracker with a linker retrained
+in the same way on its own `ltrain` fragments; "threshold" is the link
+probability the tracks are built down to (`assoc_threshold`):
+
+| | IDF1 lab / field | switches / fish / min | vs `learned-rises` | vs control |
+|---|---|---|---|---|
+| `learned-rises` | 0.766 / 0.759 | 0.26 | | |
+| control: linker retrained on its fragments | 0.767 / 0.760 | 0.25 | +0.0007 [-0.0014, +0.0030] | |
+| learned association (threshold 0.5), old linker | 0.767 / 0.755 | 0.25 | -0.0011 [-0.0071, +0.0043] | |
+| the same with its own linker | 0.771 / 0.766 | 0.25 | +0.0056 [+0.0014, +0.0100] | +0.0049 [+0.0005, +0.0093] |
+| threshold 0.7 | 0.775 / 0.769 | 0.42 | | +0.0091 [+0.0039, +0.0150] |
+| threshold 0.7, tracks < 10 detections unassigned (`learned-assocnet.yaml`) | **0.776 / 0.769** | **0.15** | **+0.0099 [+0.0042, +0.0162]** | **+0.0092 [+0.0036, +0.0154]** |
+
+`learned-assocnet.yaml` is better than `learned-rises` in 72 of 102
+variants (30 worse), by +0.0099 in lab ([+0.0043, +0.0162]) and in field
+noise ([+0.0032, +0.0174]; within scenarios [+0.0057, +0.0144] overall),
+with purity +0.006 [+0.002, +0.010], 41 % fewer identity switches (0.26 ->
+0.15 per fish and minute, 93 variants better, 4 worse) and 0.04 more false
+identities >= 30 s per mixture. Against the control: crowded +0.043
+[+0.021, +0.066] (11 of 12 better), density +0.007, lowfreq +0.006 [+0.001,
++0.014], atten +0.003; `ldev` +0.005 (15 of 17 better), `ldev2` +0.011.
+Retraining the linker alone (the control) changes nothing; the gain is the
+association's.
+
+The threshold and the minimum track length were chosen with this network
+(seed 0). A second network (seed 1, `C-an-v0s1`, its own linker, the same
+settings) gains less: +0.0038 [-0.0008, +0.0086] against `learned-rises`
+(70 better, 32 worse; lab +0.005, field +0.002), +0.0031 [-0.0025,
++0.0085] against the control, -0.0061 [-0.0107, -0.0019] against seed 0
+(crowded -0.028). The mean of the two seeds is +0.0068 [+0.0022, +0.0120]
+against `learned-rises` (within scenarios [+0.0031, +0.0109]) and +0.0061
+[+0.0011, +0.0116] against the control. The fewer switches hold for both
+seeds (0.26 -> 0.15, 93 better, 4 worse), as does the purity (+0.004
+[+0.001, +0.008]). A linker retrained on the fragments of threshold 0.7
+instead of 0.5 changes nothing (-0.0004 [-0.0037, +0.0025]). A threshold of 0.3 was worse (-0.009 against 0.5 on 40
+variants); 0.7 gains mostly in `crowded` and leaves many short tracks
+between a fish's long ones (their switches with identities of < 10
+detections went from 98 to 336 on three mixtures, while switches between
+long identities fell from 304 to 267), which the minimum of 10 detections
+removes at no cost in IDF1 (+0.0003).
+
+Frames of a fish (>= 6 dB) on its own identity, lab / field, `learned-rises`
+-> `learned-assocnet.yaml` (strata.py): with another fundamental within 1.2 Hz
+0.375 / 0.365 -> 0.395 / 0.395; nearest other line 1.2-3 Hz 0.797 / 0.806 ->
+0.814 / 0.835; 3-10 Hz 0.909 / 0.934 -> 0.919 / 0.944.
+
+On the raw fragments (before linking, `assocnet.py frags`, `ldev` lab,
+threshold 0.5) the learned association switches fish 153 times per mixture
+instead of 162: as often where the two fish are one line (< 0.25 Hz, 79),
+7 % less at 0.25-1.2 Hz (63 vs 68) and a third less beyond. It breaks more
+often (137 fragments of 10+ detections instead of 88: its links reach 2 s,
+the rule tracker's 10 s), which the old linker could not join; a linker
+trained on its fragments joins them.
+
+![Switches of the raw fragments by the distance of the two fish](images/assocnet_switches.png)
+
+**Pair oracle** (`pair_oracle.py`: every hidden fish of a close pair added
+from the truth with its partner's spectra). A perfect pair head still does
+not pay off, but it no longer costs much. With the rule-based tracker the
+oracle costs -0.0166 [-0.0246, -0.0093] (27 better, 59 worse): its raw
+fragments switch 351 times per mixture instead of 162 (`ldev` lab), and even
+perfect joining of them gains nothing from the extra detections (0.787
+with, 0.788 without). The learned association trained with pair crops
+(`--pair-frac 0.5`, `C-an-v1p`) keeps the pairs apart: 173 switches
+(0.25-1.2 Hz: 40 instead of 141), and perfect joining of its fragments
+would reach 0.802. End to end, with a linker trained on its `ltrain`
+fragments with and without the oracle's fish, the oracle costs -0.0062
+[-0.0136, +0.0004] (39 better, 47 worse); with the oracle it is +0.0070
+[-0.0003, +0.0154] above the rule-based tracker. Fish in a close pair spend
+more frames on their own identity with the oracle (lab 0.371 -> 0.517,
+rule-based 0.375 -> 0.493), but fish 1.2-3 Hz from another line lose
+(0.791 -> 0.768; rule-based 0.797 -> 0.746), and the linker, which sees the
+two fish of a pair with the same spectra, joins their pieces crosswise (its
+validation accuracy falls from 0.90 to 0.81 with the pair fragments). Pair
+training itself costs a little on ordinary detections (-0.0036 [-0.0086,
++0.0014] against the same model without it).
+
+![IDF1 with and without the pair oracle](images/assocnet_pair_oracle.png)
+
+Not used:
+
+* the learned probability as the link error inside the rule-based tracker
+  (`assoc_mode: cost`): -0.009 to -0.015 on the first 8-24 variants. The
+  rule tracker merges temporary identities wherever frames do not clash, and
+  saturated probabilities lose the ranking its error had;
+* labelling a merged peak as both of its fish (the hidden one within
+  0.5 Hz): more switches on the pair detections (189 vs 173), no better
+  otherwise;
+* weighting links of detections with both true and false candidates three
+  times: the same raw fragments (154 switches; 166 vs 173 on the pair
+  detections).
+
+Commands (models in `$WT_BENCHMARK_DATA/assocnet/C-an-*`, notes in
+`$WT_BENCHMARK_DATA/assocnet/C-an-NOTES.md`):
+
+```bash
+python benchmarks/dense/assocnet.py build --splits ltrain ltrain-field --pairs
+python benchmarks/dense/assocnet.py build --splits ldev ldev-field ldev2 ldev2-field
+python benchmarks/dense/assocnet.py train --tag C-an-v0          # --pair-frac 0.5: the pair model
+# the fragment linker on the new tracker's ltrain fragments; <config>: learned-assocnet.yaml
+# with assoc_threshold 0.5, assoc_min_detections 1 and the old linker
+# (assoc/linker-learned-v1-motion2.npz)
+python benchmarks/dense/run.py retrack --tag C-an-v0-lt --source B-rise-lt -c <config> --split ltrain   # and ltrain-field
+python benchmarks/dense/linker.py build --base C-an-v0-lt -c <config> --splits ltrain ltrain-field
+python benchmarks/dense/linker.py train --base C-an-v0-lt --train-splits ltrain ltrain-field --val-splits ltrain-field --out $WT_BENCHMARK_DATA/assocnet/C-an-v0/linker.npz
+python benchmarks/dense/run.py retrack --tag mine --source B-aug-s0-t0.6 -c benchmarks/dense/configs/learned-assocnet.yaml --split ldev   # ldev2: --source ref-learned-b
+python benchmarks/dense/assocnet.py frags -c benchmarks/dense/configs/learned-assocnet.yaml --splits ldev [--pairs]
+```
+
+Figures: `$WT_BENCHMARK_DATA/figures/C-an-switches.png`,
+`C-an-switches-pair-oracle.png`, `C-an-pair-oracle.png`,
+`compare_idf1_learned-rises_vs_learned-assocnet_ldev+ldev2.png`,
+`compare_idf1_control_vs_learned-assocnet_ldev+ldev2.png`,
+`compare_switches_learned-rises_vs_learned-assocnet_ldev+ldev2.png`.
 
 ## Learned fragment linking
 
