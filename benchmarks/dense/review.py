@@ -411,6 +411,7 @@ def fit(args):
     groups = {}
     summary = {}
     oof_all: dict[str, list] = {}
+    oof_items: dict[str, tuple] = {}
     for g in GROUPS:
         names, X, y, raw, _mix, unit = table(data, g)
         n, n_bad = len(y), int((y == 0).sum())
@@ -460,6 +461,7 @@ def fit(args):
             "oof_kind": kind_of(g),
         }
         oof_all.setdefault(kind_of(g), []).append((oof[chosen], y))
+        oof_items[g] = (oof[chosen], y)
         line = ", ".join(
             f"{k} {v['logloss']:.3f}/{v['auc']:.3f}" for k, v in scores.items()
         )
@@ -483,6 +485,11 @@ def fit(args):
         "oof_kinds": oof_kinds,
     }
     ReviewModel(groups, meta).save(args.out)
+    np.savez_compressed(
+        Path(args.out).with_suffix(".oof.npz"),
+        **{f"{kind_of(g)}/{g}/p": v[0] for g, v in oof_items.items()},
+        **{f"{kind_of(g)}/{g}/y": v[1] for g, v in oof_items.items()},
+    )
     (Path(args.out).with_suffix(".json")).write_text(
         json.dumps(meta, indent=1, default=float)
     )
@@ -886,6 +893,44 @@ def items_to(curves: np.ndarray, gap: np.ndarray, frac: float) -> np.ndarray:
     return out
 
 
+def recalibrate_oof(data: list[dict], folds: int = 5, seed: int = 0) -> None:
+    """Replace every item's confidence by an isotonic map of it, per kind,
+    fitted on the other folds of `data` (folds by mixture, lab and field
+    together): an honest (out-of-fold) recalibration on dev."""
+    units = sorted({_unit(d["split"], d["name"]) for d in data})
+    rng = np.random.default_rng(seed)
+    fold_of = dict(zip(units, rng.permutation(len(units)) % folds, strict=True))
+    for kind in ("join", "track", "missed_join"):
+        rows = [
+            (fold_of[_unit(d["split"], d["name"])], it)
+            for d in data
+            for it in d["items"]
+            if kind_of(it["group"]) == kind
+        ]
+        f = np.array([r[0] for r in rows])
+        p = np.array([r[1]["conf"] for r in rows])
+        y = np.array([r[1]["label"] for r in rows], float)
+        new = p.copy()
+        for k in range(folds):
+            tr, te = f != k, f == k
+            if te.any() and tr.sum() > 10:
+                kx, ky = isotonic(p[tr], y[tr])
+                new[te] = np.interp(p[te], kx, ky)
+        for (_, it), c in zip(rows, new, strict=True):
+            it["conf"] = float(c)
+
+
+def _item_arrays(data: list[dict]) -> dict:
+    """Per item of every kind: confidence, raw score, label (for figures)."""
+    out = {}
+    for kind in ("join", "track", "missed_join"):
+        sel = [it for d in data for it in d["items"] if kind_of(it["group"]) == kind]
+        out[f"items/{kind}/conf"] = np.array([it["conf"] for it in sel])
+        out[f"items/{kind}/raw"] = np.array([it["raw"] for it in sel])
+        out[f"items/{kind}/label"] = np.array([it["label"] for it in sel], np.int8)
+    return out
+
+
 def evaluate(args):
     from wavetracker.review import ReviewModel
 
@@ -894,6 +939,8 @@ def evaluate(args):
     train = load_split(args.tag, TRAIN) if args.train else []
     model_conf(dev, model)
     model_conf(train, model)
+    if args.recalibrate:
+        recalibrate_oof(dev, seed=args.seed)
     out = {
         "tag": args.tag,
         "model": args.model,
@@ -975,6 +1022,7 @@ def evaluate(args):
         gap=gap,
         **{f"curve/{k}": v for k, v in curves.items()},
         **{f"count/{k}": v for k, v in counts.items()},
+        **_item_arrays(dev),
     )
     Path(f"{stem}.json").write_text(json.dumps(out, indent=1, default=float))
     print(f"wrote {stem}.json / .npz")
@@ -1001,6 +1049,18 @@ ORDER_STYLE = {
 }
 
 
+def _qbins(p, y, n):
+    """Equal-count bins of p: mean p, mean y and count per bin."""
+    o = np.argsort(p, kind="stable")
+    parts = np.array_split(o, min(n, max(len(p), 1)))
+    parts = [q for q in parts if len(q)]
+    return (
+        np.array([p[q].mean() for q in parts]),
+        np.array([y[q].mean() for q in parts]),
+        np.array([len(q) for q in parts]),
+    )
+
+
 def _style(ax):
     for sp in ("top", "right"):
         ax.spines[sp].set_visible(False)
@@ -1019,53 +1079,65 @@ def plot(args):
 
     FIG.mkdir(parents=True, exist_ok=True)
     runs = [r.split("=", 1) for r in args.runs]  # label=tag/eval-name
-    # reliability: one row per pipeline, one column per kind
-    fig, axes = plt.subplots(len(runs), 3, figsize=(10, 3.3 * len(runs)), squeeze=False)
+    # reliability: predicted against observed error rate (1 - confidence,
+    # 1 - fraction right), equal-count bins, log axes: errors are rare
+    fig, axes = plt.subplots(len(runs), 3, figsize=(10, 3.4 * len(runs)), squeeze=False)
+    lo = 3e-3
     for row, (label, path) in enumerate(runs):
         ev = json.loads((OUT / f"{path}.json").read_text())
-        fit_meta = (
-            json.loads(Path(ev["model"]).with_suffix(".json").read_text())
-            if ev["model"]
-            else {}
+        z = np.load(OUT / f"{path}.npz")
+        oof = (
+            np.load(Path(ev["model"]).with_suffix(".oof.npz")) if ev["model"] else None
         )
         for col, kind in enumerate(("join", "track", "missed_join")):
             ax = axes[row, col]
             _style(ax)
-            ax.plot([0, 1], [0, 1], color=MUTED, lw=0.8, ls="--")
-            series = [
-                ("dev, model", ev["calibration_dev"].get(kind), SERIES[0], "o"),
-                (
-                    "ltrain, model out of fold",
-                    fit_meta.get("oof_kinds", {}).get(kind),
-                    SERIES[1],
-                    "s",
-                ),
-                ("dev, raw score", ev["raw_dev"].get(kind), GRAY, "^"),
-            ]
-            for name, tab, color, marker in series:
-                if not tab:
-                    continue
-                b = np.array(tab["bins"])
-                ax.plot(b[:, 0], b[:, 1], color=color, lw=1.4, zorder=2)
-                ax.scatter(
-                    b[:, 0],
-                    b[:, 1],
-                    s=8 + 40 * np.sqrt(b[:, 2] / b[:, 2].max()),
+            ax.plot([lo, 1], [lo, 1], color=MUTED, lw=0.8, ls="--")
+            y = z[f"items/{kind}/label"]
+            series = [("dev, model", z[f"items/{kind}/conf"], y, SERIES[0], "o")]
+            if oof is not None:
+                keys = [
+                    k
+                    for k in oof.files
+                    if k.startswith(f"{kind}/") and k.endswith("/p")
+                ]
+                if keys:
+                    p = np.concatenate([oof[k] for k in keys])
+                    yy = np.concatenate([oof[k[:-1] + "y"] for k in keys])
+                    series.append(("ltrain, out of fold", p, yy, SERIES[1], "s"))
+            series.append(("dev, raw score", z[f"items/{kind}/raw"], y, GRAY, "^"))
+            for name, conf, lab, color, marker in series:
+                err_p, err_o, n = _qbins(1 - conf, 1 - lab, args.bins)
+                se = np.sqrt(np.maximum(err_o * (1 - err_o), 1e-6) / n)
+                ax.errorbar(
+                    np.maximum(err_p, lo),
+                    np.maximum(err_o, lo),
+                    yerr=[np.minimum(se, np.maximum(err_o, lo) - lo / 2), se],
                     color=color,
                     marker=marker,
-                    zorder=3,
-                    edgecolor="white",
-                    lw=0.6,
-                    label=f"{name}: ECE {tab['ece']:.3f}, AUC {tab['auc']:.2f}",
+                    ms=4,
+                    lw=1.2,
+                    elinewidth=0.7,
+                    capsize=0,
+                    mec="white",
+                    mew=0.5,
+                    label=f"{name}: ECE {ece(conf, lab):.3f}, AUC {auc(conf, lab):.2f}",
                 )
-            ax.set_xlim(0, 1)
-            ax.set_ylim(0, 1.02)
+            ax.set_xscale("log")
+            ax.set_yscale("log")
+            ax.set_xlim(lo, 1)
+            ax.set_ylim(lo, 1)
             ax.set_title(
-                f"{label}: {KIND_TITLE[kind]}", fontsize=9, color=INK, loc="left"
+                f"{label}: {KIND_TITLE[kind]} (n {len(y)})",
+                fontsize=9,
+                color=INK,
+                loc="left",
             )
-            ax.set_xlabel("confidence", fontsize=8, color=MUTED)
+            ax.set_xlabel(
+                "predicted P(wrong) = 1 - confidence", fontsize=8, color=MUTED
+            )
             if col == 0:
-                ax.set_ylabel("fraction right", fontsize=8, color=MUTED)
+                ax.set_ylabel("observed fraction wrong", fontsize=8, color=MUTED)
             ax.legend(fontsize=6.5, frameon=False, loc="upper left")
     fig.tight_layout()
     out1 = FIG / f"reliability_{args.name}.png"
@@ -1090,15 +1162,6 @@ def plot(args):
                 gain = c - c[:, :1]
                 y = gain.mean(0) if col == 0 else (gain[has] / gap[has, None]).mean(0)
                 ax.plot(n, y, color=color, ls=ls, lw=lw, label=name)
-                ax.annotate(
-                    name,
-                    (n[-1], y[-1]),
-                    xytext=(3, 0),
-                    textcoords="offset points",
-                    fontsize=6.5,
-                    color=MUTED,
-                    va="center",
-                )
             if col == 0:
                 ax.axhline(gap.mean(), color=MUTED, lw=0.6)
                 ax.set_ylabel("IDF1 gain per mixture", fontsize=8, color=MUTED)
@@ -1120,7 +1183,7 @@ def plot(args):
                     color=INK,
                     loc="left",
                 )
-            ax.set_xlim(0, args.n_plot * 1.18)
+            ax.set_xlim(0, args.n_plot)
             ax.set_xlabel("items reviewed per 10-min mixture", fontsize=8, color=MUTED)
             sec = ax.secondary_xaxis(
                 "top", functions=(lambda x: 6 * x, lambda x: x / 6)
@@ -1174,11 +1237,18 @@ def main(argv=None):
     e.add_argument(
         "--split-only", action="store_true", help="a split piece gets a new id"
     )
+    e.add_argument(
+        "--recalibrate", action="store_true", help="isotonic, out of fold on the splits"
+    )
+    e.add_argument("--seed", type=int, default=0)
     e.set_defaults(func=evaluate)
     pl = sub.add_parser("plot")
     pl.add_argument("--runs", nargs="+", required=True, help="label=tag/eval-name")
     pl.add_argument("--name", required=True)
     pl.add_argument("--n-plot", type=int, default=100)
+    pl.add_argument(
+        "--bins", type=int, default=10, help="reliability: equal-count bins"
+    )
     pl.set_defaults(func=plot)
     args = ap.parse_args(argv)
     args.func(args)
