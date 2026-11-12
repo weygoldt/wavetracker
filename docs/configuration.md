@@ -48,6 +48,10 @@ The most relevant parameters:
 | `pairs.partners` / `fill_gap` / `fill_df` | `fill` / 2 / 0.4 | `fill`: those detections are tracked last and only extend identities through their gaps (steps up to `fill_gap` s and `fill_df` Hz); `track`: like any detection |
 | `pairs.partner_tracks` | none | tracks of the left-over second detections at least this long [s] become identities (fish hidden in a neighbour's peak for minutes) |
 | `pairs.resolve` | false | decide every episode of two identities closer than `pairs.max_df` by their electrode patterns before and after it |
+| `review.enabled` | false | confidences of every identity, join and rejected join, and the places most likely wrong with a suggested fix, in `review.json`; the identities do not change (see [Review flags](review-flags.md)) |
+| `review.model` | none | calibrated confidence models for the pipeline (`benchmarks/dense/review.py fit`; not packaged); none: the stages' own scores, uncalibrated |
+| `review.missed_joins` / `min_missed_prob` | true / 0.05 | also flag rejected candidate joins with at least this linker probability |
+| `review.max_confidence` | none | write only items below this confidence |
 | `output.save_fine_spec` | false | also store the full-resolution spectrogram |
 | `output.fine_spec_max_freq` / `sparse_spec_max_freq` | none | upper limit of the stored spectrograms; none = 1.25 × `harmonic_groups.max_freq` |
 | `interference.max_line_freq` | none | upper limit of the hum-line search; none = Nyquist |
@@ -67,6 +71,7 @@ post-processing tools and [audian](../README.md#correcting-tracks-interactively)
 | `split_v.npy` | only from a model with a pair head: the detection is the second fish of a split peak |
 | `cplx_v.npy` | complex spectrum at the fundamental on each electrode (`abs(cplx_v)**2 == sign_v`); the phase difference gives the relative sign of electrodes: `np.angle(cplx_v[:, 1] * np.conj(cplx_v[:, 0]))` |
 | `times.npy` | time of each frame, relative to the recording start [s] |
+| `review.json`, `frag_v.npy` | only with `review.enabled`: confidences and review flags, and the tracker fragment of every detection that their splits name (see [Review flags](review-flags.md)) |
 | `sparse_spectra.npy`, `sparse_freq.npy`, `sparse_time.npy` | overview spectrogram (freq × time, power) |
 | `fine_spec.npy`, `fine_freqs.npy`, `fine_times.npy` | optional full spectrogram (time × freq, `np.load(..., mmap_mode="r")`) |
 | `wavetracker.json` | input, config, median thresholds, noise of each block (`noise_std_blocks`), fraction of samples repaired (`click_fraction`, `click_fraction_blocks`), timings, version |

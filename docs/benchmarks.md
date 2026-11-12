@@ -1306,6 +1306,150 @@ truth detections have no ghost tails), and `min_jump` 0.5 Hz instead of
 on bridged rises (+0.0023 [+0.0014, +0.0034]): not an effect of tracing
 the climb; to be checked with a real detector.
 
+### Review confidence (step E)
+
+Run tags `E-cf-*`; files in `$WT_BENCHMARK_DATA/confidence/`, notes in
+`confidence/E-cf-NOTES.md`, figures in `figures/confidence/`. Format and
+design: [review flags](review-flags.md); algorithm:
+[confidence and review flags](algorithms.md#confidence-and-review-flags).
+
+**Data.** `benchmarks/dense/review.py collect` re-tracks stored detections
+with `review.enabled` (CPU): `learned-rises.yaml` (tag `E-cf-rises`) and
+`learned-assocnet.yaml` (`E-cf-assoc`), on `ltrain` + `ltrain-field` (52
+mixtures, detections `B-rise-lt`) and on the 51 dev mixtures (`ldev`,
+`ldev2` and their field variants; detections `B-aug-s0-t0.6`,
+`ref-learned-b`). All 102 dev variants reproduce the identities of
+`B-rise-j3` / `ref-learned-rises` and of `C-an-v0-rl-t0.7-m10` exactly.
+Labels from `score.match`: a join is right if both its parts are mostly on
+the same fish, an identity if most of its detections are on a fish (not a
+harmonic), not joining if the two identities are not mostly the same fish.
+Per 10-min dev mixture there are 103 items (`learned-rises`: 56 joins, 36
+identities, 12 missed joins) or 150 (`learned-assocnet`: 109, 26, 14), of
+which 10.7 / 13.1 are wrong.
+
+**Models**, fitted on `ltrain` only, chosen per group by out-of-fold log
+loss (5 folds by mixture): `learned-rises` linker joins: logistic
+regression, rise joins: logistic, identities: MLP, missed linker joins: MLP;
+`learned-assocnet`: MLP, logistic, logistic, MLP; rejected rise candidates
+(16-20 in `ltrain`, 1 wrong) get their base rate. Files:
+`confidence/E-cf-rises/model-v1.npz`, `confidence/E-cf-assoc/model-v1.npz`
+(with `.json` summaries and out-of-fold predictions).
+
+**Calibration and AUC** on the 51 dev mixtures (AUC: telling wrong from
+right items; ECE: 10 equal-width bins), the model against the stage's own
+score, and the model out of fold on `ltrain`:
+
+| pipeline, kind | items | wrong | AUC model | AUC raw score | ECE dev | ECE `ltrain` (oof) | ECE dev, recalibrated (oof) |
+|---|---|---|---|---|---|---|---|
+| `learned-rises`, joins | 5676 | 569 | **0.829** | 0.730 | 0.044 | 0.013 | 0.008 |
+| ... of which rise joins | 543 | 54 | 0.740 | 0.591 | 0.027 | | |
+| identities | 3644 | 239 | **0.875** | 0.870 | 0.011 | 0.018 | 0.008 |
+| missed joins | 1214 | 286 | **0.852** | 0.696 | 0.080 | 0.049 | 0.037 |
+| all | 10534 | 1094 | **0.848** | 0.721 | 0.030 | | 0.009 |
+| `learned-assocnet`, joins | 11131 | 968 | **0.829** | 0.762 | 0.037 | 0.008 | 0.005 |
+| ... of which rise joins | 319 | 29 | 0.732 | 0.592 | 0.044 | | |
+| identities | 2675 | 122 | **0.975** | 0.950 | 0.024 | 0.011 | 0.005 |
+| missed joins | 1454 | 248 | **0.911** | 0.678 | 0.031 | 0.031 | 0.012 |
+| all | 15260 | 1338 | **0.866** | 0.718 | 0.029 | | 0.005 |
+
+The raw scores rank identities about as well (mean salience, AUC 0.87 /
+0.95) but are far from calibrated, and the linker's probability ranks
+joins and rejected candidates much worse than the models. The models
+calibrate well on dev except for joins: those predicted 2-10 % wrong are
+wrong about twice as often on dev as on `ltrain`, whose detections the
+detector was trained on (mean confidence of joins 0.944 / 0.950 against
+0.900 / 0.913 right). An isotonic map per kind fitted on dev, out of fold
+(5 folds by mixture), removes the shift (overall ECE 0.030 -> 0.009 and
+0.029 -> 0.005); AUC drops a little (joins 0.829 -> 0.814, ties of the
+step map) and review gains no more (@10 items 0.0128 / 0.0106 instead of
+0.0137 / 0.0116), so the `ltrain` model is kept; the map is an option if
+probabilities must be exact. Figure: `figures/confidence/reliability_v1.png` (predicted against
+observed error rate, equal-count bins, log axes).
+
+**Review efficiency.** The items of each mixture are visited in an order
+and the right fix is applied where an item is really wrong at that moment
+(see [review flags](review-flags.md#how-it-is-judged)); IDF1 after every
+item. Reachable: the gain after all items, +0.0213 (`learned-rises`, mean
+IDF1 0.762 -> 0.784) and +0.0176 (`learned-assocnet`, 0.772 -> 0.790) per
+mixture, nothing in 14 / 12 of 102 variants. Most of it is missed joins
+(+0.012 / +0.009 when only those are visited), then wrong joins (+0.005 /
++0.005) and false identities (+0.004 / +0.005); by scenario `crowded`
++0.051 / +0.037, density +0.029 / +0.026, low frequencies +0.012 / +0.010,
+attenuation and ladders +0.011 / +0.010. IDF1 gain after n items per
+10-min mixture (6 n per recording hour), and items needed for half and
+90 % of the reachable gain (median over the 88 / 90 mixtures with a gap,
+never reaching it counts as more; in brackets on the mean curve):
+
+| order | gain @10 | @20 | @50 | half | 90 % |
+|---|---|---|---|---|---|
+| `learned-rises`: confidence | 0.0137 | 0.0159 | 0.0190 | **4** (5) | **10** (53) |
+| expected gain, (1 - confidence) x impact | **0.0147** | **0.0171** | **0.0197** | 5 (3) | 19 (40) |
+| raw scores | 0.0125 | 0.0153 | 0.0184 | 7 (8) | 20.5 (57) |
+| time | 0.0032 | 0.0045 | 0.0092 | 58.5 (63) | 76 (148) |
+| random | 0.0036 | 0.0066 | 0.0117 | 47 (43) | 85 (161) |
+| eodsorter rule-based issues, time order | 0.0003 | 0.0007 | 0.0024 | never (never) | never (never) |
+| oracle (wrong items first, largest first) | 0.0187 | 0.0204 | 0.0211 | 1 (2) | 3 (12) |
+| `learned-assocnet`: confidence | 0.0116 | 0.0135 | 0.0154 | **4** (4) | **9** (69) |
+| expected gain | **0.0118** | **0.0140** | **0.0159** | 5.5 (4) | 17 (45) |
+| raw scores | 0.0106 | 0.0118 | 0.0145 | 7 (6) | 19.5 (69) |
+| time | 0.0031 | 0.0039 | 0.0069 | 73 (74) | 99 (291) |
+| random | 0.0018 | 0.0043 | 0.0088 | 67 (50) | 114 (245) |
+| eodsorter rule-based issues | 0.0004 | 0.0008 | 0.0016 | never (never) | never (never) |
+| oracle | 0.0145 | 0.0162 | 0.0172 | 2 (2) | 3.5 (18) |
+
+* **Confidence order finds the errors that matter first**: 10 items per
+  mixture (60 per recording hour of these dense mixtures) recover 64 % /
+  66 % of the reachable gain, time order 15 % / 18 %. Half of it takes a
+  median of 4 items (24 per recording hour) instead of 58-73, 90 % takes
+  9-10 instead of 76-99.
+* **The learned confidence beats the raw scores**: 90 % after a median of
+  10 / 9 items instead of 20. Ordered by expected gain the raw scores are
+  worse still (half after 16 / 21 items): only calibrated confidences can be
+  compared across kinds. A learned model of the gain if wrong (regressed
+  on single fixes in `ltrain`) instead of `impact` was no better (@10
+  0.0142 / 0.0118).
+* **Expected gain** (`(1 - confidence) * impact`) gains most in the first
+  10-50 items but needs more for 90 % in a typical mixture (16-18): it
+  postpones small errors. Both are offered (`impact` is in `review.json`).
+* **The rule-based issues** of the eodsorter (possible joins within 10 s
+  and 2.5 Hz, gaps, short tracks, crossings, harmonics; 182-190 per
+  mixture) reach only +0.004-0.007 after all of them, half of the reachable
+  gain in 31 / 14 of the mixtures: most are gaps and crossings, mostly not
+  errors, and their join rule misses the joins the linker could not make.
+* **The tail**: the mean curves need 40-70 items for 90 % because a few
+  `crowded` mixtures (200-350 items, 33-50 wrong) keep errors the models
+  are confident about: two long identities of two fish joined by the
+  linker (each side ~1500 detections, patterns 3-4 dB apart), and pairs of
+  identities that share most of their frames (two close fish whose
+  identities alternate between them).
+* Moving the split-off part to its own fish's identity is part of the fix
+  of a wrong join. With splitting alone (`--split-only`) the reachable gain
+  is +0.0165 / +0.0127, reached as fast (half after 3, 90 % after 8 / 5
+  items).
+
+Not covered yet: switches inside a tracker fragment (after all items, a
+stretch of another fish of 5 s or more inside an identity: 4.9 per
+mixture, worth +0.0031; 2 s or more: 11.6, +0.0043) and identities that
+are never candidates (more than 180 s or 5 Hz apart: merging every
+remaining same-fish identity adds +0.0029 / +0.0023).
+
+![Review efficiency: IDF1 gained against items reviewed](images/review_efficiency.png)
+
+Figures: `figures/confidence/review_efficiency_v1.png`,
+`reliability_v1.png`, the out-of-fold recalibration
+`reliability_v1-recal.png`, `review_efficiency_v1-recal.png`.
+
+```bash
+python benchmarks/dense/review.py collect --tag E-cf-rises -c benchmarks/dense/configs/learned-rises.yaml \
+    --source B-rise-lt --splits ltrain ltrain-field --jobs 8
+python benchmarks/dense/review.py collect --tag E-cf-rises -c benchmarks/dense/configs/learned-rises.yaml \
+    --source B-aug-s0-t0.6:ldev,ref-learned-b:ldev2 --check B-rise-j3:ldev,ref-learned-rises:ldev2 \
+    --splits ldev ldev-field ldev2 ldev2-field --jobs 8
+python benchmarks/dense/review.py fit --tag E-cf-rises --out $WT_BENCHMARK_DATA/confidence/E-cf-rises/model-v1.npz
+python benchmarks/dense/review.py evaluate --tag E-cf-rises --model .../model-v1.npz --name v1 [--recalibrate] [--split-only]
+python benchmarks/dense/review.py plot --runs learned-rises=E-cf-rises/eval-v1 learned-assocnet=E-cf-assoc/eval-v1 --name v1
+```
+
 ## Learned fragment linking
 
 On the dense mixtures, identities break much more often than detections

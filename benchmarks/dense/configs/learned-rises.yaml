@@ -26,3 +26,10 @@ tracking:
   min_identity_salience: 0.75
   min_support: 3
   motion_window: 2.0
+# Confidences and review flags (wavetracker.review, docs/review-flags.md):
+# review.json with the identities, joins and rejected joins most likely wrong,
+# calibrated on ltrain for this pipeline (benchmarks/dense/review.py, E-cf-rises).
+# The identities do not change.
+review:
+  enabled: true
+  model: /home/weygoldt/wrk/data/wavetracker_benchmark/confidence/E-cf-rises/model-v1.npz

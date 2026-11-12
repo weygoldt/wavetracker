@@ -405,6 +405,45 @@ tracked, but too few episodes have clean patterns on both sides (fish that
 weave among several neighbours have none), and on detections without a pair
 head it decided no better than the tracker and linker.
 
+## Confidence and review flags
+
+A tracked result is never all right, and checking all of it by hand is what
+the tracker should save. With `review.enabled` (off by default;
+`wavetracker.review`, format in [review flags](review-flags.md)) every join,
+every identity and every rejected candidate join gets a *confidence*: the
+probability that the result is right there. The lowest ones, with a
+suggested fix (split, delete, merge), are where a user should look first.
+
+1. **Evidence**: each stage keeps what it decided with (`review.Trace`):
+   the tracker's fragments, the learned association's link probabilities,
+   the linker's candidates with their features and probabilities, the rise
+   joiner's candidates with their pattern differences. The identities do
+   not change.
+2. **Items**: a join of the linker or the rise joiner is an edge of its
+   identity's join tree over fragments (no cycles: every join connected two
+   identities that were apart), so removing it splits the identity into
+   exactly two parts, which `review.json` names by their fragments
+   (`frag_v.npy`). Only a third of the joins on the dense benchmark could be
+   undone by a cut in time: identities interleave overlapping fragments.
+   Every identity is an item (is it a fish?), and so is the best rejected
+   candidate between two identities (are they one fish?).
+3. **Features**, per item: the stage's own score and features, both parts'
+   sizes, saliences, electrode patterns and frequencies, shared and parallel
+   frames; for identities their salience profile, harmonic relations to
+   other identities (detections at f / h or h f of another identity in the
+   same frame), crowding, pattern drift and link probabilities.
+4. **Calibration**: one model per kind and source (logistic regression or a
+   16-unit MLP, or an isotonic map of the raw score, whichever has the
+   lowest out-of-fold log loss), fitted on benchmark truth for one pipeline
+   and stored as a small `.npz` (`review.model`). Without a model the raw
+   scores are written, uncalibrated.
+
+On the 51 dev mixtures of the dense benchmark, ordering the items by this
+confidence finds half of what review can fix after a median of 4 items per
+10-minute mixture and 90 % after 9-10; in time order it takes 58-73 and
+76-99 (see
+[benchmarks](benchmarks.md#review-confidence-step-e)).
+
 ## Recordings without fish
 
 Field loggers start on the boat. For minutes the electrodes are out of the water,

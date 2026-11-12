@@ -35,3 +35,8 @@ tracking:
   assoc_threshold: 0.7
   assoc_min_detections: 10
   min_identity_salience: 0.75
+# Confidences and review flags (wavetracker.review, docs/review-flags.md),
+# calibrated on ltrain for this pipeline (benchmarks/dense/review.py, E-cf-assoc).
+review:
+  enabled: true
+  model: /home/weygoldt/wrk/data/wavetracker_benchmark/confidence/E-cf-assoc/model-v1.npz

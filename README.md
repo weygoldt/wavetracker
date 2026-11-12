@@ -167,6 +167,13 @@ history; tracks that are harmonics of another fish are flagged. Saving keeps
 the original identities as `ident_v.tracked.npy` and the directory stays
 readable by `Results.load`.
 
+To know where to look, set `review.enabled: true`: wavetracker then rates
+every identity and every join with the probability that it is right and
+writes the places most likely wrong, each with a suggested fix, to
+`review.json` (see [review flags](docs/review-flags.md)). On dense benchmark
+mixtures, fixing them in that order recovers half of what such fixes can
+gain after about 4 places per 10 minutes of recording.
+
 New to it? The [quickstart](https://github.com/weygoldt/audian/blob/master/docs/wavetracker-quickstart.md)
 walks through tracking and correcting a demo recording in about 15 minutes.
 
@@ -178,6 +185,8 @@ walks through tracking and correcting a demo recording in about 15 minutes.
   implementation, interference removal, stitching, known limitations.
 * [Post-processing](docs/post-processing.md) – cleanup, harmonics tracked as
   fish, merging by position for moving electrodes.
+* [Review flags](docs/review-flags.md) – confidences of identities and joins,
+  and where a result most likely needs a correction (`review.json`).
 * [Field recordings and dense populations](docs/field-recordings.md) – settings
   and observations for short recordings with many fish.
 * [Benchmarks](docs/benchmarks.md) – results on tube-competition recordings,
