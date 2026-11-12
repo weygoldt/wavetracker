@@ -1278,9 +1278,33 @@ learned-assocnet +0.0100 [+0.0043, +0.0163] on the rise truth, +0.0099
 [+0.0042, +0.0162] on the old). What it shows: every detector finds fewer
 than half of the frames of the steep part (on the same frames the old,
 bridged truth gave 0.44 / 0.45). Figures with the detections of the current
-pipelines at corrected onsets: `figures/risetruth/runs_*.png`; validation:
+pipelines at corrected onsets: `figures/risetruth/runs_*.png` (the learned
+detector jumps to the new level up to a second early instead of following
+the climb, and misses sharp peaks); validation:
 `figures/risetruth/validation.png`, `onsets_<source>.png`,
 `mixture_*.png`; notes: `$WT_BENCHMARK_DATA/salience/D-rt-NOTES.md`.
+
+**What a detector that traces rises can gain** with the rule-based
+association: truth detections >= 0 dB (`oracle.py detect`, `oracle-b.yaml`,
+runs `D-rt-or-*`), from the old truth (bridged rises) and from the rise
+truth, scored on the rise truth, 51 mixtures:
+
+| truth detections | IDF1 lab / field | rise onsets on the fish's identity | + rise joiner | ... on the fish's identity |
+|---|---|---|---|---|
+| bridged rises (old truth) | 0.7902 / 0.7464 | 0.399 / 0.354 | 0.7942 / 0.7542 | 0.421 / 0.381 |
+| steep part traced | 0.7926 / 0.7510 | 0.431 / 0.393 | 0.7955 / 0.7575 | 0.446 / 0.414 |
+
+Tracing the steep part gains +0.0035 [+0.0018, +0.0054] IDF1 without the
+joiner and +0.0023 [+0.0005, +0.0042] with it: the ceiling of what the
+retrained detector can add here. The joiner stays needed: on traced rises
+it still adds +0.0047 [+0.0021, +0.0074] (82 better, 12 worse; on bridged
+rises +0.0059), because the tracker cannot link a climb of 10 Hz and more
+per 0.16-s frame; the breaks only move into the climb. Its settings: on
+traced rises `max_overlap` 1 s instead of 4 s changes nothing (-0.0001;
+truth detections have no ghost tails), and `min_jump` 0.5 Hz instead of
+1.5 Hz gains +0.0023 [+0.0013, +0.0034] (purity -0.001), but just as much
+on bridged rises (+0.0023 [+0.0014, +0.0034]): not an effect of tracing
+the climb; to be checked with a real detector.
 
 ## Learned fragment linking
 
