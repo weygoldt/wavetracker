@@ -141,12 +141,12 @@ peak"). The pair head and the electrode branch are built and off by default.
 
 Default pipeline 53-95x realtime on 11 electrodes / 20 kHz, 35x on 16 / 48
 kHz (classic 139-173x / 57x); `$WT_BENCHMARK_DATA/timing/`,
-`figures/gpu_timing.png`. Two things to fix:
-- `tracking.assoc_device` is `cpu` by default: the association network
-  takes 60 s of a 4-h recording on the CPU and 10 s on the GPU, with
-  identical identities (1 h and 4 h, 0 detections differ). Make it follow
-  the run's device.
-- Linking, the rise joiner and review grow faster than the recording: from
+`figures/gpu_timing.png`.
+- Done: the association follows the run's device (`assoc_device: auto`),
+  GPU first with CPU fallback on out-of-memory, like detection: 4 h 60 s ->
+  14 s, 1 h 49 s -> 23 s in total; identical identities on 1 h, 4 h and all
+  102 dev variants (`H-an-t0.5-gpu` against `F-an-t0.5`).
+- To fix: linking, the rise joiner and review grow faster than the recording: from
   1 h to 4 h (14 -> 67 identities) 1.5 -> 17-25 s, 0.2 -> 23-47 s and
   1.9 -> 38 s (busy machine, CPU numbers vary 2x). For day-long recordings
   they would dominate; profile the candidate loops.

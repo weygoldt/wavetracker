@@ -9,15 +9,42 @@ import torch
 from scipy.special import polygamma
 
 
-def get_device(name: str = "auto") -> torch.device:
-    """Resolve 'auto' to the best available device."""
+def available(device: str | torch.device) -> bool:
+    """True if `device` exists on this machine."""
+    d = torch.device(device)
+    if d.type == "cuda":
+        return torch.cuda.is_available() and (d.index or 0) < torch.cuda.device_count()
+    if d.type == "mps":
+        return torch.backends.mps.is_available()
+    return d.type == "cpu"
+
+
+def get_device(name: str = "auto", prefer: str | None = None) -> torch.device:
+    """Resolve a device name. 'auto' is GPU first: `prefer` (e.g. the device a
+    run used) if this machine has it, else CUDA, MPS, CPU."""
     if name != "auto":
         return torch.device(name)
+    if prefer is not None and available(prefer):
+        return torch.device(prefer)
     if torch.cuda.is_available():
         return torch.device("cuda")
     if torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
+
+
+def out_of_memory(err: BaseException) -> bool:
+    """True if `err` is a GPU running out of memory (CUDA or MPS)."""
+    if isinstance(err, torch.OutOfMemoryError):
+        return True
+    return isinstance(err, RuntimeError) and "out of memory" in str(err).lower()
+
+
+def free_gpu_memory() -> None:
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    if torch.backends.mps.is_available():
+        torch.mps.empty_cache()
 
 
 def step_size(nfft: int, overlap_frac: float) -> int:

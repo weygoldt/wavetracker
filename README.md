@@ -46,11 +46,13 @@ A recording may start long before there is a fish in it, with the electrodes
 still out of the water or in empty water, for seconds or for hours: results for
 a fish [do not depend on what came before](docs/algorithms.md#recordings-without-fish).
 
-On an RTX 4080 the default pipeline processes a 4 h, 11-channel, 20 kHz
-recording in 4.5 min (53x realtime, 4 GB of GPU memory) and a 5-min,
-16-channel, 48 kHz field file in 9 s (35x); the classic pipeline takes 1.7 min
-for the 4 h (139x, mostly disk IO). Without a GPU the default pipeline runs at
-about realtime.
+Everything that runs on PyTorch runs on the GPU when there is one and falls
+back to the CPU when there is none or the GPU runs out of memory. On an RTX
+4080 the default pipeline processes 1 h of an 11-channel, 20 kHz recording in
+23 s (154x realtime, 4 GB of GPU memory), 4 h in 3.9 min (62x) and a 5-min,
+16-channel, 48 kHz field file in 6 s (53x); the classic pipeline takes 21 s
+for the hour and 1.7 min for the 4 h (mostly disk IO). Without a GPU the
+default pipeline runs at about realtime.
 
 ## Installation
 

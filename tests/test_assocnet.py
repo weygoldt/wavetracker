@@ -185,7 +185,10 @@ def test_cost_mode_keeps_the_rule_based_tracker_with_learned_errors(tmp_path):
     key = (str((tmp_path / "rule.pt").resolve()), "cpu")
     assocnet._MODELS[key] = model  # a stand-in for a trained network
     cfg = TrackingConfig(
-        method="learned", assoc_mode="cost", assoc_model=str(tmp_path / "rule.pt")
+        method="learned",
+        assoc_mode="cost",
+        assoc_model=str(tmp_path / "rule.pt"),
+        assoc_device="cpu",  # the stand-in is cached for the CPU
     )
     try:
         ident = track(fund, idx, sign, times, cfg, sal_v=sal, cplx_v=cplx)
@@ -201,3 +204,42 @@ def test_assoc_mode_config():
     assert TrackingConfig().assoc_mode == "link"
     with pytest.raises(ValueError, match="assoc_mode"):
         TrackingConfig(assoc_mode="both")
+
+
+def _oom_unless_cpu(real):
+    def fake(*args, device="cpu", **kwargs):
+        if device != "cpu":
+            raise torch.OutOfMemoryError("CUDA out of memory (test)")
+        return real(*args, device=device, **kwargs)
+
+    return fake
+
+
+def test_learned_association_falls_back_to_the_cpu(tmp_path, monkeypatch, caplog):
+    fund, idx, sign, cplx, sal, times, _ = _lines(n_frames=120)
+    _model().save(tmp_path / "m.pt")
+    cfg = TrackingConfig(method="learned", assoc_model=str(tmp_path / "m.pt"))
+    want = track(fund, idx, sign, times, cfg, sal_v=sal, cplx_v=cplx)
+    monkeypatch.setattr(
+        assocnet, "track_learned", _oom_unless_cpu(assocnet.track_learned)
+    )
+    load = assocnet.load_model
+    monkeypatch.setattr(assocnet, "load_model", lambda path, device: load(path, "cpu"))
+    cfg.assoc_device = "cuda"  # need not exist: the fakes never use it
+    with caplog.at_level("WARNING"):
+        got = track(fund, idx, sign, times, cfg, sal_v=sal, cplx_v=cplx)
+    assert np.array_equal(got, want, equal_nan=True)
+    assert "out of memory" in caplog.text
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a GPU")
+def test_learned_association_is_the_same_on_the_gpu(tmp_path):
+    fund, idx, sign, cplx, sal, times, _ = _lines(n_frames=300, drop=0.3)
+    _model().save(tmp_path / "m.pt")
+    cfg = TrackingConfig(
+        method="learned", assoc_model=str(tmp_path / "m.pt"), assoc_device="cpu"
+    )
+    cpu = track(fund, idx, sign, times, cfg, sal_v=sal, cplx_v=cplx)
+    cfg.assoc_device = "cuda"
+    gpu = track(fund, idx, sign, times, cfg, sal_v=sal, cplx_v=cplx)
+    assert np.array_equal(cpu, gpu, equal_nan=True)

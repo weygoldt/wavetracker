@@ -354,8 +354,11 @@ class TrackingConfig:
     """Learned association: minimum link probability (0-1)."""
     assoc_min_detections: int = 1
     """Learned association: tracks with fewer detections stay unassigned."""
-    assoc_device: str = "cpu"
-    """Learned association: torch device of the network."""
+    assoc_device: str = "auto"
+    """Learned association: torch device of the network. "auto": the device
+    the detections were computed on (``wavetracker.json``) if this machine
+    has it, else the GPU if there is one, else the CPU. If the GPU runs out
+    of memory, the association runs on the CPU (with a warning)."""
 
     def __post_init__(self):
         for key in ("start_salience", "min_identity_salience"):

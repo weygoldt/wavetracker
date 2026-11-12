@@ -251,6 +251,13 @@ def run(
 def track_cmd(
     results_dir: Annotated[Path, typer.Argument(exists=True, file_okay=False)],
     config: ConfigOpt = None,
+    device: Annotated[
+        str,
+        typer.Option(
+            help="Torch device of the learned association: auto (the detection's "
+            "device if available, else GPU first), cuda, cpu, ..."
+        ),
+    ] = "auto",
     verbose: Verbose = 0,
 ) -> None:
     """(Re-)run identity tracking on existing detections."""
@@ -259,6 +266,8 @@ def track_cmd(
 
     _setup_logging(verbose)
     cfg = Config.load(config)
+    if device != "auto":
+        cfg.tracking.assoc_device = device
     results = Results.load(results_dir)
     with console.status("tracking"):
         dt = track_results(results, cfg)

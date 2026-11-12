@@ -34,10 +34,13 @@ classic one. A model path may be a file name of a shipped model
 (`assocnet.pt`, `linker-assocnet.npz`, `review-assocnet.npz`, `salience.pt`,
 `linker.npz`).
 
-The default pipeline is slower than the classic one (a network over every
-frame) and needs a GPU for long recordings (`run --device`): on an RTX 4080
-53x realtime for 4 h of 11 electrodes at 20 kHz (classic 139x), about
-realtime on a CPU. Models trained for other
+The default pipeline needs a GPU for long recordings: on an RTX 4080 it
+runs at 62-154x realtime on 11 electrodes at 20 kHz (classic 139-173x), on a
+CPU at about realtime. Everything on PyTorch (spectrograms, the detector, the
+association) is GPU first: `run --device auto` (the default) takes CUDA or
+MPS if there is one, the association follows the detection's device
+(`tracking.assoc_device: auto`, also for `wavetracker track`), and both fall
+back to the CPU with a warning if the GPU runs out of memory. Models trained for other
 recordings (another species, more electrodes) can be given with
 `detector.model`, `tracking.assoc_model`, `linking.model` and
 `review.model`; the review model is only calibrated for the pipeline it was
@@ -83,7 +86,7 @@ it differs, the classic one's:
 | `tracking.assoc_model` | none | weights of the learned association (`benchmarks/dense/assocnet.py`); none: the shipped `assocnet.pt` |
 | `tracking.assoc_mode` | `link` | `link`: tracks from the learned links alone; `cost`: the rule-based tracker with 1 − the learned probability as the error of short links |
 | `tracking.assoc_threshold` / `assoc_min_detections` | 0.7 / 10 (0.5 / 1) | minimum link probability; shorter tracks stay unassigned (`link` mode) |
-| `tracking.assoc_device` | `cpu` | torch device of the network |
+| `tracking.assoc_device` | `auto` | torch device of the network; `auto`: the device the detections were computed on if available, else GPU first; CPU if the GPU runs out of memory |
 | `stitching.enabled` | true | rule-based joining of fragments across rises, dropouts and double detections; only used with `linking.enabled: false` |
 | `stitching.max_dropout` | 900 | longest gap bridged when nothing else is at that frequency [s] |
 | `linking.enabled` | true | join fragments with the learned linker instead of the stitching (see [Learned linking](algorithms.md#learned-linking)) |

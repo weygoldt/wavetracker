@@ -24,10 +24,14 @@ the original implementation.
 
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 from numba import njit, prange
 
 from .config import TrackingConfig
+
+log = logging.getLogger(__name__)
 
 A_WEIGHT = 2.0 / 3.0
 F_WEIGHT = 1.0 / 3.0
@@ -762,26 +766,50 @@ def track(
     return ident_v
 
 
+def _on_device(fn, device: str):
+    """fn(device) on `device` ("auto": GPU first); on the CPU if the GPU runs
+    out of memory."""
+    import torch
+
+    from .spectrogram import free_gpu_memory, get_device, out_of_memory
+
+    dev = get_device(device)
+    try:
+        return fn(str(dev))
+    except (RuntimeError, torch.OutOfMemoryError) as err:
+        if dev.type == "cpu" or not out_of_memory(err):
+            raise
+        log.warning("%s ran out of memory; learned association on the CPU instead", dev)
+        log.debug("%s", err)
+    free_gpu_memory()
+    return fn("cpu")
+
+
 def _track_learned(fund_v, idx_v, sign_v, cplx_v, sal_v, times, cfg, valid, trace=None):
     """`track` with the learned association (wavetracker.assocnet)."""
     from . import assocnet
 
-    model = assocnet.load_model(cfg.assoc_model, cfg.assoc_device)
     sel = np.flatnonzero(valid)
     sub = {} if trace is not None else None
-    ident = assocnet.track_learned(
-        fund_v[sel],
-        idx_v[sel],
-        sign_v[sel],
-        None if cplx_v is None else cplx_v[sel],
-        None if sal_v is None else sal_v[sel],
-        times,
-        model,
-        threshold=cfg.assoc_threshold,
-        min_detections=cfg.assoc_min_detections,
-        device=cfg.assoc_device,
-        trace=sub,
-    )
+
+    def run(device):
+        if sub is not None:
+            sub.clear()
+        return assocnet.track_learned(
+            fund_v[sel],
+            idx_v[sel],
+            sign_v[sel],
+            None if cplx_v is None else cplx_v[sel],
+            None if sal_v is None else sal_v[sel],
+            times,
+            assocnet.load_model(cfg.assoc_model, device),
+            threshold=cfg.assoc_threshold,
+            min_detections=cfg.assoc_min_detections,
+            device=device,
+            trace=sub,
+        )
+
+    ident = _on_device(run, cfg.assoc_device)
     ident_v = np.full(len(fund_v), np.nan)
     ident_v[sel] = ident
     if trace is not None:
@@ -798,20 +826,25 @@ def _learned_links(fund, idx, sign, cplx_v, sal_v, valid, times, cfg):
     frames, threshold)."""
     from . import assocnet
 
-    model = assocnet.load_model(cfg.assoc_model, cfg.assoc_device)
     frame_dt = float(times[1] - times[0])
-    k = max(1, round(model.max_dt / frame_dt))
-    src, dst = assocnet.candidate_edges(idx, fund, k, model.max_df)
-    d = assocnet.detection_inputs(
-        fund,
-        idx,
-        times,
-        sign,
-        None if cplx_v is None else cplx_v[valid],
-        None if sal_v is None else sal_v[valid],
-        cfg.assoc_device,
-    )
-    prob = assocnet.edge_probabilities(model, d, idx, src, dst, frame_dt)
+
+    def run(device):
+        model = assocnet.load_model(cfg.assoc_model, device)
+        k = max(1, round(model.max_dt / frame_dt))
+        src, dst = assocnet.candidate_edges(idx, fund, k, model.max_df)
+        d = assocnet.detection_inputs(
+            fund,
+            idx,
+            times,
+            sign,
+            None if cplx_v is None else cplx_v[valid],
+            None if sal_v is None else sal_v[valid],
+            device,
+        )
+        prob = assocnet.edge_probabilities(model, d, idx, src, dst, frame_dt)
+        return k, src, dst, prob
+
+    k, src, dst, prob = _on_device(run, cfg.assoc_device)
     start = np.searchsorted(src, np.arange(len(fund) + 1)).astype(np.int64)
     return (
         start,

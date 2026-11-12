@@ -6,7 +6,7 @@ import logging
 import math
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -30,9 +30,11 @@ from .spectrogram import (
     decibel,
     estimate_noise_std,
     frame_noise_std,
+    free_gpu_memory,
     frequencies,
     get_device,
     min_noise_std,
+    out_of_memory,
     step_size,
 )
 from .stitching import stitch
@@ -271,12 +273,38 @@ def detect(
     Every detection gets a salience (0-1, `Results.sal_v`): the network's with
     the learned detector, and with the classic one a stand-in from the
     fundamental's level over the local noise (see `classic_salience`).
+
+    GPU first: `device` "auto" is CUDA (or MPS) if there is one. If the GPU
+    runs out of memory, the detection starts again on the CPU (with a
+    warning); the device used is in ``results.meta["device"]``.
     """
+    dev = get_device(device)
+    try:
+        return _detect(input_path, output_dir, cfg, start, duration, dev, progress)
+    except (RuntimeError, torch.OutOfMemoryError) as err:
+        if dev.type == "cpu" or not out_of_memory(err):
+            raise
+        log.warning("%s ran out of memory; detecting on the CPU instead", dev)
+        log.debug("%s", err)
+    free_gpu_memory()
+    return _detect(
+        input_path, output_dir, cfg, start, duration, torch.device("cpu"), progress
+    )
+
+
+def _detect(
+    input_path: str | Path | Sequence[str | Path],
+    output_dir: str | Path,
+    cfg: Config,
+    start: float,
+    duration: float | None,
+    dev: torch.device,
+    progress: ProgressCallback | None,
+) -> DetectionOutput:
     t_start = time.perf_counter()
     timings = Timings()
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    dev = get_device(device)
     sc, hc = cfg.spectrogram, cfg.harmonic_groups
 
     with open_recording(input_path, buffersize=sc.block_duration) as data:
@@ -582,6 +610,11 @@ def track_results(results: Results, cfg: Config) -> float:
     t0 = time.perf_counter()
     if cfg.tracking.min_identity_salience is not None and results.sal_v is None:
         raise ValueError(_no_salience("min_identity_salience"))
+    tc = cfg.tracking
+    if tc.method == "learned" and tc.assoc_device == "auto":
+        # the device the detections were computed on, if this machine has it
+        dev = get_device("auto", prefer=results.meta.get("device"))
+        cfg = replace(cfg, tracking=replace(tc, assoc_device=str(dev)))
     trace = Trace() if cfg.review.enabled else None
     if cfg.pairs.enabled and cfg.pairs.partners == "fill":
         # the pair head's second detections last: the others are tracked
