@@ -60,11 +60,12 @@ nothing in 125-225 s).
 
 ## Detector traces only part of steep rises (2026-11-12, future, not now)
 
-The detector retrained on the corrected rise truth (`D-rt-tcn64aug-s0`,
-threshold 0.5) finds 0.513 instead of 0.475 of the steep-part frames
-(+0.038 [+0.031, +0.046]) and leaves IDF1 about unchanged (+0.005,
-n.s.); at threshold 0.6 the gain is +0.006. The steepest climbs (about
-10 Hz in 0.2 s) are still missed in the middle. Likely reasons: rise frames
+The detector retrained on the corrected rise truth (`D-rt-tcn64aug-s0/s1`)
+finds only about 1 point more of the steep-part frames than the step-B
+detector at the same threshold 0.5 (+0.011 / +0.009), IDF1 unchanged; the
++0.038 first reported came mostly from the lower threshold (0.5 against
+0.6). Not adopted. The steepest climbs (about 10 Hz in 0.2 s) are still
+missed in the middle. Likely reasons: rise frames
 are 0.35 % of the targets, and the 1.64 s window smears a fast climb into a
 vertical stripe. Future options (user, 2026-11-12: not top priority):
 - weight the rise frames more in the loss;
