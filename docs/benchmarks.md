@@ -1196,6 +1196,92 @@ growth gets +0.002. Half of what is left belongs to fish hidden for more than
 30 s, whose identity is far away by then: joining across long episodes is the
 linker's job, with features that know the episode.
 
+### Truth through the steep part of rises
+
+At the onset of a rise a fish climbs by up to 60 Hz within 0.05-0.5 s, faster
+than wavetracker's 1.64-s window can follow. Tracking each source alone (the
+source truth, `library.py`) loses the fish for 1-3 frames and picks it up
+after the climb; the ridge completion filled most of these frames somewhere
+in the smear between the two levels, and the mixtures interpolate the short
+gaps (< 1 s of source time) along a straight line. The truth therefore had no
+steep part: in the mixtures every such frame was "known", on the bridge
+(a quarter of them more than 2 Hz off the fish), the detector was trained
+towards the bridge, and frames whose window straddles the onset were detected
+at the old level. Old truth over the sources' own spectrograms (1.64-s and
+0.2-s windows): `$WT_BENCHMARK_DATA/figures/risetruth/eye_*.png`.
+
+`benchmarks/dense/rise_truth.py` follows every rise onset of the 30 dev
+sources (`rise_diag.find_rises` on the gap-filled truth) by the
+instantaneous frequency of that fish in its own recording: all electrodes
+band-passed around the fish (from 5 Hz below its truth in the window to 15 Hz
+above, widened while the frequency runs into the top; 4 Hz clear of the other
+fish's fundamental, harmonics and sub-harmonics), the phase advance of the
+analytic signals from sample to sample summed over electrodes and 30 ms
+(power weighted), every 10 ms, and a 0.15-s running median against chirps.
+Between the last frame before the climb and the first after it on which the
+old detected truth agrees with it (1 Hz) the truth is replaced, and the
+frames are flagged. A rise is left as it was when the other fish lies in its
+range, the trace is noisy for longer than a chirp, runs into a band edge or
+sits on a mains line while the power drops, no frame on either side agrees,
+or less than 80 % of the old detected frames around it agree.
+
+| dev sources | onsets | corrected | already traced | left as they were | new frames |
+|---|---|---|---|---|---|
+| `ltrain` pool (20) | 273 | 189 | 45 | 39 (no anchor 19, noisy 12, > 6 s 5, disagree 3) | 863 |
+| `ldev` pool (10) | 142 | 82 | 42 | 18 (noisy 11, no anchor 3, > 6 s 3, other fish 1) | 496 |
+
+The skipped onsets are mostly weak fish (2019 group 3), whose trace a wide
+band biases towards its centre. Validation: outside the replaced stretches
+the instantaneous frequency agrees with the old detected truth to a median
+0.06 Hz per onset (98 % of those frames within 1 Hz); a stretch is 0.66 s
+long in the median (3 frames; up to 34). Of the 1359 new source frames 994
+had been completed by ridge following, 43 were unknown and 322 detected off
+the fish; 463 were more than 2 Hz off. For 52 of 271 onsets the old truth
+missed the peak by more than 5 Hz.
+
+The mixture truths are rebuilt from the corrected sources with the stored
+warps (`mixture.warp_truth`; `rise_truth.py mixtures --check` reproduces
+every old `truth.npz` exactly) into new files `truth_rises.npz` of `ltrain`,
+`ldev`, `ldev2` and their field variants (`test` untouched); they hold all of
+`truth.npz`, the new frames flagged in `rise`. Nothing changes outside the
+flagged frames, and no frame becomes known that was not (all were bridged).
+The fish power of a 1.64-s window across a step is meaningless, so on SNR
+frames whose window holds a new frame (`rise_snr`) the fish and noise power
+are interpolated in dB from the frames around them.
+
+| split | mixtures | new truth samples (10 Hz) | per mixture | of known samples | > 2 Hz off before |
+|---|---|---|---|---|---|
+| `ltrain` | 26 | 13040 | 502 | 0.37 % | 3182 |
+| `ldev` | 17 | 9553 | 562 | 0.38 % | 2297 |
+| `ldev2` | 34 | 17613 | 518 | 0.35 % | 4351 |
+
+`score.py`, `run.py` (`track`, `retrack`, `rescore`, `report`),
+`compare.py`, `strata.py`, `det_sweep.py`, `oracle.py detect` and
+`salience_train.py` take `--truth rises` (default unchanged); scores on it
+go to `score_rises.json` / `frames_rises.npz` next to the default ones, with
+the *rise-onset* stratum (`recall_rise`, `idf1_coverage_rise`). In training
+the rise frames get full weight (completed frames keep half).
+
+Existing runs rescored (detections unchanged), 51 dev mixtures, lab / field:
+
+| pipeline | IDF1, old truth | IDF1, rise truth | rise onsets found | ... on the fish's identity |
+|---|---|---|---|---|
+| classic (`dense-linked.yaml`) | 0.6347 / 0.5979 | 0.6348 / 0.5980 | 0.446 / 0.392 | 0.300 / 0.263 |
+| `learned-b.yaml` | 0.7479 / 0.7383 | 0.7479 / 0.7383 | 0.460 / 0.461 | 0.328 / 0.306 |
+| `learned-rises.yaml` | 0.7658 / 0.7591 | 0.7659 / 0.7591 | 0.460 / 0.461 | 0.375 / 0.367 |
+| `learned-assocnet.yaml` | 0.7757 / 0.7689 | 0.7758 / 0.7690 | 0.460 / 0.461 | 0.402 / 0.401 |
+
+(rise onsets: 16529 frames, 324 per mixture; 0.56-0.62 of those at
+>= 6 dB found.) The new frames are 0.35 % of all, so IDF1 and the paired
+differences between pipelines do not move (learned-rises against
+learned-assocnet +0.0100 [+0.0043, +0.0163] on the rise truth, +0.0099
+[+0.0042, +0.0162] on the old). What it shows: every detector finds fewer
+than half of the frames of the steep part (on the same frames the old,
+bridged truth gave 0.44 / 0.45). Figures with the detections of the current
+pipelines at corrected onsets: `figures/risetruth/runs_*.png`; validation:
+`figures/risetruth/validation.png`, `onsets_<source>.png`,
+`mixture_*.png`; notes: `$WT_BENCHMARK_DATA/salience/D-rt-NOTES.md`.
+
 ## Learned fragment linking
 
 On the dense mixtures, identities break much more often than detections

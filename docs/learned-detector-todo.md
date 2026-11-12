@@ -58,7 +58,20 @@ per frame and false identities, not only IDF1. Lowering the threshold or
 `start_salience` does not help this fish (at most 37-48 % of its frames,
 nothing in 125-225 s).
 
-## Truth misses the steep part of rises (2026-11-11, noticed by the user)
+## Truth misses the steep part of rises (2026-11-11, noticed by the user) - truth fixed, retraining pending
+
+Done (branch learned-risetruth, 2026-11-12): steps 1-3 and the rise-onset
+stratum. `rise_truth.py` follows 271 of 415 onsets of the dev sources by the
+fish's instantaneous frequency (87 were traced already); `truth_rises.npz`
+of `ltrain`, `ldev`, `ldev2` (+ field) flags ~520 new samples per mixture,
+a quarter of which the old truth had more than 2 Hz off. Every current
+detector finds fewer than half of these frames. All scripts take
+`--truth rises`. Left: step 4, retraining (GPU; commands in
+`$WT_BENCHMARK_DATA/salience/D-rt-NOTES.md`), and then whether the rise
+joiner is still needed. See `docs/benchmarks.md`, "Truth through the steep
+part of rises".
+
+Original note:
 
 At most rises the tracks stop at the onset and continue only after the
 steep part, which stays untracked; the rise joiner bridges the identity but
