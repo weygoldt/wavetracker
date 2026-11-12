@@ -3,6 +3,38 @@
 Running list for the `learned-detector` branch (newest first). Results and
 numbers live in `docs/benchmarks.md`.
 
+## Fish whose harmonics are hidden (2026-11-12, boat take DR0000_0209)
+
+The strongest fish of the 2-electrode boat take, at 306-309 Hz for the
+whole take (a rise at 289.5 s; absent before immersion), is detected in
+19 % of its frames by `learned-rises` (v1 21 %, classic 61 %). Tracking
+loses nothing (one identity); v1's identity is dropped by
+`min_identity_salience` (mean 0.74). The loss is the network's salience
+(median 0.07 along the fish). The fish sits in a quiet band just below the
+chorus (350-2000 Hz), whose floor is ~20 dB higher, so none of its
+harmonics is visible. The network wants harmonics: adding a synthetic 2nd
+harmonic to its input raises the frames above 0.6 from 19 % to 63 % (with a
+3rd 84 %), while a stronger fundamental lowers them (8 %); sub-harmonics
+(a weak unrelated line near f/2 in 100-200 s) and the 100-Hz normalisation
+matter little. In `ltrain`, fish as strong as this one have a visible
+harmonic in 86-95 % of frames (this one: 28 %). The same failure on held-out
+`ldev` crops whose harmonics are put under a +20 dB noise shelf: recall of
+visible fish 0.91 / 0.94 -> 0.30 / 0.31 (lab / field).
+Diagnosis, figures and numbers: `benchmarks/boatfish.py`,
+`$WT_BENCHMARK_DATA/field_check/C-bf-NOTES.md`,
+`$WT_BENCHMARK_DATA/figures/boatfish/`.
+
+Fix for the planned retraining: the noise-shelf augmentation of
+`salience_train.py` (`--shelf-p 0.3 --shelf-db 10,30 --shelf-edge
+150,1200`): white noise above a random edge raises the floor there, so
+fish below the edge lose their harmonics and keep their fundamental.
+Checked with a 2000-step fine-tune of the step-B detector (`C-bf-shelf-s0`,
+not a candidate): normal `ldev` recall unchanged (0.913 / 0.933 against
+0.911 / 0.936), recall under a +20 dB shelf 0.30 / 0.31 -> 0.66 / 0.70, the
+boat fish 19 % -> 58 % of its frames, on one identity (classic 59 %). Its
+salience is calibrated higher (precision at 0.5: 0.91 / 0.93 against
+0.96 / 0.96), so the detection threshold has to be re-tuned with it.
+
 ## Truth misses the steep part of rises (2026-11-11, noticed by the user)
 
 At most rises the tracks stop at the onset and continue only after the
