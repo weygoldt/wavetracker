@@ -444,6 +444,33 @@ def place_sources(design: dict, pool: list[dict], rng) -> list[dict]:
     return out
 
 
+def source_warps(meta: dict) -> list[Warp]:
+    """Time warp of every source of a mixture (``mixture.json``)."""
+    design = meta["design"]
+    grid = common_drift(
+        float(design["duration"]),
+        design.get("drift", 0.005),
+        design.get("drift_timescale", 300.0),
+        int(design["seed"]) + 1,
+    )
+    return [
+        Warp(src["scale"], src["start"], grid[0], grid[1], grid[2])
+        for src in meta["sources"]
+    ]
+
+
+def warp_truth(w: Warp, st: np.ndarray, sf: np.ndarray, t_truth: np.ndarray):
+    """Truth of one fish in mixture time from its source truth (times `st`,
+    frequency `sf` with NaN gaps): the frequency times the warp rate, NaN in
+    source gaps longer than ``MAX_GAP`` (shorter gaps are interpolated), and
+    the same filled through all gaps."""
+    ff, gap = _gap_flags(st, sf, MAX_GAP)
+    tq = w.tau(t_truth)
+    fk = np.interp(tq, st, ff) * w.rate(t_truth)
+    gq = np.interp(tq, st, gap.astype(float)) > 0
+    return np.where(gq, np.nan, fk), fk
+
+
 def source_truth(entry: dict, key: str = "freqs"):
     """Source truth (times, (2, frames) with NaN) of a library entry: the
     completed truth (`freqs`) or only what the tracker detected in the source
@@ -464,19 +491,11 @@ def detected_truth(meta: dict, freqs: np.ndarray, library: list[dict]) -> np.nda
     fish in its source alone; NaN on frames completed by ridge following.
     A detector that follows ridges is rewarded on completed frames by
     construction, so its gain is checked on these frames too."""
-    design = meta["design"]
-    duration = float(design["duration"])
-    grid = common_drift(
-        duration,
-        design.get("drift", 0.005),
-        design.get("drift_timescale", 300.0),
-        int(design["seed"]) + 1,
-    )
+    duration = float(meta["design"]["duration"])
     t_truth = np.arange(0.0, duration, 1 / TRUTH_RATE)
     by_name = {e["name"]: e for e in library}
     out = np.full(freqs.shape, np.nan)
-    for s, src in enumerate(meta["sources"]):
-        w = Warp(src["scale"], src["start"], grid[0], grid[1], grid[2])
+    for s, (src, w) in enumerate(zip(meta["sources"], source_warps(meta), strict=True)):
         st, sd = source_truth(by_name[src["trial"]], "freqs_detected")
         tq = w.tau(t_truth)
         for k in range(2):
@@ -657,11 +676,7 @@ def generate(name: str, design: dict, library: list[dict], device: str = "auto")
             ff, gap = _gap_flags(st, sf[k], MAX_GAP)
             traces.append((st - src0, ff, gap))
             # truth in mixture time: frequency times the warp rate
-            tq = w.tau(t_truth)
-            fk = np.interp(tq, st, ff) * w.rate(t_truth)
-            gq = np.interp(tq, st, gap.astype(float)) > 0
-            filled[2 * s + k] = fk
-            truth[2 * s + k] = np.where(gq, np.nan, fk)
+            truth[2 * s + k], filled[2 * s + k] = warp_truth(w, st, sf[k], t_truth)
         hum = np.load(DATA / "sources" / e["name"] / "hum_lines.npy")
         f0, f1, r = split_source(x, traces, hum, src["scale"], rng, device=device)
         n_src = len(x)
