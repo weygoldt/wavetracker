@@ -46,7 +46,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import Config
+from .config import Config, model_file
 from .linking import _pattern, _pattern_distance, parallel_evidence
 
 VERSION = 1
@@ -822,7 +822,8 @@ _MODELS: dict[str, ReviewModel] = {}
 
 
 def load_model(path: str | Path) -> ReviewModel:
-    key = str(Path(path).resolve())
+    path = model_file(path)
+    key = str(path.resolve())
     if key not in _MODELS:
         _MODELS[key] = ReviewModel.load(path)
     return _MODELS[key]
@@ -891,4 +892,5 @@ def review(results, trace: Trace, cfg: Config) -> tuple[dict, list[Item], np.nda
     )
     model = load_model(cfg.review.model) if cfg.review.model else None
     conf = confidences(items, model)
-    return report(items, conf, cfg.review.model, cfg), items, conf
+    calibration = str(model_file(cfg.review.model)) if cfg.review.model else None
+    return report(items, conf, calibration, cfg), items, conf

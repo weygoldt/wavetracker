@@ -89,7 +89,7 @@ def _by_group(items, group):
 
 
 def test_off_by_default():
-    cfg = Config()
+    cfg = Config.classic()
     assert cfg.review.enabled is False
     assert cfg.review.model is None
     cfg = Config.from_dict({"review": {"enabled": True, "max_confidence": 0.9}})
@@ -115,7 +115,7 @@ def test_join_item_has_the_two_fragments_as_sides():
     fund, idx, sign, sal, ident, times, trace, frag = _linked(
         _fragment(0, 100, 700.0, 0), _fragment(112, 300, 700.3, 1)
     )
-    items = build_items(fund, idx, sign, sal, ident, times, trace, Config())
+    items = build_items(fund, idx, sign, sal, ident, times, trace, Config.classic())
     (join,) = _by_group(items, "join_linker")
     assert join.kind == "join" and join.action == "split"
     np.testing.assert_array_equal(np.sort(join.rows[0]), np.flatnonzero(frag == 0))
@@ -140,7 +140,8 @@ def test_a_join_cuts_a_chain_into_before_and_after():
         _fragment(210, 300, 700.2, 2),
     )
     items = _by_group(
-        build_items(fund, idx, sign, sal, ident, times, trace, Config()), "join_linker"
+        build_items(fund, idx, sign, sal, ident, times, trace, Config.classic()),
+        "join_linker",
     )
     assert len(items) == 2
     for it in items:
@@ -169,7 +170,8 @@ def test_a_split_names_the_fragments_of_the_later_part():
     )
     assert len(np.unique(ident)) == 1
     items = _by_group(
-        build_items(fund, idx, sign, sal, ident, times, trace, Config()), "join_linker"
+        build_items(fund, idx, sign, sal, ident, times, trace, Config.classic()),
+        "join_linker",
     )
     assert len(items) == 2
     for it in items:
@@ -191,13 +193,15 @@ def test_rejected_candidate_is_a_missed_join():
         _fragment(105, 250, 700.8, 2, pattern=P2),
     )
     assert ident[frag == 2][0] != ident[frag == 0][0]
-    items = build_items(fund, idx, sign, sal, ident, times, trace, Config())
+    items = build_items(fund, idx, sign, sal, ident, times, trace, Config.classic())
     (missed,) = _by_group(items, "missed_linker")
     assert missed.kind == "missed_join" and missed.action == "merge"
     assert set(missed.ids) == {ident[frag == 0][0], ident[frag == 2][0]}
     assert missed.raw < 0.1  # 1 - the linker's probability
     assert missed.x["side_shared"] > 0.5
-    cfg = Config.from_dict({"review": {"missed_joins": False}})
+    cfg = Config.from_dict(
+        {"detector": {"method": "classic"}, "review": {"missed_joins": False}}
+    )
     items = build_items(fund, idx, sign, sal, ident, times, trace, cfg)
     assert not _by_group(items, "missed_linker")
 
@@ -205,7 +209,7 @@ def test_rejected_candidate_is_a_missed_join():
 def test_track_items_see_harmonics():
     frags = (_fragment(0, 100, 400.0, 0), _fragment(0, 100, 800.0, 1, sal=0.6))
     fund, idx, sign, _, ident, sal, times = _assemble(*frags)
-    items = build_items(fund, idx, sign, sal, ident, times, Trace(), Config())
+    items = build_items(fund, idx, sign, sal, ident, times, Trace(), Config.classic())
     tracks = {it.ids[0]: it for it in _by_group(items, "track")}
     assert set(tracks) == {0.0, 1.0}
     assert tracks[1.0].x["harm_low"] == pytest.approx(1.0)
@@ -226,7 +230,12 @@ def test_rise_join_item():
     )
     fund, idx, sign, _, frag, sal, times = _assemble(*frags)
     trace = Trace(frag_v=frag.copy(), linked_v=frag.copy())
-    cfg = Config.from_dict({"rises": {"enabled": True, "min_salience": None}})
+    cfg = Config.from_dict(
+        {
+            "detector": {"method": "classic"},
+            "rises": {"enabled": True, "min_salience": None},
+        }
+    )
     ident = join_rises(fund, idx, sign, frag, times, cfg.rises, trace=trace.rises)
     assert trace.rises["accepted"].tolist() == [True]
     trace.joined_v = ident.copy()
@@ -332,14 +341,16 @@ def test_model_roundtrip(tmp_path):
 def test_report_lowest_confidence_first():
     items = [_item("track"), _item("join_linker"), _item("missed_linker")]
     items[1].k = 7
-    out = report(items, np.array([0.9, 0.2, 0.5]), "m.npz", Config())
+    out = report(items, np.array([0.9, 0.2, 0.5]), "m.npz", Config.classic())
     assert out["version"] == 1 and out["calibration"] == "m.npz"
     assert [r["kind"] for r in out["items"]] == ["join", "missed_join", "track"]
     assert [r["action"] for r in out["items"]] == ["split", "merge", "delete"]
     assert out["items"][0]["k"] == 7 and "k" not in out["items"][1]
     for key in ("confidence", "t", "f", "t0", "t1", "ids", "impact", "why", "source"):
         assert key in out["items"][0]
-    cfg = Config.from_dict({"review": {"max_confidence": 0.6}})
+    cfg = Config.from_dict(
+        {"detector": {"method": "classic"}, "review": {"max_confidence": 0.6}}
+    )
     assert len(report(items, np.array([0.9, 0.2, 0.5]), None, cfg)["items"]) == 2
 
 
@@ -351,7 +362,12 @@ def _scene(tmp_path):
     )
     model = tmp_path / "rule.npz"
     RULE.save(model)
-    cfg = Config.from_dict({"linking": {"enabled": True, "model": str(model)}})
+    cfg = Config.from_dict(
+        {
+            "detector": {"method": "classic"},
+            "linking": {"enabled": True, "model": str(model)},
+        }
+    )
     cfg.tracking.max_dt = 5.0  # the 12 s gap breaks the track
     res = Results(
         fund, idx, sign, np.full(len(fund), np.nan), times, cplx_v=cplx, sal_v=sal

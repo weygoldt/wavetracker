@@ -41,6 +41,8 @@ import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch import nn
 
+from .config import model_file
+
 FORMAT = "wavetracker-salience"
 GRID_TOLERANCE = 0.01  # relative mismatch of resolution / frame step accepted
 PAIR_SPACING = 2
@@ -502,7 +504,7 @@ def load_model(path: str | Path, device: str | torch.device = "cpu"):
 
 
 def default_model_path() -> Path:
-    return Path(__file__).parent / "models" / "salience.pt"
+    return model_file(None, "salience.pt")
 
 
 def _frames(z) -> int:
@@ -587,7 +589,7 @@ class StreamingSalience:
 
     @classmethod
     def from_config(cls, dc, freqs, frame_step, min_freq, max_freq, device):
-        path = Path(dc.model).expanduser() if dc.model else default_model_path()
+        path = model_file(dc.model, "salience.pt")
         model, spec, meta = load_model(path, device)
         s = cls(
             model,

@@ -166,6 +166,7 @@ def calibrate(args):
         _write_grid(night, load(*NIGHT), grid_cfg)
         cfg = Config.from_dict(
             {
+                "detector": {"method": "classic"},
                 "harmonic_groups": {
                     "min_freq": 300.0,
                     "max_freq": 1500.0,

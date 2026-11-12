@@ -56,7 +56,7 @@ def test_joins_the_fragments_of_a_rise():
 
 
 def test_off_by_default_and_unchanged_when_off():
-    assert Config().rises.enabled is False
+    assert Config.classic().rises.enabled is False
     fund, idx, sign, ident, times = _assemble(
         _piece(0, 100, 0, 700.0),
         _piece(100.5, 200, 1, 701.0, rise=(12.0, 8.0)),
@@ -158,7 +158,11 @@ def test_track_results_joins_rises_when_enabled():
             meta={},
         )
         cfg = Config.from_dict(
-            {"linking": {"enabled": False}, "stitching": {"enabled": False}}
+            {
+                "detector": {"method": "classic"},
+                "linking": {"enabled": False},
+                "stitching": {"enabled": False},
+            }
             | ({"rises": {"enabled": True, "min_salience": None}} if rises else {})
         )
         track_results(res, cfg)

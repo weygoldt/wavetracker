@@ -163,12 +163,20 @@ def test_tracking_method_learned_through_track(tmp_path):
 
 def test_tracking_method_config():
     assert TrackingConfig().method == "classic"
-    with pytest.raises(ValueError, match="assoc_model"):
-        TrackingConfig(method="learned")
+    assert TrackingConfig(method="learned").assoc_model is None  # the packaged one
     with pytest.raises(ValueError, match="method"):
         TrackingConfig(method="hungarian")
     cfg = Config.from_dict({"tracking": {"method": "learned", "assoc_model": "x.pt"}})
+    assert cfg.tracking.assoc_threshold == 0.7  # the default pipeline's
+    cfg = Config.from_dict(
+        {"detector": {"method": "classic"}, "tracking": {"method": "learned"}}
+    )
     assert cfg.tracking.assoc_threshold == 0.5
+
+
+def test_packaged_model_loads():
+    model = assocnet.load_model(None)
+    assert model.max_dt > 0 and model.max_df > 0
 
 
 def test_cost_mode_keeps_the_rule_based_tracker_with_learned_errors(tmp_path):

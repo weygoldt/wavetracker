@@ -170,7 +170,7 @@ def test_streaming_equals_one_pass():
 
 
 def test_detector_config():
-    assert Config().detector.method == "classic"
+    assert Config.classic().detector.method == "classic"
     cfg = Config.from_dict({"detector": {"method": "learned", "threshold": 0.3}})
     assert cfg.detector.method == "learned" and cfg.detector.threshold == 0.3
     with pytest.raises(ValueError, match="method"):
@@ -190,7 +190,7 @@ def test_pipeline_learned_detector_is_block_independent(synthetic_wav, tmp_path)
     save_model(model, SalienceNet(spec).eval(), spec)
     runs = []
     for block in (60.0, 7.0):
-        cfg = Config()
+        cfg = Config.classic()
         cfg.detector.method = "learned"
         cfg.detector.model = str(model)
         cfg.detector.threshold = 0.2
@@ -703,7 +703,7 @@ def test_pipeline_learned_detector_with_electrodes(synthetic_wav, tmp_path):
     save_model(model, net, spec)
     runs = []
     for block in (60.0, 7.0):
-        cfg = Config()
+        cfg = Config.classic()
         cfg.detector.method = "learned"
         cfg.detector.model = str(model)
         cfg.detector.threshold = 0.2

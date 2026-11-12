@@ -18,8 +18,13 @@ linking:
   model: /home/weygoldt/wrk/data/wavetracker_benchmark/assoc/linker-learned-v1-motion2.npz
   threshold: 0.6
 tracking:
+  method: classic
   gap_tolerance: 0.5
   gap_tolerance_rate: 0.1
   min_identity_salience: 0.75
   min_support: 3
   motion_window: 2.0
+rises:
+  enabled: false
+review:
+  enabled: false

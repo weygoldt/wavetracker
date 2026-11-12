@@ -3,6 +3,13 @@
 All parameters live in a single :class:`Config` made of one dataclass per
 pipeline stage. A config can be written to / read from YAML; unknown keys are
 rejected so typos do not silently fall back to defaults.
+
+Two pipelines share these sections. The default is the learned pipeline
+(:data:`DEFAULT_PIPELINE`: learned detector, learned association, fragment
+linker, rise joiner, review confidences, all with models shipped in
+``wavetracker/models``). A config with ``detector.method: classic`` starts
+from the classic pipeline instead (rule-based harmonic groups and tracker,
+the classic linker): the per-key defaults of the section classes.
 """
 
 from __future__ import annotations
@@ -12,6 +19,23 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+MODELS_DIR = Path(__file__).with_name("models")
+"""Models shipped with wavetracker."""
+
+
+def model_file(path: str | Path | None, default: str | None = None) -> Path:
+    """Resolve a model path of the config: None is the packaged `default`; a
+    path that exists is used as is; a bare file name that does not exist
+    names a model shipped with wavetracker (e.g. ``assocnet.pt``)."""
+    if path is None:
+        if default is None:
+            raise ValueError("no model given")
+        return MODELS_DIR / default
+    p = Path(path).expanduser()
+    if not p.exists() and p.parent == Path(".") and (MODELS_DIR / p.name).exists():
+        return MODELS_DIR / p.name
+    return p
 
 
 def _fast_fft_size(target: float) -> int:
@@ -135,11 +159,13 @@ class DetectorConfig:
     "learned" (a neural network's salience map, see `wavetracker.salience`).
     Both use the fish range harmonic_groups.min_freq/max_freq."""
     model: str | None = None
-    """Learned detector: path to the model file; None uses the packaged model.
-    The spectrogram resolution and frame step must match the model's."""
-    threshold: float = 0.6
-    """Learned detector: minimum salience (0-1) of a detection (0.6 was best
-    for the packaged model on the dense benchmark, lab and field noise)."""
+    """Learned detector: path to the model file; None uses the packaged model
+    (``salience.pt``). The spectrogram resolution and frame step must match
+    the model's."""
+    threshold: float = 0.5
+    """Learned detector: minimum salience (0-1) of a detection (0.5 was best
+    for the packaged model in the default pipeline on the dense benchmark,
+    lab and field noise)."""
     pair_threshold: float | None = None
     """Learned detector with a pair head: minimum pair probability (0-1) at
     which a salience peak becomes two detections, two fish closer than the
@@ -312,7 +338,7 @@ class TrackingConfig:
     above). "learned": a trained network scores the links between detections
     of the next few seconds and a frame-by-frame linking builds the tracks
     (wavetracker.assocnet); of the options above only min_identity_salience
-    applies. Needs assoc_model."""
+    applies."""
     assoc_mode: str = "link"
     """Learned association: "link" builds tracks from the learned links alone
     (frame by frame, links up to the model's horizon of a few seconds); "cost"
@@ -322,7 +348,8 @@ class TrackingConfig:
     learned probability, dropping links below assoc_threshold."""
     assoc_model: str | None = None
     """Weights of the learned association (method "learned"), trained with
-    benchmarks/dense/assocnet.py; not packaged."""
+    benchmarks/dense/assocnet.py; None: the packaged model (``assocnet.pt``,
+    trained on the packaged detector's detections)."""
     assoc_threshold: float = 0.5
     """Learned association: minimum link probability (0-1)."""
     assoc_min_detections: int = 1
@@ -343,8 +370,6 @@ class TrackingConfig:
             raise ValueError(
                 f"tracking.assoc_mode must be 'link' or 'cost', not {self.assoc_mode!r}"
             )
-        if self.method == "learned" and not self.assoc_model:
-            raise ValueError("tracking.method 'learned' needs tracking.assoc_model")
         if not 0.0 <= self.assoc_threshold <= 1.0:
             raise ValueError("tracking.assoc_threshold must be between 0 and 1")
 
@@ -430,7 +455,9 @@ class LinkingConfig:
     min_detections: int = 10
     """Fragments with fewer detections are not joined."""
     model: str | None = None
-    """Path to model weights (.npz); None: the model shipped with wavetracker."""
+    """Path to model weights (.npz); None: the packaged linker of the classic
+    pipeline (``linker.npz``). The default pipeline uses
+    ``linker-assocnet.npz``, trained on the learned association's fragments."""
 
 
 @dataclass
@@ -577,15 +604,16 @@ class ReviewConfig:
     fragment linker and the rise joiner) and every rejected candidate join
     gets the probability that the result is right there, and the places
     most likely wrong are written to ``review.json`` in the results
-    directory, with a suggested fix. Off by default; the identities do not
-    depend on it."""
+    directory, with a suggested fix. On in the default pipeline, off in the
+    classic one; the identities do not depend on it."""
 
     enabled: bool = False
     model: str | None = None
     """Calibrated confidence models (.npz, fitted on benchmark truth by
-    ``benchmarks/dense/review.py fit``; fitted for one pipeline). None: the
-    stages' own scores (linker probability, mean salience, ...), not
-    calibrated (``review.json`` then says ``"calibration": null``)."""
+    ``benchmarks/dense/review.py fit``; fitted for one pipeline: the default
+    pipeline uses the packaged ``review-assocnet.npz``). None: the stages'
+    own scores (linker probability, mean salience, ...), not calibrated
+    (``review.json`` then says ``"calibration": null``)."""
     missed_joins: bool = True
     """Also flag pairs of identities that were candidates for a join but
     were not joined (action: merge)."""
@@ -734,22 +762,81 @@ YAML_HEADER = """\
 """
 
 
+DEFAULT_PIPELINE: dict[str, dict[str, Any]] = {
+    "detector": {"method": "learned"},
+    "harmonic_groups": {
+        "low_thresh_factor": 4.0,
+        "high_thresh_factor": 7.0,
+        "min_group_size": 2,
+    },
+    "tracking": {
+        "method": "learned",
+        "assoc_threshold": 0.7,
+        "assoc_min_detections": 10,
+        "min_identity_salience": 0.75,
+    },
+    "linking": {
+        "threshold": 0.6,
+        "max_parallel": 0.6,
+        "max_shared": 0.3,
+        "model": "linker-assocnet.npz",
+    },
+    "rises": {"enabled": True},
+    "review": {"enabled": True, "model": "review-assocnet.npz"},
+}
+"""The default pipeline: where it differs from the per-key defaults of the
+sections (which are the classic pipeline). The learned detector at threshold
+0.5 (``salience.pt``), the learned association (``assocnet.pt``), the
+fragment linker trained on its fragments, the rise joiner, the identity
+salience filter and calibrated review confidences. On the dense benchmark
+(51 dev mixtures, ``benchmarks/dense/configs/learned-assocnet.yaml``) IDF1
+0.783 / 0.776 (lab / field noise) against 0.635 / 0.598 for the classic
+pipeline (``dense-linked.yaml``); see docs/benchmarks.md."""
+
+SECTIONS: dict[str, type] = {
+    "spectrogram": SpectrogramConfig,
+    "detector": DetectorConfig,
+    "clicks": ClickConfig,
+    "interference": InterferenceConfig,
+    "harmonic_groups": HarmonicGroupsConfig,
+    "tracking": TrackingConfig,
+    "stitching": StitchingConfig,
+    "linking": LinkingConfig,
+    "rises": RisesConfig,
+    "pairs": PairsConfig,
+    "review": ReviewConfig,
+    "output": OutputConfig,
+    "position_merging": PositionMergingConfig,
+}
+
+
+def _default(name: str):
+    return lambda: SECTIONS[name](**DEFAULT_PIPELINE.get(name, {}))
+
+
 @dataclass
 class Config:
-    spectrogram: SpectrogramConfig = field(default_factory=SpectrogramConfig)
-    detector: DetectorConfig = field(default_factory=DetectorConfig)
-    clicks: ClickConfig = field(default_factory=ClickConfig)
-    interference: InterferenceConfig = field(default_factory=InterferenceConfig)
-    harmonic_groups: HarmonicGroupsConfig = field(default_factory=HarmonicGroupsConfig)
-    tracking: TrackingConfig = field(default_factory=TrackingConfig)
-    stitching: StitchingConfig = field(default_factory=StitchingConfig)
-    linking: LinkingConfig = field(default_factory=LinkingConfig)
-    rises: RisesConfig = field(default_factory=RisesConfig)
-    pairs: PairsConfig = field(default_factory=PairsConfig)
-    review: ReviewConfig = field(default_factory=ReviewConfig)
-    output: OutputConfig = field(default_factory=OutputConfig)
+    """The whole configuration. ``Config()`` is the default (learned)
+    pipeline, ``Config.classic()`` the classic one; ``from_dict`` / ``load``
+    start from the classic pipeline if ``detector.method`` is "classic" and
+    from the default one otherwise."""
+
+    spectrogram: SpectrogramConfig = field(default_factory=_default("spectrogram"))
+    detector: DetectorConfig = field(default_factory=_default("detector"))
+    clicks: ClickConfig = field(default_factory=_default("clicks"))
+    interference: InterferenceConfig = field(default_factory=_default("interference"))
+    harmonic_groups: HarmonicGroupsConfig = field(
+        default_factory=_default("harmonic_groups")
+    )
+    tracking: TrackingConfig = field(default_factory=_default("tracking"))
+    stitching: StitchingConfig = field(default_factory=_default("stitching"))
+    linking: LinkingConfig = field(default_factory=_default("linking"))
+    rises: RisesConfig = field(default_factory=_default("rises"))
+    pairs: PairsConfig = field(default_factory=_default("pairs"))
+    review: ReviewConfig = field(default_factory=_default("review"))
+    output: OutputConfig = field(default_factory=_default("output"))
     position_merging: PositionMergingConfig = field(
-        default_factory=PositionMergingConfig
+        default_factory=_default("position_merging")
     )
 
     def to_dict(self) -> dict[str, Any]:
@@ -769,21 +856,31 @@ class Config:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> Config:
+        """Build a config from (partial) sections: missing keys come from the
+        classic pipeline if ``detector.method`` is "classic", otherwise from
+        the default pipeline (`DEFAULT_PIPELINE`)."""
         data = data or {}
-        sections = {f.name: f for f in fields(cls)}
-        unknown = set(data) - set(sections)
+        unknown = set(data) - set(SECTIONS)
         if unknown:
             raise ValueError(f"Unknown config section(s): {sorted(unknown)}")
+        classic = (data.get("detector") or {}).get("method") == "classic"
+        base = {} if classic else DEFAULT_PIPELINE
         kwargs = {}
-        for name, f in sections.items():
-            section_cls = f.default_factory  # type: ignore[misc]
+        for name, section_cls in SECTIONS.items():
             values = data.get(name) or {}
             valid = {sf.name for sf in fields(section_cls)}
             bad = set(values) - valid
             if bad:
                 raise ValueError(f"Unknown key(s) in '{name}': {sorted(bad)}")
-            kwargs[name] = section_cls(**values)
+            kwargs[name] = section_cls(**(base.get(name, {}) | values))
         return cls(**kwargs)
+
+    @classmethod
+    def classic(cls) -> Config:
+        """The classic pipeline: rule-based harmonic groups and tracker, the
+        classic fragment linker (the defaults of wavetracker before the
+        learned pipeline)."""
+        return cls.from_dict({"detector": {"method": "classic"}})
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> Config:

@@ -123,7 +123,7 @@ def test_detect_split_equals_concatenated(synthetic_wav, tmp_path):
     whole = _write(tmp_path / "whole.wav", data, "2022-05-10T10:00:00")
     pa = _write(tmp_path / "p1.wav", data[:cut], "2022-05-10T10:00:00")
     pb = _write(tmp_path / "p2.wav", data[cut:], "2022-05-10T12:00:00")
-    cfg = Config()
+    cfg = Config.classic()
     ref = detect(whole, tmp_path / "ref", cfg, device="cpu").results
     res = detect([pa, pb], tmp_path / "split", cfg, device="cpu").results
     np.testing.assert_array_equal(res.fund_v, ref.fund_v)

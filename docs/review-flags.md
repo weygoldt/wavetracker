@@ -82,8 +82,8 @@ on dev and how much review they save.
 
 | key | default | meaning |
 |---|---|---|
-| `enabled` | `false` | keep the evidence and write `review.json`; the identities are the same with it on or off |
-| `model` | `null` | path of the `ReviewModel` (.npz); null: raw scores, uncalibrated |
+| `enabled` | `true` (classic pipeline: `false`) | keep the evidence and write `review.json`; the identities are the same with it on or off |
+| `model` | `review-assocnet.npz` (classic: `null`) | path of the `ReviewModel` (.npz), or the name of a shipped one; null: raw scores, uncalibrated. The shipped model is calibrated for the default pipeline only |
 | `missed_joins` | `true` | also flag rejected candidate joins |
 | `min_missed_prob` | `0.05` | ... with at least this linker probability |
 | `max_confidence` | `null` | write only items below this confidence (null: all) |

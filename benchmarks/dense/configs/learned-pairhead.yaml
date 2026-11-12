@@ -24,8 +24,11 @@ rises:
 pairs:
   enabled: true
 tracking:
+  method: classic
   gap_tolerance: 0.5
   gap_tolerance_rate: 0.1
   min_identity_salience: 0.75
   min_support: 3
   motion_window: 2.0
+review:
+  enabled: false

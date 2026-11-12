@@ -1348,7 +1348,18 @@ By scenario (`learned-assocnet`) the gain is largest in ladders (+0.015 to
 +0.013]). Lower thresholds than 0.5 are untested; the association network
 and the linker of `learned-assocnet` were trained on 0.6 detections and
 were not retrained. Both configs now use 0.5 with review models refitted
-for it (see "Review confidence", refit for threshold 0.5). Figures:
+for it (see "Review confidence", refit for threshold 0.5).
+
+**This is wavetracker's default pipeline** (2026-11-12): `Config()` equals
+`learned-assocnet.yaml` with its models shipped in `wavetracker/models/`
+(`salience.pt` = `B-det-tcn64aug-s0`, `assocnet.pt` and
+`linker-assocnet.npz` = `C-an-v0`, `review-assocnet.npz` =
+`E-cf-assoc-t05`; byte-identical copies). A dense-benchmark run without any
+config reproduces `F-an-t0.5` exactly (checked on `ldev/density-10-s0`:
+detections, identities, IDF1). The classic pipeline is `detector.method:
+classic`; every config in `benchmarks/` was pinned so that its effective
+configuration is unchanged (`dense-linked.yaml` reproduces the previous code
+bit for bit). Figures:
 `figures/learned-rises-t0.6-vs-t0.5-idf1.png`,
 `figures/learned-assocnet-t0.6-vs-t0.5-idf1.png`.
 

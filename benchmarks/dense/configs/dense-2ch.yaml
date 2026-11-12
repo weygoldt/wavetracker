@@ -19,3 +19,5 @@ stitching:
   overlap_tolerance: 1.0
 linking:
   enabled: false  # the rule-based stitching below (the baseline)
+detector:
+  method: classic

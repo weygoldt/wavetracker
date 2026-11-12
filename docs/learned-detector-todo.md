@@ -151,5 +151,7 @@ peak"). The pair head and the electrode branch are built and off by default.
   context may remove them at the source.
 - Check the rise joiner's joins on real grid recordings.
 - Final model: train long on all data (including new recordings when they
-  come), score the `test` split once, then make it the packaged default
-  (`detector.method: learned` still uses v1).
+  come) and score the `test` split once. The step-B detector with the
+  learned association (`learned-assocnet.yaml` at threshold 0.5) is the
+  packaged default since 2026-11-12 (user's request); the `test` split is
+  still unscored.

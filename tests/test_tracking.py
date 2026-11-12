@@ -12,7 +12,7 @@ from .legacy_tracking import freq_tracking_v6
 @pytest.fixture(scope="module")
 def detections(synthetic_wav, tmp_path_factory):
     path, _ = synthetic_wav
-    return detect(path, tmp_path_factory.mktemp("det"), Config(), device="cpu").results
+    return detect(path, tmp_path_factory.mktemp("det"), Config.classic(), device="cpu").results
 
 
 def _same(a, b):
@@ -236,7 +236,7 @@ def test_only_confident_detections_start_identities():
 
 def test_start_threshold_needs_a_salience():
     fund, idx, sign, sal, times, _ = _salience_scene()
-    cfg = Config()
+    cfg = Config.classic()
     cfg.tracking.start_salience = 0.5
     res = Results(fund, idx, sign, np.full(len(fund), np.nan), times)
     with pytest.raises(ValueError, match="sal_v"):
@@ -351,7 +351,7 @@ def test_weak_identities_are_dropped_after_linking():
 
 def test_identity_salience_filter_in_the_pipeline():
     fund, idx, sign, sal, times, label = _salience_scene()
-    cfg = Config()
+    cfg = Config.classic()
     cfg.linking.enabled = False
     res = Results(fund, idx, sign, np.full(len(fund), np.nan), times)
     cfg.tracking.min_identity_salience = 0.5

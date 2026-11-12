@@ -3,3 +3,5 @@
 # range, mains_freq: 0 and min_good_peak_power: null.
 linking:
   enabled: false
+detector:
+  method: classic

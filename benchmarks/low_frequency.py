@@ -27,6 +27,7 @@ from wavetracker.pipeline import detect
 from wavetracker.synthetic import low_frequency_chorus, save_recording, synthesize
 
 FIELD = {
+    "detector": {"method": "classic"},
     "spectrogram": {"nfft": 65536, "overlap_frac": 0.9},
     "interference": {"enabled": False},
     "harmonic_groups": {

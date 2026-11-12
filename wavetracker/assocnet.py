@@ -46,6 +46,8 @@ import torch
 from numba import njit
 from torch import nn
 
+from .config import model_file
+
 EPS = 1e-30
 DB_CLIP = (-40.0, 20.0)
 NODE_FEATURES = [
@@ -468,8 +470,10 @@ def link_edges(
 _MODELS: dict[tuple[str, str], AssocModel] = {}
 
 
-def load_model(path: str | Path, device="cpu") -> AssocModel:
-    key = (str(Path(path).resolve()), str(device))
+def load_model(path: str | Path | None, device="cpu") -> AssocModel:
+    """The model at `path` (None: the packaged ``assocnet.pt``), cached."""
+    path = model_file(path, "assocnet.pt")
+    key = (str(path.resolve()), str(device))
     if key not in _MODELS:
         _MODELS[key] = AssocModel.load(path, device)
     return _MODELS[key]

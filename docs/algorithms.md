@@ -36,8 +36,9 @@ linear in recording length. Deliberate changes:
 
 ## Learned detector
 
-`detector.method: learned` finds fundamentals with a neural network instead
-of spectral peaks and harmonic rules (`wavetracker/salience.py`). Each frame
+`detector.method: learned` (the default) finds fundamentals with a neural
+network instead of spectral peaks and harmonic rules
+(`wavetracker/salience.py`). Each frame
 of the electrode-summed log spectrogram is normalised by its median and
 spread in 100 Hz bands, then read as a *harmonic stack*: on a linear axis
 starting at 0 Hz, harmonic h of bin k is bin h*k, so channel h at candidate k
@@ -52,7 +53,9 @@ classic detections, and the salience is stored as `sal_v`. Blocks are
 evaluated with their neighbours as context, so block boundaries leave no
 trace. The model stores the spectrogram resolution and frame step it was
 trained on; a different resolution is refused. Training and benchmark:
-docs/benchmarks.md, "Learned detector (v1)".
+docs/benchmarks.md, "Learned detector (v1)" and "Detector and association
+together (step B)"; the shipped model (`models/salience.pt`) is the step-B
+detector (`B-det-tcn64aug-s0`), used at threshold 0.5.
 
 **Two fish in one peak (optional; not in the packaged model).** Two
 fundamentals closer than about 1.2 Hz make one peak in the 1.64 s window,
@@ -345,7 +348,9 @@ recording, so identities do not change between chunks. The fragment linker,
 the rise joiner and `min_identity_salience` follow as with the rule-based
 tracker.
 
-The weights are not packaged. `benchmarks/dense/assocnet.py` trains them on
+The shipped weights (`models/assocnet.pt`, run tag `C-an-v0`, with the
+fragment linker retrained on its fragments, `models/linker-assocnet.npz`) are
+the default; `benchmarks/dense/assocnet.py` trains them on
 the benchmark's `ltrain` mixtures: the detections of the learned detector are
 matched to the truth, a link is "same fish" when both ends are on one fish,
 and half of the training crops can also hold the hidden fish of close pairs

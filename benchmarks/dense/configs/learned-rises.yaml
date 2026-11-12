@@ -25,6 +25,7 @@ linking:
 rises:
   enabled: true
 tracking:
+  method: classic
   gap_tolerance: 0.5
   gap_tolerance_rate: 0.1
   min_identity_salience: 0.75

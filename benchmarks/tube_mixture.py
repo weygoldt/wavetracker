@@ -166,7 +166,10 @@ def source_segment(args, source: str, a: float, grid):
     cache = Path(args.cache) / f"{source}_{seg0:.0f}_{seg1:.0f}"
     if not (cache / "fund_v.npy").exists():
         cfg = Config.from_dict(
-            {"harmonic_groups": {"min_freq": 400.0, "max_freq": 1200.0}}
+            {
+                "detector": {"method": "classic"},
+                "harmonic_groups": {"min_freq": 400.0, "max_freq": 1200.0},
+            }
         )
         detect(RAW / source, cache, cfg, start=seg0, duration=seg1 - seg0)
     res = Results.load(cache)

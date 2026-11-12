@@ -10,6 +10,7 @@
 #   (mostly harmonics and clutter).
 # ldev / ldev-field IDF1 0.750 / 0.737 (learned-relinked.yaml: 0.739 / 0.723).
 detector:
+  model: /home/weygoldt/wrk/data/wavetracker_benchmark/salience/v1/last.pt
   method: learned
   threshold: 0.6
 harmonic_groups:
@@ -17,6 +18,7 @@ harmonic_groups:
   high_thresh_factor: 7.0
   min_group_size: 2
 tracking:
+  method: classic
   min_support: 3
   gap_tolerance: 0.5
   gap_tolerance_rate: 0.1
@@ -28,3 +30,7 @@ linking:
   threshold: 0.6
   max_shared: 0.3
   max_parallel: 0.6
+rises:
+  enabled: false
+review:
+  enabled: false

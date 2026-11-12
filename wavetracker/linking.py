@@ -36,7 +36,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import LinkingConfig
+from .config import LinkingConfig, model_file
 
 EPS = 1e-30
 DEFAULT_MODEL = Path(__file__).with_name("models") / "linker.npz"
@@ -493,7 +493,7 @@ class LinkModel:
     @classmethod
     def load(cls, path: str | Path | None = None) -> LinkModel:
         """Load weights; the model shipped with wavetracker if path is None."""
-        path = Path(path) if path is not None else DEFAULT_MODEL
+        path = model_file(path, DEFAULT_MODEL.name)
         with np.load(path) as z:
             n = sum(1 for k in z.files if k.startswith("w"))
             return cls(

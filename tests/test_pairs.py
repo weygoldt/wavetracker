@@ -60,7 +60,7 @@ def _purity(ident, fish):
 
 
 def test_off_by_default_and_unchanged_when_off():
-    assert Config().pairs.enabled is False
+    assert Config.classic().pairs.enabled is False
     # switched on, the pair head's detections come last; the resolver is opt-in
     assert PairsConfig(enabled=True).partners == "fill"
     assert PairsConfig(enabled=True).resolve is False
@@ -147,6 +147,7 @@ def test_pairs_in_the_pipeline(stage):
     )
     cfg = Config.from_dict(
         {
+            "detector": {"method": "classic"},
             "pairs": {"enabled": True, "resolve": True, "stage": stage},
             "linking": {"enabled": False},
         }
@@ -248,6 +249,7 @@ def test_split_partners_do_not_change_the_other_identities():
         )
         cfg = Config.from_dict(
             {
+                "detector": {"method": "classic"},
                 "pairs": {"enabled": True, "resolve": False, "partners": partners},
                 "linking": {"enabled": False},
             }
@@ -314,7 +316,13 @@ def test_long_tracks_of_left_over_partners_become_identities():
         )
         pairs = {"enabled": True, "resolve": False, "partners": "fill"}
         pairs["partner_tracks"] = partner_tracks
-        cfg = Config.from_dict({"pairs": pairs, "linking": {"enabled": False}})
+        cfg = Config.from_dict(
+            {
+                "detector": {"method": "classic"},
+                "pairs": pairs,
+                "linking": {"enabled": False},
+            }
+        )
         track_results(res, cfg)
         return res.ident_v
 
@@ -344,7 +352,9 @@ def test_without_split_flags_fill_tracks_every_detection():
             times=s["times"],
             meta={},
         )
-        track_results(res, Config.from_dict({"pairs": pairs}))
+        track_results(
+            res, Config.from_dict({"detector": {"method": "classic"}, "pairs": pairs})
+        )
         return res.ident_v
 
     np.testing.assert_array_equal(

@@ -160,7 +160,12 @@ def test_pipeline_uses_linker_when_enabled(tmp_path):
     model = tmp_path / "rule.npz"
     RULE.save(model)
     res = Results(fund, idx, sign, np.full(len(fund), np.nan), times, cplx_v=cplx)
-    cfg = Config.from_dict({"linking": {"enabled": True, "model": str(model)}})
+    cfg = Config.from_dict(
+        {
+            "detector": {"method": "classic"},
+            "linking": {"enabled": True, "model": str(model)},
+        }
+    )
     cfg.tracking.max_dt = 5.0  # the 12 s gap breaks the track
     track_results(res, cfg)
     assert len(np.unique(res.ident_v[np.isfinite(res.ident_v)])) == 1

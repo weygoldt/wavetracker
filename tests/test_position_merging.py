@@ -91,7 +91,7 @@ def test_cli(tmp_path):
     sd = simulate_survey(fish, t, pos, n_clutter=5, rng=rng)
     sd.results.save(tmp_path)
     np.savez(tmp_path / "electrodes.npz", time=sd.time, positions=sd.positions)
-    cfg = Config()
+    cfg = Config.classic()
     pm = cfg.position_merging
     pm.reference, pm.water_depth = 2, 1.2
     pm.start_grid, pm.start_headings, pm.start_depths = 4, 4, [0.4]

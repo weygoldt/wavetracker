@@ -367,9 +367,15 @@ def config(
     output: Annotated[
         Path | None, typer.Argument(help="Write the default config here.")
     ] = None,
+    classic: Annotated[
+        bool,
+        typer.Option(
+            "--classic", help="The classic pipeline (detector.method: classic)."
+        ),
+    ] = False,
 ) -> None:
     """Print (or write) the default configuration as YAML."""
-    cfg = Config()
+    cfg = Config.classic() if classic else Config()
     if output is None:
         print(cfg.to_yaml(), end="")
     else:

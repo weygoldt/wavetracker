@@ -8,21 +8,36 @@
 Detect and track the EOD frequencies of individual **wave-type electric fish**
 in long, multi-electrode recordings.
 
-The pipeline:
+The pipeline (the default; the classic one is selected with
+`detector.method: classic`, see [Two pipelines](docs/configuration.md#two-pipelines)):
 
 1. **Spectrogram** – static is removed from the traces, then one-sided power
    spectral densities of every electrode are computed block-wise on the GPU
    with PyTorch (CPU works too). Stationary interference combs are detected
    and removed per electrode.
-2. **Harmonic groups** – peaks of the electrode-summed spectrum are grouped
-   into harmonic series; each group is one fish (parallel numba code).
-3. **Tracking** – detections are linked into identities using their
-   frequency and their amplitude pattern across electrodes
-   ([Raab et al. 2022](https://doi.org/10.3389/fnint.2022.965211)).
+2. **Detection** – a neural network marks the fundamentals in the
+   electrode-summed spectrogram
+   ([Learned detector](docs/algorithms.md#learned-detector)). Classic: peaks
+   are grouped into harmonic series by rules; each group is one fish.
+3. **Tracking** – a second network links detections into tracks using their
+   frequency, salience and amplitude pattern across electrodes
+   ([Learned association](docs/algorithms.md#learned-association)). Classic:
+   the rule-based tracker of
+   [Raab et al. 2022](https://doi.org/10.3389/fnint.2022.965211).
 4. **Linking** – a learned linker joins the track fragments of a fish across
-   rises, dropouts and close neighbours
-   ([Learned linking](docs/algorithms.md#learned-linking)); the earlier
-   rule-based stitching is available with `linking.enabled: false`.
+   dropouts and close neighbours, and identities are joined across rise
+   onsets by their electrode patterns
+   ([Learned linking](docs/algorithms.md#learned-linking),
+   [Joining across rises](docs/algorithms.md#joining-across-rises)).
+5. **Review** – every identity and join gets a calibrated confidence, and
+   `review.json` lists the places most likely wrong with a suggested fix
+   ([Review flags](docs/review-flags.md)).
+
+On the dense benchmark (mixtures of real recordings of fish held out from
+training, in lab and field noise) the default pipeline identifies the fish
+in 78 % of the frames (IDF1) against 64 % for the classic one
+([benchmarks](docs/benchmarks.md#detection-threshold-05)). All its models
+are shipped with wavetracker.
 
 Set the frequency range of your fish (see [Usage](#usage)); the default
 range is a broad catch-all.
@@ -31,8 +46,10 @@ A recording may start long before there is a fish in it, with the electrodes
 still out of the water or in empty water, for seconds or for hours: results for
 a fish [do not depend on what came before](docs/algorithms.md#recordings-without-fish).
 
-It runs at several hundred times realtime on an 11-channel, 20 kHz recording
-(a 4 h recording takes about a minute on an RTX 4080, mostly disk IO).
+The classic pipeline runs at several hundred times realtime on an
+11-channel, 20 kHz recording (a 4 h recording takes about a minute on an RTX
+4080, mostly disk IO); the default pipeline is slower (a network over every
+frame) and benefits most from a GPU.
 
 ## Installation
 
@@ -109,9 +126,9 @@ Post-processing and tools:
 ### Configuration
 
 All parameters live in one YAML file: `wavetracker config cfg.yaml` writes the
-defaults, pass your edited copy with `-c cfg.yaml`. The
-[parameter reference](docs/configuration.md) lists the relevant ones and every
-file in a results directory.
+defaults (`--classic`: the classic pipeline), pass your edited copy with `-c
+cfg.yaml`. The [parameter reference](docs/configuration.md) lists the
+relevant ones and every file in a results directory.
 
 ### Results
 
@@ -132,7 +149,7 @@ for fish in r.ids():
 from wavetracker.config import Config
 from wavetracker.pipeline import detect, track_results
 
-cfg = Config.load("cfg.yaml")  # or Config()
+cfg = Config.load("cfg.yaml")  # or Config(), or Config.classic()
 out = detect("/data/rec", "results/rec", cfg, start=0, duration=600)
 track_results(out.results, cfg)
 out.results.save("results/rec")

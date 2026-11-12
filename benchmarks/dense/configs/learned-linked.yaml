@@ -3,6 +3,7 @@
 # --tag v1, step 5000), packaged as wavetracker/models/salience.pt; the
 # threshold 0.6 is the best on ldev and ldev-field alike (0.4-0.7 tried).
 detector:
+  model: /home/weygoldt/wrk/data/wavetracker_benchmark/salience/v1/last.pt
   method: learned
   threshold: 0.6
 harmonic_groups:
@@ -10,8 +11,18 @@ harmonic_groups:
   high_thresh_factor: 7.0
   min_group_size: 2
 tracking:
+  method: classic
+  min_identity_salience: null
   min_support: 3
   gap_tolerance: 0.5
   gap_tolerance_rate: 0.1
 linking:
+  model: null
+  max_parallel: 0.3
+  max_shared: 0.05
+  threshold: 0.9
   enabled: true
+rises:
+  enabled: false
+review:
+  enabled: false

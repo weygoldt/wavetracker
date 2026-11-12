@@ -5,3 +5,5 @@ harmonic_groups:
   min_good_peak_power: null
 output:
   save_fine_spec: true
+detector:
+  method: classic

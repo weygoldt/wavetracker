@@ -86,7 +86,11 @@ def variants() -> dict[str, dict]:
     rises = yaml.safe_load((HERE / "dense/configs/learned-rises.yaml").read_text())
     rises = _merge(rises, BOAT_SETTINGS)
     v1 = json.loads(json.dumps(rises))
-    v1["detector"] = {"method": "learned", "threshold": 0.6}
+    v1["detector"] = {
+        "method": "learned",
+        "threshold": 0.6,
+        "model": str(DATA / "salience/v1/last.pt"),
+    }
     # learned-rises with the detector fine-tuned with the noise shelf
     shelf = json.loads(json.dumps(rises))
     shelf["detector"]["model"] = str(DATA / "salience/C-bf-shelf-s0/last.pt")
@@ -402,7 +406,7 @@ def main():
 
 MODELS = {
     "rises": DATA / "salience/B-det-tcn64aug-s0/last.pt",
-    "v1": None,
+    "v1": DATA / "salience/v1/last.pt",
 }
 
 
