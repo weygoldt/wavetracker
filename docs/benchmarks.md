@@ -886,7 +886,9 @@ their frequency order through a pair episode unless the slopes before and
 after it say the fish crossed; giving the two detections of one peak their
 own electrode patterns (projected on the patterns of the two fish before the
 peaks merged) instead of the same spectra; and joining pair episodes as a
-unit in the linker.
+unit in the linker. Done in step C ([Keeping two close fish
+apart](#keeping-two-close-fish-apart-step-c)): tracking the pair head's
+detections last lets the oracle beat `learned-rises`.
 
 ### Where the learned pipeline stands (51 dev mixtures)
 
@@ -905,7 +907,142 @@ unit in the linker.
 102 variants); against `learned-b`: +0.019 [+0.015, +0.025] (92 better, 1
 worse); against v1 with the step-B association: +0.027 [+0.022, +0.032].
 Close pairs (two fish in one peak) are limited by association, not by
-detection (see "Two fish in one peak").
+detection (see "Two fish in one peak"); with the pair head's detections
+tracked last (`pairs.enabled`, step C below) a perfect pair head gains
++0.0027 and the real one (`learned-pairhead.yaml`) +0.0005.
+
+### Keeping two close fish apart (step C)
+
+Run tags `C-pt-*`, notes in `$WT_BENCHMARK_DATA/assoc/C-pt-NOTES.md`. All
+comparisons on the 51 dev mixtures (`ldev` + `ldev2`, lab and field) against
+`learned-rises.yaml` (`B-rise-j3:ldev,ref-learned-rises:ldev2`), detections
+fixed (`run.py retrack`, `pair_oracle.py`; retracking reproduces
+`learned-rises` exactly).
+
+**Labels: each fish's own SNR.** The truth's `snr_db` is the mixture's power
+at a fish's bin (the largest of +-1 bin of 0.61 Hz) over the noise, so a fish
+within about 1.2 Hz of another gets the power of both: of the fish frames with
+another fundamental closer than 1.2 Hz (lab), 94 % read >= 6 dB, but only
+83 % are >= 6 dB on their own and in 73 % the weaker fish of the pair is.
+`benchmarks/dense/own_snr.py` writes a sidecar `truth_own_snr.npz` per
+mixture (`truth.npz` stays as it is): a fish's power is taken from the
+samples where it is clear (no fundamental or harmonic 1-5 of another fish
+within 3 Hz) and interpolated in time in between, with the gain the mixture
+applied to it (common and electrode gains, known exactly) removed and put
+back, over the variant's own noise. Hiding blocks of clear samples and
+predicting them gives a median error of 2.0 / 2.6 / 3.0 / 3.2 dB for 5 / 15 /
+30 / 60 s blocks, unbiased. `benchmarks/dense/pair_strata.py` scores runs by
+the distance to the nearest other fundamental (< 0.6, 0.6-1.2, 1.2-3,
+>= 3 Hz) and the weaker fish's own SNR (`score`, `report`, `compare` with a
+paired bootstrap over mixtures), and the outcome of every truth pair episode
+(< 1.2 Hz for at least 1 s): does each fish leave it on the identity it
+entered with (kept), on its partner's (swapped), or on another? Figure:
+`figures/C-pt-own-snr.png`.
+
+`learned-rises`, pairs whose weaker fish is >= 6 dB on its own:
+
+| partner | recall | own identity | both on own identities | switches / fish / min |
+|---|---|---|---|---|
+| < 0.6 Hz | 0.475 | 0.312 | 0.001 | 2.6 |
+| 0.6-1.2 Hz | 0.532 | 0.390 | 0.055 | 2.0 |
+| 1.2-3 Hz | 0.821 | 0.688 | 0.497 | 0.7 |
+| >= 3 Hz | 0.949 | 0.919 | 0.814 | 0.2 |
+
+and 80 % of the fish keep their identity through a pair episode (8 % swap).
+
+**Why a perfect pair head lost.** `pair_oracle.py` through `learned-rises`
+(every hidden fish of a close pair added from the truth): -0.0166 [-0.0246,
+-0.0093], better in 27 of 102 variants, worse in 59 (`crowded` -0.066). The
+fish in pairs do gain (own identity +0.058 below 0.6 Hz, +0.084 at
+0.6-1.2 Hz), but they leave the episodes on the wrong identity: kept 0.80 ->
+0.63, swapped 0.08 -> 0.18 (episodes of 10 s or more: kept 0.73 -> 0.48), and
+then lose their identity *away* from pairs: -0.093 at 1.2-3 Hz, -0.016 at
+>= 3 Hz, where most frames are. Inside the pairs the identities flip frame by
+frame (switches below 0.6 Hz 2.6 -> 34 per fish and minute). In `crowded`,
+three fish weave within 1-1.5 Hz of each other for a minute at a time, and
+the tracker, following frequency continuity, wanders between them
+(`figures/C-pt-example-crowded-30-s0.png`); in a synthetic split peak (a
+strong and a weaker fish with the strong one's spectra, eight others) it
+keeps the two apart at 0.6 Hz and more, and tosses a coin at 0.1-0.3 Hz.
+
+**The pair head's detections last** (`pairs.partners: fill`,
+[algorithms](algorithms.md#two-fish-in-one-peak-the-pair-heads-detections)).
+The detector flags the second detection of a split peak (`Results.split_v`);
+tracking, linking and the rise joiner run without them, then identities grow
+into their gaps through them (steps of at most 2 s and 0.4 Hz from the
+identity's latest detection, forward and backward in time). Every other
+detection keeps the identity it had. Taking *any* two detections closer than
+1.2 Hz for a split instead (the first version) also held back neighbours the
+detector resolves (0.09 % of `learned-b`'s detections): -0.0030 [-0.0056,
+-0.0009] on `ldev` without a pair head, hence the flag.
+
+IDF1 against `learned-rises` (b - a, 95 % CI over mixtures, lab and field
+variants of the 51 mixtures; better / worse of 102):
+
+| detections | splits tracked like any detection | `pairs.enabled` (fill) |
+|---|---|---|
+| perfect pair head (`pair_oracle.py`) | -0.0166 [-0.0246, -0.0093], 27 / 59 | **+0.0027 [+0.0017, +0.0040], 64 / 10** |
+| pair head `B-pair-fz-s0`, `pair_threshold` 0.3 | -0.0033 [-0.0065, -0.0005], 22 / 76 | +0.0005 [+0.0001, +0.0009], 46 / 52 |
+| the same, `pair_threshold` 0.5 | +0.0018 [-0.0000, +0.0040], 47 / 31 | +0.0004 [+0.0002, +0.0006], 59 / 16 |
+| the same, `pair_threshold` 0.15 | -0.0322 [-0.0419, -0.0232], 11 / 91 | -0.0027 [-0.0037, -0.0017], 16 / 86 |
+| `learned-b` (no pair head) | 0 | 0 (identical: no flags) |
+
+With the perfect pair head, fill gains in every scenario group (`crowded`
++0.011, density +0.002, attenuation +0.001, low frequencies +0.003) and on
+`ldev2` as on `ldev` (+0.0038 / +0.0026 lab / field; the fill settings were
+chosen on `ldev`). Fish in pairs gain their own identity (below 0.6 Hz +0.089,
+0.6-1.2 Hz +0.123; both fish on their own identities 0.001 -> 0.165 and
+0.055 -> 0.281) and fish away from pairs lose nothing (1.2-3 Hz and >= 3 Hz:
+0.000); 79 % still leave an episode on the identity they entered with.
+Purity falls by 0.002, switches per fish and minute rise from 0.26 to 0.48
+(second detections closer to the other fish than to their own count as
+switches). The real pair head finds about a tenth of the hidden fish: at
+`pair_threshold` 0.3 it adds 0.6 % detections, 68 % of them on a fish; fill
+takes 29 % of them, 96 % of those on a fish. The gain inside pairs remains
+(0.6-1.2 Hz: own identity +0.048, both fish on their own +0.088) and the
+loss away from pairs that tracking the splits caused (1.2-3 Hz -0.020,
+>= 3 Hz -0.005) is gone, so the pair head no longer costs IDF1 but gains
+little (`crowded` +0.003, 12 of 12 better). Its value is now set by how many
+hidden fish it finds. At 0.5 it adds 0.1 % detections (91 % on a fish; fill
+takes half, 99 % of those on a fish): tracked, those few splits move the
+chaotic tracker by +0.0018 with a CI that reaches 0; filled, the gain is
+small but holds in every group (`crowded` +0.0015, 12 of 12). At 0.15 the
+splits are 4.3 % of the detections and 60 % false; 9 % of the ones fill
+takes are false, which costs more (purity -0.0012) than the found fish gain.
+`configs/learned-pairhead.yaml` is `learned-rises.yaml` with the pair head
+(threshold 0.3) and `pairs.enabled`; without a pair head `pairs.enabled`
+changes nothing (no flags), so `learned-rises.yaml` stays the candidate:
++0.0005 does not pay for the pair head. Figures: `figures/C-pt-pairs-oracle.png`,
+`figures/C-pt-pairs-head.png`, `figures/C-pt-compare-oracle-fill.png`,
+`figures/C-pt-compare-pairhead-fill.png`.
+
+**What did not help.**
+
+- *Deciding pair episodes by electrode patterns* (`pairs.resolve`): for every
+  episode of two identities closer than 2 Hz, compare their patterns from
+  clear detections before and after it and swap their futures if the fish
+  fit better exchanged. Tracking every split, it recovered 0.0035 of the
+  oracle's 0.017 on `ldev`; only 5 % of the identity-pair episodes have four
+  clear patterns (40 % with clear meaning 1.2 Hz), and of those the truth can
+  score, about one in ten is a clean swap: most are both identities mixed on
+  both fish, which a swap cannot fix. On `learned-b`'s detections it lost
+  0.0007-0.0020 (after the tracker, after linking, with or without ordering
+  the detections inside the episode by frequency).
+- *Interpolating* an identity's path across its gap instead of growing it
+  (+0.0006..+0.0016 offline on the oracle), larger steps (0.7 Hz: more fills,
+  lower purity), assigning the peak and its second detection jointly (no
+  gain), joining identities whose growth meets (no candidates).
+- *Tracks of the left-over second detections as identities*
+  (`pairs.partner_tracks`, 60 s): oracle +0.0036 [+0.0020, +0.0054], but
+  against fill alone +0.0009 [-0.0009, +0.0028], 26 better and 29 worse
+  (`crowded` -0.008, attenuation +0.004): those tracks wander from one hidden
+  fish to the next. Off.
+
+The ceiling of filling (every second detection to its fish's identity where
+that identity has no detection in the frame) is +0.010 / +0.011 on `ldev`;
+growth gets +0.002. Half of what is left belongs to fish hidden for more than
+30 s, whose identity is far away by then: joining across long episodes is the
+linker's job, with features that know the episode.
 
 ## Learned fragment linking
 
