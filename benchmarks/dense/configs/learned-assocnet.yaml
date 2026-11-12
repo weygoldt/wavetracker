@@ -10,7 +10,9 @@
 # 51 dev mixtures (ldev + ldev2), lab / field: IDF1 0.776 / 0.769 against
 # 0.766 / 0.759 for learned-rises (+0.0099 [+0.0042, +0.0162]), 41 % fewer
 # identity switches; against the rule-based tracker with a linker retrained the
-# same way +0.0092 [+0.0036, +0.0154].
+# same way +0.0092 [+0.0036, +0.0154]. Threshold and minimum track length were
+# chosen with this network; a second seed (C-an-v0s1) gains +0.0038
+# [-0.0008, +0.0086], the mean of both +0.0068 [+0.0022, +0.0120].
 detector:
   method: learned
   threshold: 0.6

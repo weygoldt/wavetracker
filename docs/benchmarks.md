@@ -908,7 +908,9 @@ worse); against v1 with the step-B association: +0.027 [+0.022, +0.032].
 Close pairs (two fish in one peak) are limited by association, not by
 detection (see "Two fish in one peak"). The learned association
 (`learned-assocnet.yaml`, see below) adds +0.0099 [+0.0042, +0.0162] to
-`learned-rises` (72 better, 30 worse) with 41 % fewer identity switches.
+`learned-rises` (72 better, 30 worse; a second network seed +0.0038
+[-0.0008, +0.0086], the mean of both +0.0068 [+0.0022, +0.0120]) with 41 %
+fewer identity switches.
 
 ### Learned association (step C)
 
@@ -963,7 +965,19 @@ identities >= 30 s per mixture. Against the control: crowded +0.043
 [+0.021, +0.066] (11 of 12 better), density +0.007, lowfreq +0.006 [+0.001,
 +0.014], atten +0.003; `ldev` +0.005 (15 of 17 better), `ldev2` +0.011.
 Retraining the linker alone (the control) changes nothing; the gain is the
-association's. A threshold of 0.3 was worse (-0.009 against 0.5 on 40
+association's.
+
+The threshold and the minimum track length were chosen with this network
+(seed 0). A second network (seed 1, `C-an-v0s1`, its own linker, the same
+settings) gains less: +0.0038 [-0.0008, +0.0086] against `learned-rises`
+(70 better, 32 worse; lab +0.005, field +0.002), +0.0031 [-0.0025,
++0.0085] against the control, -0.0061 [-0.0107, -0.0019] against seed 0
+(crowded -0.028). The mean of the two seeds is +0.0068 [+0.0022, +0.0120]
+against `learned-rises` (within scenarios [+0.0031, +0.0109]) and +0.0061
+[+0.0011, +0.0116] against the control. The fewer switches hold for both
+seeds (0.26 -> 0.15, 93 better, 4 worse), as does the purity (+0.004
+[+0.001, +0.008]). A linker retrained on the fragments of threshold 0.7
+instead of 0.5 changes nothing (-0.0004 [-0.0037, +0.0025]). A threshold of 0.3 was worse (-0.009 against 0.5 on 40
 variants); 0.7 gains mostly in `crowded` and leaves many short tracks
 between a fish's long ones (their switches with identities of < 10
 detections went from 98 to 336 on three mixtures, while switches between

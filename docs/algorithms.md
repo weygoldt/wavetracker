@@ -352,9 +352,9 @@ and half of the training crops can also hold the hidden fish of close pairs
 (two detections of one peak with the same spectra), so that the network
 learns to keep them apart. On the dense benchmark (threshold 0.7, tracks
 of fewer than 10 detections unassigned, a fragment linker retrained on its
-fragments) it raises IDF1 by 0.009 over the rule-based tracker with a linker
-retrained the same way, most in crowded scenes, with 41 % fewer identity
-switches (see [benchmarks](benchmarks.md#learned-association-step-c)).
+fragments) it raises IDF1 by 0.006 over the rule-based tracker with a linker
+retrained the same way (mean of two network seeds: 0.009 and 0.003), most in
+crowded scenes, with 41 % fewer identity switches (see [benchmarks](benchmarks.md#learned-association-step-c)).
 `assoc_mode: cost` was worse than the rule-based tracker there.
 
 ## Recordings without fish
