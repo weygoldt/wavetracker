@@ -47,7 +47,7 @@ from pathlib import Path
 import numpy as np
 
 from .config import Config
-from .linking import _pattern, _pattern_distance
+from .linking import _pattern, _pattern_distance, parallel_evidence
 
 VERSION = 1
 EPS = 1e-12
@@ -133,7 +133,10 @@ class Item:
     """Detections involved: the two sides of a join or missed join (the
     later side second), the identity of a track."""
     k: int = -1
-    """Frame where a split cuts (frames >= k of the identity's later side)."""
+    """First frame of a join's later side at the junction."""
+    fragments: tuple = ()
+    """Fragments (tracker identities, `Trace.frag_v`) of a join's later side:
+    a split gives the identity's detections on them a new id."""
 
     @property
     def kind(self) -> str:
@@ -213,6 +216,7 @@ ASSOC = [
     "assoc_q05",
     "assoc_alt",  # mean best link into it from another track
 ]
+RAW = ["raw_logit"]  # every item: the logit of its raw score
 FEATURES = {
     "join_linker": SIDE + LINKER,
     "join_rise": SIDE + RISE,
@@ -326,7 +330,6 @@ def _parallel(da: _Dets, ra, rb, max_dt=0.3, df=3.0) -> tuple[float, float]:
     if not len(fa) or not len(fb):
         return 0.0, 0.0
     shared = len(np.intersect1d(fa, fb, assume_unique=True)) / min(len(fa), len(fb))
-    from .linking import parallel_evidence
 
     oa, ob = np.argsort(da.t[ra], kind="stable"), np.argsort(da.t[rb], kind="stable")
     n_par, n_near = parallel_evidence(
@@ -542,6 +545,7 @@ def build_items(
                 int(min(len(ra), len(rb))),
                 (ra, rb),
                 k,
+                tuple(float(x) for x in np.unique(frag[rb][np.isfinite(frag[rb])])),
             )
         )
 
@@ -615,6 +619,8 @@ def build_items(
             cfg,
             linker_x if lk_ok else None,
         )
+    for it in out:  # the raw score as a feature (a model may only map it)
+        it.x["raw_logit"] = float(_logit(it.raw))
     return out
 
 
@@ -865,6 +871,7 @@ def report(
         }
         if it.action == "split":
             d["k"] = int(it.k)
+            d["fragments"] = [float(x) for x in it.fragments]
         rows.append(d)
     return {"version": VERSION, "calibration": calibration, "items": rows}
 

@@ -610,8 +610,13 @@ def track_results(results: Results, cfg: Config) -> float:
     if trace is not None:
         t1 = time.perf_counter()
         results.review = review(results, trace, cfg)[0]
+        results.frag_v = trace.frag_v
         results.meta["timings"]["review"] = time.perf_counter() - t1
         results.meta["review_config"] = vars(cfg.review)
+    else:  # nothing left over from an earlier tracking with review
+        results.review = None
+        results.frag_v = None
+        results.meta.pop("review_config", None)
     results.meta["tracking_config"] = vars(cfg.tracking)
     results.meta["stitching_config"] = vars(cfg.stitching)
     results.meta["linking_config"] = vars(cfg.linking)

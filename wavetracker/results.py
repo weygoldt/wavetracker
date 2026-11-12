@@ -20,6 +20,8 @@ post-processing tools and audian's wavetracker plugin):
 ``fine_*.npy``      optional full-resolution spectrogram (time x freq, power)
 ``wavetracker.json`` metadata: input, config, thresholds, timings, version
 ``review.json``     optional: confidences and review flags (wavetracker.review)
+``frag_v.npy``      optional: the tracker's fragment of every detection (with
+                    ``review.json``; its splits name fragments)
 =================== ==========================================================
 """
 
@@ -52,6 +54,9 @@ class Results:
     split_v: np.ndarray | None = None
     """Per detection: the second fish of a peak the learned detector's pair
     head split in two (optional; only from models with a pair head)."""
+    frag_v: np.ndarray | None = None
+    """Tracker identity (fragment) of every detection before linking
+    (optional; only with ``review.enabled``, see `wavetracker.review`)."""
     review: dict | None = None
     """Confidences and review flags (`wavetracker.review`), written to
     ``review.json`` (optional; only with ``review.enabled``)."""
@@ -74,6 +79,8 @@ class Results:
             np.save(folder / "sal_v.npy", self.sal_v)
         if self.split_v is not None:
             np.save(folder / "split_v.npy", self.split_v)
+        if self.frag_v is not None:
+            np.save(folder / "frag_v.npy", self.frag_v)
         (folder / META_FILE).write_text(json.dumps(self.meta, indent=2, default=str))
         if self.review is not None:
             (folder / REVIEW_FILE).write_text(json.dumps(self.review, indent=1))
@@ -97,6 +104,8 @@ class Results:
         arrays["sal_v"] = np.load(sal) if sal.exists() else None
         split = folder / "split_v.npy"
         arrays["split_v"] = np.load(split) if split.exists() else None
+        frag = folder / "frag_v.npy"
+        arrays["frag_v"] = np.load(frag) if frag.exists() else None
         meta_file = folder / META_FILE
         meta = json.loads(meta_file.read_text()) if meta_file.exists() else {}
         return cls(**arrays, meta=meta)

@@ -121,6 +121,7 @@ def test_join_item_has_the_two_fragments_as_sides():
     np.testing.assert_array_equal(np.sort(join.rows[0]), np.flatnonzero(frag == 0))
     np.testing.assert_array_equal(np.sort(join.rows[1]), np.flatnonzero(frag == 1))
     assert join.k == idx[frag == 1].min()
+    assert join.fragments == (1.0,)
     assert join.t == pytest.approx(times[join.k])
     assert join.raw > 0.99  # the linker's probability
     assert join.x["logit_p"] > 5
@@ -147,6 +148,38 @@ def test_a_join_cuts_a_chain_into_before_and_after():
         a, b = it.rows
         assert len(a) + len(b) == len(fund)
         assert times[idx[a]].max() < cut <= times[idx[b]].min()
+        np.testing.assert_array_equal(
+            np.sort(b), np.flatnonzero(np.isin(_frag, it.fragments))
+        )
+
+
+def _every(frag, step, offset):
+    """Every `step`-th detection of a fragment from `offset`."""
+    return tuple(x[offset::step] for x in frag)
+
+
+def test_a_split_names_the_fragments_of_the_later_part():
+    # fragment 2 takes the frames fragment 0 misses for 10 s: the joins of
+    # the identity are not a chain in time, and a cut at one frame would
+    # move the wrong detections
+    fund, idx, sign, sal, ident, times, trace, frag = _linked(
+        _every(_fragment(0, 100, 700.0, 0), 2, 0),
+        _fragment(101, 200, 700.1, 1),
+        _every(_fragment(60, 70, 700.05, 2), 2, 1),
+    )
+    assert len(np.unique(ident)) == 1
+    items = _by_group(
+        build_items(fund, idx, sign, sal, ident, times, trace, Config()), "join_linker"
+    )
+    assert len(items) == 2
+    for it in items:
+        a, b = it.rows
+        np.testing.assert_array_equal(
+            np.sort(b), np.flatnonzero(np.isin(frag, it.fragments))
+        )
+        assert not np.isin(frag[a], it.fragments).any()
+    cut_in_time = [it for it in items if (idx[it.rows[0]] >= it.k).any()]
+    assert cut_in_time  # the join of fragment 2: a time cut would also move 0
 
 
 def test_rejected_candidate_is_a_missed_join():
@@ -342,6 +375,12 @@ def test_pipeline_writes_review_json_and_keeps_identities(tmp_path):
     np.testing.assert_array_equal(res.ident_v, plain)
     res.save(tmp_path / "on")
     out = json.loads((tmp_path / "on" / REVIEW_FILE).read_text())
+    back = Results.load(tmp_path / "on")
+    assert back.frag_v is not None and len(back.frag_v) == len(res.fund_v)
+    (join,) = [r for r in out["items"] if r["kind"] == "join"]
+    ident = back.ident_v == join["ids"][0]
+    moved = np.isin(back.frag_v, join["fragments"]) & ident
+    assert moved.sum() + join["impact"] == ident.sum()  # the smaller side stays
     assert out["calibration"] is None
     kinds = sorted(r["kind"] for r in out["items"])
     assert kinds == ["join", "track", "track"]
@@ -349,6 +388,23 @@ def test_pipeline_writes_review_json_and_keeps_identities(tmp_path):
     assert conf == sorted(conf)
     assert res.meta["review_config"]["enabled"] is True
     assert "review" in res.meta["timings"]
+
+
+def test_tracking_again_without_review_drops_the_old_flags(tmp_path):
+    from wavetracker.pipeline import track_results
+
+    res, cfg = _scene(tmp_path)
+    cfg.review.enabled = True
+    track_results(res, cfg)
+    res.save(tmp_path / "a")
+    back = Results.load(tmp_path / "a")
+    assert back.frag_v is not None
+    cfg.review.enabled = False
+    track_results(back, cfg)
+    assert back.review is None and back.frag_v is None
+    assert "review_config" not in back.meta
+    back.save(tmp_path / "b")
+    assert not (tmp_path / "b" / "frag_v.npy").exists()
 
 
 def test_pipeline_uses_the_review_model(tmp_path):
