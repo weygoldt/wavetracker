@@ -3,7 +3,14 @@
 Running list for the `learned-detector` branch (newest first). Results and
 numbers live in `docs/benchmarks.md`.
 
-## Fish whose harmonics are hidden (2026-11-12, boat take DR0000_0209)
+## Fish whose harmonics are hidden (2026-11-12, boat take DR0000_0209) - decided: not pursued
+
+Decision (user, 2026-11-12): do not optimise for fish with no visible
+harmonics; that would re-introduce false tracks of noise bands and stray
+lines. The explanation below is kept for reference; the noise-shelf
+option stays in `salience_train.py`, off by default, and is not part of
+the planned retraining.
+
 
 The strongest fish of the 2-electrode boat take, at 306-309 Hz for the
 whole take (a rise at 289.5 s; absent before immersion), is detected in
@@ -24,7 +31,7 @@ Diagnosis, figures and numbers: `benchmarks/boatfish.py`,
 `$WT_BENCHMARK_DATA/field_check/C-bf-NOTES.md`,
 `$WT_BENCHMARK_DATA/figures/boatfish/`.
 
-Fix for the planned retraining: the noise-shelf augmentation of
+Tried: the noise-shelf augmentation of
 `salience_train.py` (`--shelf-p 0.3 --shelf-db 10,30 --shelf-edge
 150,1200`): white noise above a random edge raises the floor there, so
 fish below the edge lose their harmonics and keep their fundamental.
