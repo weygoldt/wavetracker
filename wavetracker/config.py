@@ -481,6 +481,95 @@ class RisesConfig:
     frames (one fish is detected once per frame)."""
 
 
+PAIRS_STAGES = ("tracking", "linking")
+PAIRS_PARTNERS = ("track", "fill")
+
+
+@dataclass
+class PairsConfig:
+    """Two fish in one spectral peak (see wavetracker.pairs): what to do with
+    the second detections a learned detector's pair head adds to peaks that
+    hide two fish (`partners`), and a pattern-based resolver (`resolve`).
+
+    Resolver: where two identities run closer than `max_df`, a pair episode,
+    the two
+    detections of a shared peak carry the same electrode spectra and the
+    tracker may hand each fish's future to the other. Each episode is
+    decided as a unit: the electrode patterns of the two identities just
+    before and just after it, from detections clear of other lines, say
+    whether the fish left on the identities they entered with; if the
+    exchanged assignment fits better, the two identities swap everything
+    after the episode's closest approach."""
+
+    enabled: bool = False
+    resolve: bool = False
+    """Decide every pair episode by the electrode patterns before and after
+    it (see above)."""
+    partners: str = "fill"
+    """The second detection the learned detector's pair head adds to a peak
+    (`detector.pair_threshold`, flagged in `Results.split_v`), its
+    *partner*: "track" tracks it like any other; "fill" leaves it out of
+    tracking, linking and the rise joiner, so the identities of all other
+    detections are what they would be without it,
+    and then lets the identities grow into their gaps: a partner goes to an
+    identity that has no detection in its frame and whose latest detection
+    (or a partner it took) is at most `fill_gap` before it and `fill_df`
+    away, the closest first, in one sweep forward in time and one backward
+    (ByteTrack's second association: confident detections first, the others
+    only extend identities)."""
+    fill_gap: float = 2.0
+    """Largest step in time from an identity's latest detection to a partner
+    it takes [s] ..."""
+    fill_df: float = 0.4
+    """... and in frequency [Hz]."""
+    partner_tracks: float | None = None
+    """With partners "fill": the partners no identity took are tracked on
+    their own (tracking's settings), and tracks of them that span at least
+    this long become identities [s]: a fish hidden in another's peak for
+    minutes, which the other detections never start. They pass
+    `tracking.min_identity_salience` like any identity. None: off."""
+    stage: str = "linking"
+    """Where: "tracking" (on the tracker's identities, before linking or
+    stitching) or "linking" (after linking and the rise joiner, before
+    `tracking.min_identity_salience`) for the resolver."""
+    max_df: float = 2.0
+    """Two identities with detections in one frame closer than this are in a
+    pair episode [Hz]."""
+    merge_gap: float = 2.0
+    """Close frames of two identities less than this apart are one episode
+    [s]."""
+    clear_df: float = 3.0
+    """Patterns are taken from detections with no other detection in their
+    frame within this [Hz]."""
+    pattern_window: float = 5.0
+    """Patterns: mean power over the clear detections of an identity within
+    this of its last clear detection before the episode, and of its first
+    after it [s] ..."""
+    pattern_reach: float = 30.0
+    """... found at most this far from the episode [s]."""
+    min_pattern: int = 5
+    """Clear detections each of the four patterns needs; otherwise the
+    episode is left as it is."""
+    margin: float = 1.0
+    """Swap only if the exchanged assignment's pattern differences (sum of
+    two rms differences [dB]) are smaller by at least this."""
+    order: bool = False
+    """Also order the detections inside an episode: in frames where both
+    identities have one, the two are given by frequency, in the order the
+    identities had before the episode up to its closest approach and in the
+    order after it from there (two fish that crossed swap order once)."""
+
+    def __post_init__(self):
+        if self.stage not in PAIRS_STAGES:
+            raise ValueError(
+                f"pairs.stage must be one of {PAIRS_STAGES}, not {self.stage!r}"
+            )
+        if self.partners not in PAIRS_PARTNERS:
+            raise ValueError(
+                f"pairs.partners must be one of {PAIRS_PARTNERS}, not {self.partners!r}"
+            )
+
+
 @dataclass
 class OutputConfig:
     save_fine_spec: bool = False
@@ -630,6 +719,7 @@ class Config:
     stitching: StitchingConfig = field(default_factory=StitchingConfig)
     linking: LinkingConfig = field(default_factory=LinkingConfig)
     rises: RisesConfig = field(default_factory=RisesConfig)
+    pairs: PairsConfig = field(default_factory=PairsConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     position_merging: PositionMergingConfig = field(
         default_factory=PositionMergingConfig

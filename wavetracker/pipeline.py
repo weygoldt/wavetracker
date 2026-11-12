@@ -19,6 +19,7 @@ from .harmonics import Detections, absolute_limit_binds, detect_harmonic_groups
 from .interference import CombCanceller, merge_tooth_neighbours
 from .io import FrameLayout, iter_blocks, open_recording, resolve_input
 from .linking import link
+from .pairs import fill_partners, resolve_pairs
 from .results import Results
 from .rises import join_rises
 from .salience import StreamingSalience
@@ -352,7 +353,7 @@ def detect(
         click_blocks: list[float] = []
         noise_floor = None
         fish_bins = slice(*np.searchsorted(freqs, [hc.min_freq, hc.max_freq]))
-        funds, idxs, signs, cplxs, sals = [], [], [], [], []
+        funds, idxs, signs, cplxs, sals, splits = [], [], [], [], [], []
         streamer = None
         if cfg.detector.method == "learned":
             streamer = StreamingSalience.from_config(
@@ -360,8 +361,9 @@ def detect(
             )
             log.info("Learned detector: %s", streamer.model_info["path"])
 
-        def collect(det, sal, first_frame, log_np, power, stft, teeth):
-            """Store detections of one block with their electrode spectra."""
+        def collect(det, sal, first_frame, log_np, power, stft, teeth, split=None):
+            """Store detections of one block with their electrode spectra
+            (and, from a pair head, which are the second fish of a peak)."""
             if teeth is not None and len(det.frame):
                 keep = merge_tooth_neighbours(
                     det.frame,
@@ -374,6 +376,7 @@ def detect(
                 )
                 det = Detections(det.frame[keep], det.bin[keep], det.freq[keep])
                 sal = None if sal is None else sal[keep]
+                split = None if split is None else split[keep]
             if len(det.frame):
                 b = torch.from_numpy(det.bin).to(dev)
                 fr = torch.from_numpy(det.frame).to(dev)
@@ -383,6 +386,8 @@ def detect(
                 idxs.append(det.frame + first_frame)
                 if sal is not None:
                     sals.append(sal)
+                if split is not None:
+                    splits.append(split)
 
         t_read = time.perf_counter()
         for block in iter_blocks(data, layout, frames_per_block, channels):
@@ -460,21 +465,27 @@ def detect(
                     stft[:, :k].clone(),
                     teeth,
                 )
-                for (fr, b, f, s), pl in streamer.push(
+                for det, pl in streamer.push(
                     streamer.features(log_spec, stft), payload
                 ):
-                    collect(Detections(fr, b, f), s, *pl)
+                    collect(Detections(*det[:3]), det[3], *pl, *det[4:])
             del stft, power, summed, log_spec
             t_read = time.perf_counter()
             timings.detection += t_read - t1
             if progress:
                 progress(block.first_frame + block.n_frames, n_frames)
         if streamer is not None:
-            for (fr, b, f, s), pl in streamer.finish():
-                collect(Detections(fr, b, f), s, *pl)
+            for det, pl in streamer.finish():
+                collect(Detections(*det[:3]), det[3], *pl, *det[4:])
 
     fund_v = np.concatenate(funds) if funds else np.empty(0)
     sal_v = np.concatenate(sals) if sals else np.empty(0, np.float32)
+    has_pair_head = streamer is not None and streamer.spec.pair_head
+    split_v = (
+        (np.concatenate(splits) if splits else np.zeros(0, bool))
+        if has_pair_head
+        else None
+    )
     idx_v = np.concatenate(idxs).astype(np.int64) if idxs else np.empty(0, np.int64)
     sign_v = (
         np.concatenate(signs).astype(np.float32)
@@ -540,9 +551,27 @@ def detect(
         meta,
         cplx_v=cplx_v,
         sal_v=sal_v,
+        split_v=split_v,
     )
     results.save(output_dir)
     return DetectionOutput(results, timings)
+
+
+def _subset(results: Results, keep: np.ndarray) -> Results:
+    def sel(v):
+        return None if v is None else v[keep]
+
+    return Results(
+        fund_v=results.fund_v[keep],
+        idx_v=results.idx_v[keep],
+        sign_v=results.sign_v[keep],
+        ident_v=results.ident_v[keep],
+        times=results.times,
+        meta=results.meta,
+        cplx_v=sel(results.cplx_v),
+        sal_v=sel(results.sal_v),
+        split_v=sel(results.split_v),
+    )
 
 
 def track_results(results: Results, cfg: Config) -> float:
@@ -550,6 +579,78 @@ def track_results(results: Results, cfg: Config) -> float:
     t0 = time.perf_counter()
     if cfg.tracking.min_identity_salience is not None and results.sal_v is None:
         raise ValueError(_no_salience("min_identity_salience"))
+    if cfg.pairs.enabled and cfg.pairs.partners == "fill":
+        # the pair head's second detections last: the others are tracked
+        # without them (none without a pair head)
+        partner = (
+            np.zeros(len(results.fund_v), bool)
+            if results.split_v is None
+            else np.asarray(results.split_v, bool)
+        )
+        sub = _subset(results, ~partner)
+        _identities(sub, cfg)
+        ident = np.full(len(results.fund_v), np.nan)
+        ident[~partner] = sub.ident_v
+        ident = fill_partners(
+            results.fund_v, results.idx_v, ident, partner, results.times, cfg.pairs
+        )
+        if cfg.pairs.partner_tracks is not None:
+            ident = _partner_tracks(results, ident, partner, cfg)
+        results.ident_v = ident
+    else:
+        _identities(results, cfg)
+    dt = time.perf_counter() - t0
+    results.meta.setdefault("timings", {})["tracking"] = dt
+    results.meta["tracking_config"] = vars(cfg.tracking)
+    results.meta["stitching_config"] = vars(cfg.stitching)
+    results.meta["linking_config"] = vars(cfg.linking)
+    if cfg.rises.enabled:
+        results.meta["rises_config"] = vars(cfg.rises)
+    if cfg.pairs.enabled:
+        results.meta["pairs_config"] = vars(cfg.pairs)
+    return dt
+
+
+def _partner_tracks(results: Results, ident, partner, cfg: Config):
+    """Long tracks of the partners left over become identities (see
+    PairsConfig.partner_tracks)."""
+    left = partner & ~np.isfinite(ident)
+    if left.sum() < 2:
+        return ident
+    sub = _subset(results, left)
+    tid = track(
+        sub.fund_v,
+        sub.idx_v,
+        sub.sign_v,
+        sub.times,
+        cfg.tracking,
+        min_freq=cfg.harmonic_groups.min_freq,
+        max_freq=cfg.harmonic_groups.max_freq,
+        sal_v=sub.sal_v,
+    )
+    dt = float(results.times[1] - results.times[0])
+    ok = np.isfinite(tid)
+    if not ok.any():
+        return ident
+    labels, inv = np.unique(tid[ok], return_inverse=True)
+    lo = np.full(len(labels), np.iinfo(np.int64).max)
+    hi = np.full(len(labels), np.iinfo(np.int64).min)
+    np.minimum.at(lo, inv, sub.idx_v[ok])
+    np.maximum.at(hi, inv, sub.idx_v[ok])
+    long = (hi - lo) * dt >= cfg.pairs.partner_tracks
+    new = np.full(len(tid), np.nan)
+    top = np.nanmax(ident) + 1 if np.isfinite(ident).any() else 0.0
+    new[np.flatnonzero(ok)[long[inv]]] = top + inv[long[inv]]
+    if cfg.tracking.min_identity_salience is not None:
+        new = drop_weak_identities(new, sub.sal_v, cfg.tracking.min_identity_salience)
+    out = ident.copy()
+    out[np.flatnonzero(left)] = new
+    return out
+
+
+def _identities(results: Results, cfg: Config) -> None:
+    """Tracking, linking (or stitching), the rise joiner, the pair resolver
+    and the identity salience filter, in place."""
     results.ident_v = track(
         results.fund_v,
         results.idx_v,
@@ -561,6 +662,19 @@ def track_results(results: Results, cfg: Config) -> float:
         sal_v=results.sal_v,
         cplx_v=results.cplx_v,
     )
+
+    def pairs(stage):
+        if cfg.pairs.enabled and cfg.pairs.resolve and cfg.pairs.stage == stage:
+            results.ident_v = resolve_pairs(
+                results.fund_v,
+                results.idx_v,
+                results.sign_v,
+                results.ident_v,
+                results.times,
+                cfg.pairs,
+            )
+
+    pairs("tracking")
     if cfg.linking.enabled:
         results.ident_v = link(
             results.fund_v,
@@ -590,15 +704,8 @@ def track_results(results: Results, cfg: Config) -> float:
             cfg.rises,
             sal_v=results.sal_v,
         )
+    pairs("linking")
     if cfg.tracking.min_identity_salience is not None:
         results.ident_v = drop_weak_identities(
             results.ident_v, results.sal_v, cfg.tracking.min_identity_salience
         )
-    dt = time.perf_counter() - t0
-    results.meta.setdefault("timings", {})["tracking"] = dt
-    results.meta["tracking_config"] = vars(cfg.tracking)
-    results.meta["stitching_config"] = vars(cfg.stitching)
-    results.meta["linking_config"] = vars(cfg.linking)
-    if cfg.rises.enabled:
-        results.meta["rises_config"] = vars(cfg.rises)
-    return dt

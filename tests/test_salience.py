@@ -415,6 +415,11 @@ def test_decode_splits_a_pair_peak_into_two_detections():
     np.testing.assert_allclose(one[2], np.array([110.2, 124.9]) * DF)
     high = decode(logits, offset, 0.5, 100, DF, pair, poff, 0.95)
     np.testing.assert_allclose(high[2], one[2])
+    # on request, which detections are the added second fish
+    *_, split = decode(logits, offset, 0.5, 100, DF, pair, poff, 0.5, split=True)
+    assert list(split) == [True, False, False]
+    *_, split = decode(logits, offset, 0.5, 100, DF, split=True)
+    assert list(split) == [False, False]
 
 
 def test_decode_does_not_split_a_peak_with_a_close_neighbour():
@@ -482,6 +487,13 @@ def test_streaming_with_pair_head_equals_one_pass():
 
     whole = run([60])
     blocks = run([7, 20, 3, 30])
+    # a model with a pair head flags the second detections of split peaks
+    s = StreamingSalience(
+        net, spec, freqs, STEP, 400, 1200, 0.3, torch.device("cpu"), pair_threshold=0.5
+    )
+    dets = [d for d, _ in s.push(s.features(log)) + s.finish()]
+    split = np.concatenate([d[4] for d in dets])
+    assert split.dtype == bool and 0 < split.sum() < len(split)
     no_pair = StreamingSalience(
         net, spec, freqs, STEP, 400, 1200, 0.3, torch.device("cpu"), pair_threshold=1.0
     )

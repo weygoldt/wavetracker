@@ -43,6 +43,11 @@ The most relevant parameters:
 | `linking.threshold` | 0.9 | minimum link probability; higher: purer identities, more fragments (0.5: IDF1 +0.02, purity -0.3 %) |
 | `linking.max_gap` / `max_df` | 180 / 5 | longest gap [s] and largest frequency mismatch [Hz] of a candidate link |
 | `linking.parallel_df` | 3 | identities running at the same time this far apart [Hz] are two fish |
+| `rises.enabled` | false | join identities across rise onsets by their electrode patterns (see [Joining across rises](algorithms.md#joining-across-rises)) |
+| `pairs.enabled` | false | handle the second detections a learned detector's pair head adds to peaks that hide two fish (see [Two fish in one peak](algorithms.md#two-fish-in-one-peak-the-pair-heads-detections)); no effect without a pair head |
+| `pairs.partners` / `fill_gap` / `fill_df` | `fill` / 2 / 0.4 | `fill`: those detections are tracked last and only extend identities through their gaps (steps up to `fill_gap` s and `fill_df` Hz); `track`: like any detection |
+| `pairs.partner_tracks` | none | tracks of the left-over second detections at least this long [s] become identities (fish hidden in a neighbour's peak for minutes) |
+| `pairs.resolve` | false | decide every episode of two identities closer than `pairs.max_df` by their electrode patterns before and after it |
 | `output.save_fine_spec` | false | also store the full-resolution spectrogram |
 | `output.fine_spec_max_freq` / `sparse_spec_max_freq` | none | upper limit of the stored spectrograms; none = 1.25 × `harmonic_groups.max_freq` |
 | `interference.max_line_freq` | none | upper limit of the hum-line search; none = Nyquist |
@@ -58,6 +63,8 @@ post-processing tools and [audian](../README.md#correcting-tracks-interactively)
 | `idx_v.npy` | frame index of every detection (into `times`) |
 | `ident_v.npy` | identity of every detection (NaN = unassigned) |
 | `sign_v.npy` | power at the fundamental on each electrode, `(n, channels)` |
+| `sal_v.npy` | salience of every detection (0–1; learned detector: the network's, classic: from the level over the noise floor) |
+| `split_v.npy` | only from a model with a pair head: the detection is the second fish of a split peak |
 | `cplx_v.npy` | complex spectrum at the fundamental on each electrode (`abs(cplx_v)**2 == sign_v`); the phase difference gives the relative sign of electrodes: `np.angle(cplx_v[:, 1] * np.conj(cplx_v[:, 0]))` |
 | `times.npy` | time of each frame, relative to the recording start [s] |
 | `sparse_spectra.npy`, `sparse_freq.npy`, `sparse_time.npy` | overview spectrogram (freq × time, power) |

@@ -23,7 +23,7 @@ import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
-from run import MIXTURES, RUNS, merge, mixtures
+from run import MIXTURES, RUNS, merge, mixtures, overrides
 from score import match, score, truth_at
 
 from wavetracker.config import Config
@@ -34,10 +34,17 @@ PAIR_HZ = 1.2
 
 
 def add_hidden(
-    res: Results, truth: dict, min_snr: float, keep: float, rng, exact: bool = False
+    res: Results,
+    truth: dict,
+    min_snr: float,
+    keep: float,
+    rng,
+    exact: bool = False,
 ) -> int:
     """Add the hidden fish of close pairs to `res` (in place); returns how many.
-    `exact`: the partner's detection moves to its truth frequency as well."""
+    They are flagged as the second detections of split peaks (`split_v`), as
+    a pair head's are. `exact`: the partner's detection moves to its truth
+    frequency as well."""
     F = truth_at(truth, res.times)
     snr = np.stack(
         [np.interp(res.times, truth["snr_times"], s) for s in truth["snr_db"]]
@@ -74,9 +81,13 @@ def add_hidden(
         res.cplx_v = np.concatenate([res.cplx_v, res.cplx_v[src]])
     if res.sal_v is not None:
         res.sal_v = np.concatenate([res.sal_v, res.sal_v[src]])
+    split = np.zeros(len(res.idx_v) - len(idx), bool)
+    if res.split_v is not None:
+        split = np.asarray(res.split_v, bool)
+    res.split_v = np.r_[split, np.ones(len(idx), bool)]
     res.ident_v = np.full(len(res.fund_v), np.nan)
     order = np.lexsort((res.fund_v, res.idx_v))
-    for name in ("fund_v", "idx_v", "sign_v", "cplx_v", "sal_v", "ident_v"):
+    for name in ("fund_v", "idx_v", "sign_v", "cplx_v", "sal_v", "split_v", "ident_v"):
         v = getattr(res, name)
         if v is not None:
             setattr(res, name, v[order])
@@ -89,6 +100,10 @@ def main(argv=None):
     p.add_argument("--tag", required=True)
     p.add_argument("-c", "--config", required=True)
     p.add_argument("--split", default="ldev")
+    p.add_argument(
+        "--only", nargs="+", help="mixtures whose name contains any of these"
+    )
+    p.add_argument("--set", nargs="*", help="config overrides, e.g. tracking.max_dt=20")
     p.add_argument("--min-snr", type=float, default=0.0)
     p.add_argument("--keep", type=float, default=1.0)
     p.add_argument("--seed", type=int, default=0)
@@ -98,9 +113,9 @@ def main(argv=None):
         help="the partner's detection at its truth frequency too",
     )
     args = p.parse_args(argv)
-    variant = yaml.safe_load(Path(args.config).read_text())
+    variant = merge(yaml.safe_load(Path(args.config).read_text()), overrides(args.set))
     rng = np.random.default_rng(args.seed)
-    for name in mixtures(args.split):
+    for name in mixtures(args.split, args.only):
         src = RUNS / args.source / name
         out = RUNS / args.tag / name
         if (out / "score.json").exists() or not (src / "fund_v.npy").exists():
