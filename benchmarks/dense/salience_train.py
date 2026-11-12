@@ -16,6 +16,11 @@ mixture's truth:
 * half weight: frames the truth completed by ridge following;
 * everything else, harmonics of truth fish included, is a negative.
 
+``--truth rises`` trains on ``truth_rises.npz`` (``rise_truth.py``), which
+follows the steep part of rises (the default truth misses it or bridges it
+along a straight line); its rise frames, followed by the instantaneous
+frequency of the fish in its source recording, get full weight.
+
 The loss is binary cross-entropy on the salience plus an L1 loss on the
 sub-bin offset at the truth bins. Each example uses a random window of
 candidate frequencies (the network is the same at every frequency), with the
@@ -46,6 +51,7 @@ import torch.nn.functional as F
 
 sys.path.insert(0, str(Path(__file__).parent))
 from common import DATA, MIX_CHANNELS, RATE
+from score import TRUTHS
 
 from wavetracker.salience import (
     SalienceNet,
@@ -87,8 +93,10 @@ class Mixture:
     ``traces(j0, n, g)`` mixes in the field noise with any gain g (0: lab,
     1: the field variant) and ``snr_at(g)`` gives the matching SNR."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, truth: str = "default"):
         self.path = path
+        self.truth = truth
+        tfile = TRUTHS[truth]
         n = (path / "traces-grid1.raw").stat().st_size // 4 // MIX_CHANNELS
         self.raw = np.memmap(
             path / "traces-grid1.raw",
@@ -105,10 +113,10 @@ class Mixture:
                 mode="r",
                 shape=(n, MIX_CHANNELS),
             )
-            zf = np.load(fpath / "truth.npz")
+            zf = np.load(fpath / tfile)
         self.n_frames = (n - NFFT) // STEP + 1
         t = (np.arange(self.n_frames) * STEP + NFFT / 2) / RATE
-        z = np.load(path / "truth.npz")
+        z = np.load(path / tfile)
         self.freqs = np.stack(
             [np.interp(t, z["times"], f, left=np.nan, right=np.nan) for f in z["freqs"]]
         )
@@ -130,6 +138,11 @@ class Mixture:
             ]
         )
         self.completed = known & ~detk
+        if "rise" in z.files:  # the steep part of rises: followed, full weight
+            rise = np.stack(
+                [np.interp(t, z["times"], r.astype(float)) > 0 for r in z["rise"]]
+            )
+            self.completed &= ~rise
         st = z["snr_times"]
 
         def frames(a):
@@ -213,13 +226,16 @@ def unknown_lines(mix: Mixture, spec: PowerSpectrogram, dev) -> np.ndarray:
     """(frames, bins up to F_MAX) bool: persistent lines in the lab variant of
     the mixture that are no truth fundamental or harmonic. Cached per mixture."""
     lab = mix.lab_name()
-    cache = CACHE / (lab.replace("/", "__") + ".npz")
+    suffix = "" if mix.truth == "default" else f"__{mix.truth}"
+    cache = CACHE / (lab.replace("/", "__") + suffix + ".npz")
     kmax = int(F_MAX / DF) + 1
     if cache.exists():
         z = np.load(cache)
         return np.unpackbits(z["bits"], axis=1, count=kmax).astype(bool)
     lab_mix = (
-        mix if mix.path.parent.name == lab.split("/")[0] else Mixture(MIXTURES / lab)
+        mix
+        if mix.path.parent.name == lab.split("/")[0]
+        else Mixture(MIXTURES / lab, mix.truth)
     )
     rows = []
     block = 400
@@ -318,6 +334,7 @@ class Batches:
         shelf_db: tuple[float, float] = (10.0, 30.0),
         shelf_edge: tuple[float, float] = (150.0, 1200.0),
         shelf_width: tuple[float, float] = (5.0, 40.0),
+        truth: str = "default",
     ):
         splits = split.split(",")
         paths = [p for s in splits for p in mixture_dirs(s)[:limit]]
@@ -329,7 +346,7 @@ class Batches:
                     np.round(np.linspace(0, len(paths) - 1, n)).astype(int)
                 )
             ]
-        self.mixes = [Mixture(p) for p in paths]
+        self.mixes = [Mixture(p, truth) for p in paths]
         if not self.mixes:
             raise SystemExit(f"no mixtures in {MIXTURES / split}")
         self.frames, self.ctx, self.bins = frames, ctx, bins
@@ -1001,6 +1018,12 @@ def main(argv=None):
     p.add_argument("--workers", type=int, default=4, help="reader threads")
     p.add_argument("--val-every", type=int, default=500)
     p.add_argument("--save-every", type=int, default=0, help="keep sSTEP.pt")
+    p.add_argument(
+        "--truth",
+        default="default",
+        choices=sorted(TRUTHS),
+        help="truth of the mixtures (rises: truth_rises.npz, see rise_truth.py)",
+    )
     p.add_argument("--train-split", default="ltrain")
     p.add_argument("--val-split", default="ldev")
     p.add_argument("--device", default="cuda")
@@ -1099,6 +1122,7 @@ def main(argv=None):
         shelf_p=args.shelf_p,
         shelf_db=tuple(float(v) for v in args.shelf_db.split(",")),
         shelf_edge=tuple(float(v) for v in args.shelf_edge.split(",")),
+        truth=args.truth,
     )
     val = Batches(
         args.val_split,
@@ -1112,6 +1136,7 @@ def main(argv=None):
         harmonics=spec.harmonics,
         workers=0,
         el_frames=el_frames,
+        truth=args.truth,
     )
     vr = np.random.default_rng(3)
     T = args.frames + 2 * ctx
