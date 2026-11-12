@@ -14,6 +14,13 @@ Usage::
     python benchmarks/dense/run.py track  --tag mine -c ... --split ldev   # learned-detector dev
     python benchmarks/dense/run.py track  --tag mine -c ... --split ldev2  # and its second set
     python benchmarks/dense/run.py retrack --tag mine-dt20 --source mine -c ... --set tracking.max_dt=20 --split ldev
+    python benchmarks/dense/run.py rescore --tag mine --split ldev --truth rises   # score_rises.json
+
+``--truth`` picks the truth a run is scored on (``score.TRUTHS``; several
+may be given): ``default`` (``truth.npz`` -> ``score.json``, ``frames.npz``)
+or ``rises`` (``truth_rises.npz``, which follows the steep part of rises ->
+``score_rises.json``, ``frames_rises.npz``). Scores on one truth never
+overwrite those on another.
 """
 
 from __future__ import annotations
@@ -37,7 +44,7 @@ from mixture import (
     TRAIN_SUITE,
     expand_suite,
 )
-from score import TOL, binned, score
+from score import TOL, TRUTHS, binned, score, score_file
 
 from wavetracker.config import Config
 from wavetracker.pipeline import detect, track_results
@@ -85,12 +92,28 @@ def mixtures(split: str | None, only=None) -> list[str]:
     return names
 
 
+def write_scores(name: str, out: Path, truths, extra: dict) -> dict:
+    """Score a run on each truth; returns the summary on the first."""
+    first = None
+    for t in truths:
+        summary, table = score(MIXTURES / name, out, truth=t)
+        summary |= extra
+        (out / score_file(t)).write_text(json.dumps(summary, indent=1))
+        np.savez_compressed(out / score_file(t, "frames", ".npz"), **table)
+        first = first or summary
+    return first
+
+
+def scored(out: Path, truths) -> bool:
+    return all((out / score_file(t)).exists() for t in truths)
+
+
 def track(args):
     variant = yaml.safe_load(Path(args.config).read_text()) if args.config else {}
     variant = variant or {}
     for name in mixtures(args.split, args.only):
         out = RUNS / args.tag / name
-        if (out / "score.json").exists() and not args.overwrite:
+        if scored(out, args.truth) and not args.overwrite:
             continue
         band = yaml.safe_load((MIXTURES / name / "band.yaml").read_text())
         cfg = Config.from_dict(merge(variant, band) | {})
@@ -108,10 +131,12 @@ def track(args):
         res = det.results
         t_track = track_results(res, cfg)
         res.save(out)
-        summary, table = score(MIXTURES / name, out)
-        summary |= {"tag": args.tag, "detect_s": t_det, "track_s": t_track}
-        (out / "score.json").write_text(json.dumps(summary, indent=1))
-        np.savez_compressed(out / "frames.npz", **table)
+        summary = write_scores(
+            name,
+            out,
+            args.truth,
+            {"tag": args.tag, "detect_s": t_det, "track_s": t_track},
+        )
         print(
             f"{args.tag} {name}: recall {summary['recall']:.3f} idf1 {summary['idf1']:.3f} "
             f"precision {summary['precision']:.3f} ids {summary['ids_30s']} "
@@ -146,7 +171,7 @@ def retrack(args):
         if not (src / "fund_v.npy").exists():
             print(f"{name}: no run {args.source}", flush=True)
             continue
-        if (out / "score.json").exists() and not args.overwrite:
+        if scored(out, args.truth) and not args.overwrite:
             continue
         band = yaml.safe_load((MIXTURES / name / "band.yaml").read_text())
         cfg = Config.from_dict(merge(variant, band))
@@ -154,10 +179,12 @@ def retrack(args):
         t_track = track_results(res, cfg)
         res.meta["retracked_from"] = args.source
         res.save(out)
-        summary, table = score(MIXTURES / name, out)
-        summary |= {"tag": args.tag, "source": args.source, "track_s": t_track}
-        (out / "score.json").write_text(json.dumps(summary, indent=1))
-        np.savez_compressed(out / "frames.npz", **table)
+        summary = write_scores(
+            name,
+            out,
+            args.truth,
+            {"tag": args.tag, "source": args.source, "track_s": t_track},
+        )
         print(
             f"{args.tag} {name}: recall {summary['recall']:.3f} idf1 {summary['idf1']:.3f} "
             f"precision {summary['precision']:.3f} ids {summary['ids_30s']} "
@@ -167,20 +194,22 @@ def retrack(args):
 
 
 def rescore(args):
+    """Score existing runs again, on each truth of ``--truth`` (only the
+    score files of those truths are written)."""
     for name in mixtures(args.split, args.only):
         out = RUNS / args.tag / name
         if not (out / "fund_v.npy").exists():
+            continue
+        if args.missing and scored(out, args.truth):
             continue
         old = (
             json.loads((out / "score.json").read_text())
             if (out / "score.json").exists()
             else {}
         )
-        summary, table = score(MIXTURES / name, out)
-        summary |= {k: old[k] for k in ("tag", "detect_s", "track_s") if k in old}
-        (out / "score.json").write_text(json.dumps(summary, indent=1))
-        np.savez_compressed(out / "frames.npz", **table)
-        print(f"rescored {name}", flush=True)
+        keep = ("tag", "source", "detect_s", "track_s")
+        write_scores(name, out, args.truth, {k: old[k] for k in keep if k in old})
+        print(f"rescored {name} ({', '.join(args.truth)})", flush=True)
 
 
 # --- report ------------------------------------------------------------------
@@ -200,20 +229,20 @@ def scenario(name: str) -> str:
     return name.split("/")[1].rsplit("-s", 1)[0]
 
 
-def load_scores(tag: str, split: str) -> list[dict]:
+def load_scores(tag: str, split: str, truth: str = "default") -> list[dict]:
     out = []
     for name in mixtures(split):
-        f = RUNS / tag / name / "score.json"
+        f = RUNS / tag / name / score_file(truth)
         if f.exists():
             out.append(json.loads(f.read_text()))
     return out
 
 
-def load_frames(tag: str, names: list[str]) -> dict:
+def load_frames(tag: str, names: list[str], truth: str = "default") -> dict:
     """(fish, frame) tables of several mixtures; `mix` numbers the mixture."""
     parts = []
     for i, n in enumerate(names):
-        p = dict(np.load(RUNS / tag / n / "frames.npz"))
+        p = dict(np.load(RUNS / tag / n / score_file(truth, "frames", ".npz")))
         p["mix"] = np.full(len(p["fish"]), i, np.int16)
         parts.append(p)
     if not parts:
@@ -230,11 +259,11 @@ METRICS = [
 ]
 
 
-def plot_summary(series, path):
+def plot_summary(series, path, truth: str = "default"):
     """One dot per mixture and metric; `series` is a list of (tag, split)."""
     import matplotlib.pyplot as plt
 
-    rows = {(t, sp): load_scores(t, sp) for t, sp in series}
+    rows = {(t, sp): load_scores(t, sp, truth) for t, sp in series}
     scen = []
     for _, sp in series:
         for n in mixtures(sp):
@@ -311,7 +340,7 @@ CURVES = [
 FREQ_TICKS = [50, 100, 200, 400, 700, 1000, 1500]
 
 
-def plot_curves(tags, split, path, groups=None):
+def plot_curves(tags, split, path, groups=None, truth: str = "default"):
     """Completeness (solid) and frames on the fish's IDF1 identity (dashed)
     against covariates, pooled over the mixtures of each scenario group;
     against frequency one dot per fish (filled: completeness, open: on its
@@ -337,8 +366,9 @@ def plot_curves(tags, split, path, groups=None):
     for gi, (gname, gnames) in enumerate(groups.items()):
         attenuated = False
         for i, t in enumerate(tags):
+            frames = score_file(truth, "frames", ".npz")
             fr = load_frames(
-                t, [n for n in gnames if (RUNS / t / n / "frames.npz").exists()]
+                t, [n for n in gnames if (RUNS / t / n / frames).exists()], truth
             )
             if not fr:
                 continue
@@ -495,12 +525,13 @@ def report(args):
     FIG.mkdir(parents=True, exist_ok=True)
     tags, splits = args.tags, args.splits
     series = [(t, sp) for sp in splits for t in tags]
-    stem = "_".join(tags) + "_" + "_".join(splits)
+    suffix = "" if args.truth == "default" else f"_{args.truth}"
+    stem = "_".join(tags) + "_" + "_".join(splits) + suffix
     out = [FIG / f"summary_{stem}.png"]
-    plot_summary(series, out[0])
+    plot_summary(series, out[0], args.truth)
     for sp in splits:
-        p = FIG / f"curves_{'_'.join(tags)}_{sp}.png"
-        plot_curves(tags, sp, p)
+        p = FIG / f"curves_{'_'.join(tags)}_{sp}{suffix}.png"
+        plot_curves(tags, sp, p, truth=args.truth)
         out.append(p)
     for name in args.tracks or []:
         for t in tags:
@@ -509,7 +540,7 @@ def report(args):
             out.append(p)
     lines = []
     for t, sp in series:
-        rows = load_scores(t, sp)
+        rows = load_scores(t, sp, args.truth)
         by = {}
         for r in rows:
             by.setdefault(scenario(r["mixture"]), []).append(r)
@@ -547,6 +578,13 @@ def main(argv=None):
     a.add_argument("--only", nargs="*")
     a.add_argument("--device", default="auto")
     a.add_argument("--overwrite", action="store_true")
+    a.add_argument(
+        "--truth",
+        nargs="+",
+        default=["default"],
+        choices=sorted(TRUTHS),
+        help="truths to score on (default: truth.npz)",
+    )
     a.set_defaults(func=track)
     r = sub.add_parser("retrack", help="track the detections of another run again")
     r.add_argument("--tag", required=True)
@@ -556,16 +594,34 @@ def main(argv=None):
     r.add_argument("--split", default="dev")
     r.add_argument("--only", nargs="*")
     r.add_argument("--overwrite", action="store_true")
+    r.add_argument(
+        "--truth",
+        nargs="+",
+        default=["default"],
+        choices=sorted(TRUTHS),
+        help="truths to score on (default: truth.npz)",
+    )
     r.set_defaults(func=retrack)
     b = sub.add_parser("rescore")
     b.add_argument("--tag", required=True)
     b.add_argument("--split", default="dev")
     b.add_argument("--only", nargs="*")
+    b.add_argument(
+        "--truth",
+        nargs="+",
+        default=["default"],
+        choices=sorted(TRUTHS),
+        help="truths to score on (default: truth.npz)",
+    )
+    b.add_argument(
+        "--missing", action="store_true", help="only runs without those scores"
+    )
     b.set_defaults(func=rescore)
     c = sub.add_parser("report")
     c.add_argument("--tags", nargs="+", required=True)
     c.add_argument("--splits", nargs="+", default=["dev", "dev-field"])
     c.add_argument("--tracks", nargs="*", help="mixtures to draw track figures for")
+    c.add_argument("--truth", default="default", choices=sorted(TRUTHS))
     c.set_defaults(func=report)
     args = p.parse_args(argv)
     args.func(args)

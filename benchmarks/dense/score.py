@@ -25,6 +25,14 @@ per fish, as long as possible.
 Every (fish, frame) is also written with its covariates (SNR, gain,
 frequency, distance to the nearest line of another fish), from which recall
 and coverage curves are drawn.
+
+Truths (``truth``): ``default`` is the mixture's ``truth.npz``; ``rises``
+is ``truth_rises.npz`` (``rise_truth.py``), which follows the steep part of
+rises, and flags those frames (``rise``). With it the scores have a *rise
+onset* stratum: recall and frames on the fish's IDF1 identity over the
+flagged frames (``recall_rise``, ``idf1_coverage_rise``), and the frames
+table a ``rise`` column. Scores on another truth are written next to the
+default ones (``score_rises.json``, ``frames_rises.npz``; ``score_file``).
 """
 
 from __future__ import annotations
@@ -38,9 +46,18 @@ from scipy.optimize import linear_sum_assignment
 from wavetracker.results import Results
 
 TOL = 2.0  # Hz
+TRUTHS = {"default": "truth.npz", "rises": "truth_rises.npz"}
 GAP_TOL = 30.0  # Hz around an interpolated trace where the truth is unknown
 MAX_H = 5
 VISIBLE_DB = 6.0  # a fish frame with this SNR in the mixture is visible
+
+
+def score_file(truth: str = "default", stem: str = "score", ext: str = ".json") -> str:
+    """Name of a run's score (or ``frames``) file on a truth: ``score.json``
+    on the default truth, ``score_<truth>.json`` on others."""
+    if truth not in TRUTHS:
+        raise ValueError(f"unknown truth {truth!r}; one of {sorted(TRUTHS)}")
+    return f"{stem}{ext}" if truth == "default" else f"{stem}_{truth}{ext}"
 
 
 def truth_at(truth: dict, times: np.ndarray, key: str = "freqs") -> np.ndarray:
@@ -106,8 +123,10 @@ def nearest_line(F: np.ndarray) -> np.ndarray:
     return out
 
 
-def score(mix_dir: Path, res_dir: Path, tol: float = TOL) -> tuple[dict, dict]:
-    truth = dict(np.load(mix_dir / "truth.npz"))
+def score(
+    mix_dir: Path, res_dir: Path, tol: float = TOL, truth: str = "default"
+) -> tuple[dict, dict]:
+    truth = dict(np.load(mix_dir / TRUTHS[truth]))
     meta = json.loads((mix_dir / "mixture.json").read_text())
     res = Results.load(res_dir)
     F = truth_at(truth, res.times)
@@ -207,6 +226,11 @@ def score(mix_dir: Path, res_dir: Path, tol: float = TOL) -> tuple[dict, dict]:
         ]
     )
     visible = known & (snr >= VISIBLE_DB)
+    if "rise" in truth:
+        flags = {"times": truth["times"], "rise": truth["rise"].astype(float)}
+        rise = known & (truth_at(flags, res.times, "rise") > 0)
+    else:
+        rise = np.zeros_like(known)
     summary = {
         "mixture": meta["name"],
         "n_fish": n_fish,
@@ -234,6 +258,12 @@ def score(mix_dir: Path, res_dir: Path, tol: float = TOL) -> tuple[dict, dict]:
         "ids_30s": len(long_ids),
         "false_ids_30s": len(false_ids),
         "purity": float(counts.max(1).sum() / max(counts.sum(), 1)),
+        # rise onsets (truth "rises"): the frames through the steep part
+        "rise_frames": int(rise.sum()),
+        "recall_rise": float(matched_frame[rise].mean()) if rise.any() else np.nan,
+        "idf1_coverage_rise": float(assigned_frame[rise].mean())
+        if rise.any()
+        else np.nan,
         "fish": per_fish,
     }
 
@@ -254,6 +284,8 @@ def score(mix_dir: Path, res_dir: Path, tol: float = TOL) -> tuple[dict, dict]:
         "detected": detected[kk, jj],
         "n_fish": np.full(len(kk), n_fish, np.int16),
     }
+    if "rise" in truth:
+        table["rise"] = rise[kk, jj]
     return summary, table
 
 

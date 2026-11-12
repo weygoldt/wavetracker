@@ -19,6 +19,10 @@ variant, since the two are far from independent. ``--stratify`` resamples
 mixtures within their scenario (the designs are fixed, only the seeds vary);
 a scenario with a single mixture then adds no spread, so use it only where
 every scenario has several (ldev + ldev2: 3 or 6).
+
+``--truth rises`` compares the scores on the truth that follows the steep
+part of rises (``score_rises.json``, see ``run.py rescore --truth rises``);
+its rise-onset stratum is ``--metric recall_rise`` or ``idf1_coverage_rise``.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 from common import DATA
+from score import TRUTHS, score_file
 from strata import GROUPS
 
 RUNS = DATA / "runs"
@@ -68,12 +73,14 @@ def tag_for(spec: dict[str | None, str], split: str) -> str:
     raise ValueError(f"no tag for split {split} in {spec}")
 
 
-def load(spec: dict, splits: list[str], metric: str) -> dict[str, float]:
+def load(
+    spec: dict, splits: list[str], metric: str, truth: str = "default"
+) -> dict[str, float]:
     """{split/mixture: score} of the runs a spec names."""
     out = {}
     for sp in splits:
         tag = tag_for(spec, sp)
-        files = sorted((RUNS / tag / sp).glob("*/score.json"))
+        files = sorted((RUNS / tag / sp).glob(f"*/{score_file(truth)}"))
         if not files:
             print(f"warning: no runs {tag}/{sp}", file=sys.stderr)
         for f in files:
@@ -144,12 +151,16 @@ def summarise(names, a, b, metric, n_boot, tie, stratify=False, seed=0) -> dict:
 
 def compare(args) -> list[tuple[str, dict]]:
     spec_a, spec_b = parse_spec(args.a), parse_spec(args.b)
-    a = load(spec_a, args.splits, args.metric)
-    b = load(spec_b, args.splits, args.metric)
+    a = load(spec_a, args.splits, args.metric, args.truth)
+    b = load(spec_b, args.splits, args.metric, args.truth)
     names = sorted(set(a) & set(b))
     for n in sorted(set(a) ^ set(b)):
         side = "a" if n in a else "b"
         print(f"warning: {n} only in {side}", file=sys.stderr)
+    undefined = [n for n in names if not (np.isfinite(a[n]) and np.isfinite(b[n]))]
+    if undefined:  # e.g. recall_rise of a mixture without rise frames
+        print(f"{len(undefined)} variants without a {args.metric}: left out")
+        names = [n for n in names if n not in undefined]
     if not names:
         raise SystemExit("no mixtures in both runs")
     rows = [("all", names)]
@@ -225,7 +236,8 @@ def plot(args, names, a, b, rows):
     stem = args.out or re.sub(
         r"[^A-Za-z0-9_.-]+",
         "_",
-        f"compare_{args.metric}_{args.a}_vs_{args.b}_{'-'.join(args.splits)}",
+        f"compare_{args.metric}_{args.a}_vs_{args.b}_{'-'.join(args.splits)}"
+        + ("" if args.truth == "default" else f"_{args.truth}"),
     )
     FIG.mkdir(parents=True, exist_ok=True)
     path = FIG / f"{stem}.png"
@@ -242,6 +254,12 @@ def main(argv=None):
         "--splits", nargs="+", default=["ldev", "ldev-field", "ldev2", "ldev2-field"]
     )
     p.add_argument("--metric", default="idf1", help="a key of score.json")
+    p.add_argument(
+        "--truth",
+        default="default",
+        choices=sorted(TRUTHS),
+        help="scores on this truth (rises: score_rises.json)",
+    )
     p.add_argument("--n-boot", type=int, default=10000)
     p.add_argument("--tie", type=float, default=1e-9, help="|b - a| counted as tie")
     p.add_argument("--by-scenario", action="store_true", help="rows per scenario")

@@ -2,6 +2,11 @@
 nearest other line, plus the identity scores.
 
     python benchmarks/dense/strata.py --tags classic-ldev learned-v1 --splits ldev ldev-field
+    python benchmarks/dense/strata.py --tags A B --truth rises   # + rise onsets
+
+With ``--truth rises`` the scores and frames on the truth that follows the
+steep part of rises are used, and the rise-onset stratum is added: recall
+and frames on the fish's IDF1 identity over the frames of the steep part.
 """
 
 from __future__ import annotations
@@ -15,6 +20,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
 from common import DATA
+from score import TRUTHS, score_file
 
 RUNS = DATA / "runs"
 FIG = DATA / "figures"
@@ -53,15 +59,17 @@ PAIR_HZ = 1.2
 _PAIR_CACHE: dict[tuple[str, str], np.ndarray] = {}
 
 
-def nearest_fundamental(split: str, mixture: str, times: np.ndarray) -> np.ndarray:
+def nearest_fundamental(
+    split: str, mixture: str, times: np.ndarray, truth: str = "default"
+) -> np.ndarray:
     """Distance [Hz] of every fish (fish, frames) to the closest fundamental
     of another fish (not its harmonics): close pairs that make one peak."""
-    key = (split, mixture)
+    key = (split, mixture, truth)
     if key not in _PAIR_CACHE:
         from score import truth_at
 
-        truth = dict(np.load(DATA / "mixtures" / split / mixture / "truth.npz"))
-        F = truth_at(truth, times, "freqs_filled")
+        tr = dict(np.load(DATA / "mixtures" / split / mixture / TRUTHS[truth]))
+        F = truth_at(tr, times, "freqs_filled")
         d = np.full(F.shape, np.inf)
         for k in range(len(F)):
             for j in range(len(F)):
@@ -71,17 +79,19 @@ def nearest_fundamental(split: str, mixture: str, times: np.ndarray) -> np.ndarr
     return _PAIR_CACHE[key]
 
 
-def frames(tag: str, split: str) -> dict[str, np.ndarray]:
+def frames(tag: str, split: str, truth: str = "default") -> dict[str, np.ndarray]:
     from types import SimpleNamespace
 
     from pair_strata import pair_frames
 
-    paths = sorted((RUNS / tag / split).glob("*/frames.npz"))
+    paths = sorted(
+        (RUNS / tag / split).glob(f"*/{score_file(truth, 'frames', '.npz')}")
+    )
     parts = []
     for p in paths:
         part = dict(np.load(p))
         times = np.load(p.parent / "times.npy")
-        nf = nearest_fundamental(split, p.parent.name, times)
+        nf = nearest_fundamental(split, p.parent.name, times, truth)
         part["nf_hz"] = nf[part["fish"], part["frame"]].astype(np.float32)
         # own SNR of the weaker fish of the pair (the truth's holds both)
         mix = DATA / "mixtures" / split / p.parent.name
@@ -91,10 +101,10 @@ def frames(tag: str, split: str) -> dict[str, np.ndarray]:
     return {k: np.concatenate([p[k] for p in parts]) for k in parts[0]} if parts else {}
 
 
-def scores(tag: str, split: str) -> dict[str, float]:
+def scores(tag: str, split: str, truth: str = "default") -> dict[str, float]:
     rows = [
         json.loads(p.read_text())
-        for p in sorted((RUNS / tag / split).glob("*/score.json"))
+        for p in sorted((RUNS / tag / split).glob(f"*/{score_file(truth)}"))
     ]
     out = {k: float(np.mean([r[k] for r in rows])) for k in SCORES} | {"n": len(rows)}
     for g, prefixes in GROUPS.items():
@@ -126,6 +136,14 @@ def strata(fr: dict) -> dict[str, float]:
     for lo, hi, name in NN_BANDS:  # on the fish's own (IDF1) identity
         m = (fr["nn_hz"] >= lo) & (fr["nn_hz"] < hi) & (fr["snr_db"] >= 6)
         out[f"id nn {name}"] = float(fr["assigned"][m].mean()) if m.any() else np.nan
+    if "rise" in fr:  # the steep part of rises (truth "rises")
+        m = fr["rise"]
+        out["rise onset"] = float(fr["matched"][m].mean()) if m.any() else np.nan
+        out["id rise onset"] = float(fr["assigned"][m].mean()) if m.any() else np.nan
+        m = fr["rise"] & (fr["snr_db"] >= 6)
+        out["rise onset >= 6 dB"] = (
+            float(fr["matched"][m].mean()) if m.any() else np.nan
+        )
     return out
 
 
@@ -134,15 +152,16 @@ def main(argv=None):
     p.add_argument("--tags", nargs="+", required=True)
     p.add_argument("--splits", nargs="+", default=["ldev", "ldev-field"])
     p.add_argument("--out", default=None, help="figure stem (default: strata_<tags>)")
+    p.add_argument("--truth", default="default", choices=sorted(TRUTHS))
     args = p.parse_args(argv)
     table = {}
     for sp in args.splits:
         for t in args.tags:
-            fr = frames(t, sp)
+            fr = frames(t, sp, args.truth)
             if not fr:
                 print(f"{t}/{sp}: no runs")
                 continue
-            table[(t, sp)] = scores(t, sp) | strata(fr)
+            table[(t, sp)] = scores(t, sp, args.truth) | strata(fr)
     keys = (
         SCORES
         + [f"idf1 {g}" for g in GROUPS]
@@ -150,6 +169,8 @@ def main(argv=None):
         + [f"nn {b[2]}" for b in NN_BANDS]
         + [f"id nn {b[2]}" for b in NN_BANDS]
     )
+    if args.truth == "rises":
+        keys += ["rise onset", "id rise onset", "rise onset >= 6 dB"]
     print(
         "recall by SNR band (all frames) and by nearest-line distance (frames with "
         "SNR ≥ 6 dB); id nn: those frames on the fish's own (IDF1) identity"
@@ -159,6 +180,8 @@ def main(argv=None):
     for (t, sp), row in table.items():
         print(f"{t + ' / ' + sp:{w}s}" + "".join(f"{row[k]:14.4f}" for k in keys))
     stem = args.out or "strata_" + "_".join(args.tags)
+    if args.truth != "default" and not args.out:
+        stem += f"_{args.truth}"
     (FIG / f"{stem}.json").write_text(
         json.dumps({f"{t}/{sp}": r for (t, sp), r in table.items()}, indent=1)
     )
