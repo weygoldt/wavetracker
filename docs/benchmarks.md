@@ -902,7 +902,9 @@ detections last lets the oracle beat `learned-rises`.
 | v1 + step-B association (`learned-assoc.yaml`) | 0.742 / 0.730 |
 | step-B detector + association (`learned-b.yaml`) | 0.748 / 0.738 |
 | + rise joiner (`learned-rises.yaml`) | 0.766 / 0.759 |
-| learned association instead of the tracker (`learned-assocnet.yaml`) | **0.776 / 0.769** |
+| learned association instead of the tracker (`learned-assocnet.yaml` at 0.6) | 0.776 / 0.769 |
+| + rise joiner, detector threshold 0.5 (`learned-rises.yaml`) | 0.771 / 0.763 |
+| learned association, detector threshold 0.5 (`learned-assocnet.yaml`) | **0.783 / 0.776** |
 
 `learned-rises` against classic: +0.146 [+0.132, +0.160] (better in 100 of
 102 variants); against `learned-b`: +0.019 [+0.015, +0.025] (92 better, 1
@@ -915,7 +917,9 @@ The learned association
 (`learned-assocnet.yaml`, see below) adds +0.0099 [+0.0042, +0.0162] to
 `learned-rises` (72 better, 30 worse; a second network seed +0.0038
 [-0.0008, +0.0086], the mean of both +0.0068 [+0.0022, +0.0120]) with 41 %
-fewer identity switches.
+fewer identity switches. Both configs now detect at threshold 0.5 instead of 0.6
+(see "Detection threshold 0.5"): +0.0043 for `learned-rises`, +0.0071 for
+`learned-assocnet`.
 
 ### Learned association (step C)
 
@@ -1319,6 +1323,41 @@ gains IDF1 +0.0043 [+0.0006, ...] (recall +0.012, precision -0.013, long
 false identities 0.51 -> 0.29 per mixture, harmonic detections per frame
 0.13 -> 0.20).
 
+### Detection threshold 0.5
+
+Found while scoring the rise retraining: the step-B detector at threshold
+0.5 instead of 0.6 helps both pipelines. Detections `D-rt-old-s0-t0.5`
+(step-B detector, `learned-rises.yaml` at 0.5); `learned-assocnet.yaml`
+retracked on them (`F-an-t0.5`) and, as the paired reference, on the 0.6
+detections (`F-an-t0.6`, reproduces `C-an-v0-rl-t0.7-m10` in 102 of 102
+variants). 51 dev mixtures, 102 variants, b - a:
+
+| | `learned-rises` 0.6 -> 0.5 | `learned-assocnet` 0.6 -> 0.5 |
+|---|---|---|
+| IDF1, lab / field | 0.766 / 0.759 -> 0.771 / 0.763 | 0.776 / 0.769 -> **0.783 / 0.776** |
+| IDF1 change | +0.0043 [+0.0006, +0.0080], 69 better / 33 worse | **+0.0071 [+0.0040, +0.0101]**, 84 / 18 |
+| ... lab, field | +0.0049 [+0.0003, +0.0093], +0.0037 [-0.0013, +0.0087] | +0.0071 [+0.0041, +0.0098], +0.0070 [+0.0025, +0.0116] |
+| recall | +0.012 | +0.0123 [+0.0110, +0.0137] (102 / 0) |
+| precision | -0.013 | -0.0128 [-0.0164, -0.0096] |
+| false identities >= 30 s / mixture | 0.51 -> 0.29 | 0.55 -> 0.33 |
+| harmonics reported as fish / frame | 0.13 -> 0.20 | 0.13 -> 0.20 |
+| switches / fish / min | | 0.152 -> 0.157 (+0.0055 [+0.0006, +0.0110]) |
+
+By scenario (`learned-assocnet`) the gain is largest in ladders (+0.015 to
++0.029) and attenuation (+0.010), nothing in `crowded` (+0.001 [-0.013,
++0.013]). Lower thresholds than 0.5 are untested; the association network
+and the linker of `learned-assocnet` were trained on 0.6 detections and
+were not retrained. Both configs now use 0.5 with review models refitted
+for it (see "Review confidence", refit for threshold 0.5). Figures:
+`figures/learned-rises-t0.6-vs-t0.5-idf1.png`,
+`figures/learned-assocnet-t0.6-vs-t0.5-idf1.png`.
+
+```bash
+python benchmarks/dense/run.py retrack --tag F-an-t0.5 --source D-rt-old-s0-t0.5 \
+    -c benchmarks/dense/configs/learned-assocnet.yaml --split ldev --truth default rises
+python benchmarks/dense/compare.py --a F-an-t0.6 --b F-an-t0.5 --splits ldev ldev-field ldev2 ldev2-field --by-scenario --plot
+```
+
 ### Review confidence (step E)
 
 Run tags `E-cf-*`; files in `$WT_BENCHMARK_DATA/confidence/`, notes in
@@ -1461,6 +1500,38 @@ python benchmarks/dense/review.py collect --tag E-cf-rises -c benchmarks/dense/c
 python benchmarks/dense/review.py fit --tag E-cf-rises --out $WT_BENCHMARK_DATA/confidence/E-cf-rises/model-v1.npz
 python benchmarks/dense/review.py evaluate --tag E-cf-rises --model .../model-v1.npz --name v1 [--recalibrate] [--split-only]
 python benchmarks/dense/review.py plot --runs learned-rises=E-cf-rises/eval-v1 learned-assocnet=E-cf-assoc/eval-v1 --name v1
+```
+
+**Refit for threshold 0.5** (`E-cf-rises-t05`, `E-cf-assoc-t05`, the
+models the configs now use). Collected on new `ltrain` detections at 0.5
+(`F-rise-lt-t0.5`, CPU) and on the dev detections `D-rt-old-s0-t0.5`
+(all 102 variants reproduce `D-rt-old-s0-t0.5` / `F-an-t0.5`), fitted and
+chosen as above. Dev, the refit model against the 0.6 model applied to the
+same 0.5 items:
+
+| | `learned-rises` refit | ... 0.6 model | `learned-assocnet` refit | ... 0.6 model |
+|---|---|---|---|---|
+| items / wrong per mixture | 102 / 10.3 | | 144 / 12.4 | |
+| AUC all (joins, identities, missed) | 0.828 (0.810, 0.869, 0.872) | 0.839 (0.811, 0.857, 0.869) | **0.869** (0.838, 0.940, 0.923) | 0.854 (0.827, 0.965, 0.919) |
+| ECE all | 0.031 | 0.027 | **0.017** | 0.031 |
+| reachable gain | +0.0212 | | +0.0168 | |
+| gain @10 items | **0.0139** | 0.0124 | 0.0105 | 0.0109 |
+| half / 90 %, median items | 5 / 12 | 6 / 12 | 4 / 12 | 4 / 11 |
+
+The two are close; the refit is kept because it matches the detections it
+is used on (better calibrated for `learned-assocnet`, better first items
+for `learned-rises`). Against the 0.6 pipelines the reachable gain is about
+the same (+0.0212 / +0.0168 instead of +0.0213 / +0.0176) and 90 % of it
+takes a few items more (12 instead of 9-10). At 0.5 `learned-assocnet` has
+half as many false identities among its items (59 instead of 122 on dev).
+
+```bash
+python benchmarks/dense/run.py track --tag F-rise-lt-t0.5 -c <learned-rises at 0.5> --split ltrain --device cpu
+python benchmarks/dense/review.py collect --tag E-cf-assoc-t05 -c benchmarks/dense/configs/learned-assocnet.yaml \
+    --source D-rt-old-s0-t0.5 --check F-an-t0.5 --splits ldev ldev-field ldev2 ldev2-field --jobs 3
+python benchmarks/dense/review.py collect --tag E-cf-assoc-t05 -c ... --source F-rise-lt-t0.5 --splits ltrain ltrain-field --jobs 3
+python benchmarks/dense/review.py fit --tag E-cf-assoc-t05 --out $WT_BENCHMARK_DATA/confidence/E-cf-assoc-t05/model-v1.npz
+python benchmarks/dense/review.py evaluate --tag E-cf-assoc-t05 --model .../model-v1.npz --name v1
 ```
 
 ## Learned fragment linking

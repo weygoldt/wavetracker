@@ -143,6 +143,9 @@ peak"). The pair head and the electrode branch are built and off by default.
   (`mixture.py`), so close-pair strata by SNR are mislabeled.
 - Retrain the fragment linker on the step-B detector's fragments (it was
   trained on v1 fragments).
+- Detector threshold 0.5 is now used (2026-11-12); the association network
+  and its linker were trained on 0.6 detections: retrain them on 0.5
+  detections, and try thresholds below 0.5.
 - Ghost tails: the detector keeps reporting the old frequency for 1-3 s
   after a rise onset (its +-26 s temporal context); a narrower or causal
   context may remove them at the source.
