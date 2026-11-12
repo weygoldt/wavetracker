@@ -58,7 +58,20 @@ per frame and false identities, not only IDF1. Lowering the threshold or
 `start_salience` does not help this fish (at most 37-48 % of its frames,
 nothing in 125-225 s).
 
-## Truth misses the steep part of rises (2026-11-11, noticed by the user) - truth fixed, retraining pending
+## Detector traces only part of steep rises (2026-11-12, future, not now)
+
+The detector retrained on the corrected rise truth (`D-rt-tcn64aug-s0`,
+threshold 0.5) finds 0.513 instead of 0.475 of the steep-part frames
+(+0.038 [+0.031, +0.046]) and leaves IDF1 about unchanged (+0.005,
+n.s.); at threshold 0.6 the gain is +0.006. The steepest climbs (about
+10 Hz in 0.2 s) are still missed in the middle. Likely reasons: rise frames
+are 0.35 % of the targets, and the 1.64 s window smears a fast climb into a
+vertical stripe. Future options (user, 2026-11-12: not top priority):
+- weight the rise frames more in the loss;
+- give the network a second, short-window spectrogram (e.g. 0.2 s) as
+  input, where the climb is visible.
+
+## Truth misses the steep part of rises (2026-11-11, noticed by the user) - truth fixed, retrained (see above)
 
 Done (branch learned-risetruth, 2026-11-12): steps 1-3 and the rise-onset
 stratum. `rise_truth.py` follows 271 of 415 onsets of the dev sources by the
@@ -116,7 +129,7 @@ is only the detector's salience per detection. Ideas, not decided:
 - a confidence map over the spectrogram (salience plus association
   confidence) shown in the GUI next to the tracks.
 
-## Close pairs (rule-based approach in progress, branch learned-pairtrack; learned association merged)
+## Close pairs (done: learned association and pair filling merged)
 
 Two fish closer than about 1.2 Hz are limited by association: even a
 perfect pair detector lowers IDF1 because the tracker swaps the two
