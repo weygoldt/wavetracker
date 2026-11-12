@@ -20,6 +20,10 @@ and linker kept, joined perfectly).
     python benchmarks/dense/oracle.py detect --tag A-oracle-truth -c benchmarks/dense/configs/dense-linked.yaml --split ldev
     python benchmarks/dense/oracle.py detect --tag A-oracle-snr0 --min-snr 0 -c ... --split ldev
     python benchmarks/dense/oracle.py ids --tag A-oracle-ids-learned --source s5000-t0.6 --split ldev
+    python benchmarks/dense/oracle.py detect --tag D-rt-oracle --truth rises -c ... --split ldev
+
+``detect --truth rises`` takes the detections from the truth that follows the
+steep part of rises (``truth_rises.npz``) and scores on both truths.
 """
 
 from __future__ import annotations
@@ -34,8 +38,8 @@ import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent))
-from run import MIXTURES, RUNS, merge, mixtures
-from score import TOL, match, score, truth_at
+from run import MIXTURES, RUNS, merge, mixtures, scored, write_scores
+from score import TOL, TRUTHS, match, score, truth_at
 
 import wavetracker.pipeline as pipeline
 from wavetracker.config import Config
@@ -56,10 +60,12 @@ def frame_times(path: Path, cfg: Config) -> np.ndarray:
         ).times()
 
 
-def oracle_freqs(name: str, times: np.ndarray, min_snr: float | None) -> np.ndarray:
+def oracle_freqs(
+    name: str, times: np.ndarray, min_snr: float | None, truth: str = "default"
+) -> np.ndarray:
     """Truth frequency (fish, frames) at the result frames, NaN where the
     truth does not know the fish (or it is below `min_snr`, as in score.py)."""
-    truth = dict(np.load(MIXTURES / name / "truth.npz"))
+    truth = dict(np.load(MIXTURES / name / TRUTHS[truth]))
     F = truth_at(truth, times)
     if min_snr is not None:
         snr = np.stack(
@@ -90,9 +96,11 @@ class OracleDetector:
         return Detections(frame.astype(np.int64), b, f.astype(np.float64))
 
 
-def detect_oracle(name: str, out: Path, cfg: Config, min_snr, device: str):
+def detect_oracle(
+    name: str, out: Path, cfg: Config, min_snr, device: str, truth: str = "default"
+):
     times = frame_times(MIXTURES / name, cfg)
-    F = oracle_freqs(name, times, min_snr)
+    F = oracle_freqs(name, times, min_snr, truth)
     oracle = OracleDetector(F)
     orig = pipeline.detect_harmonic_groups, pipeline.merge_tooth_neighbours
     pipeline.detect_harmonic_groups = oracle
@@ -112,7 +120,8 @@ def cmd_detect(args):
     variant = yaml.safe_load(Path(args.config).read_text()) or {}
     for name in mixtures(args.split, args.only):
         out = RUNS / args.tag / name
-        if (out / "score.json").exists() and not args.overwrite:
+        truths = list(dict.fromkeys(["default", args.truth]))
+        if scored(out, truths) and not args.overwrite:
             continue
         band = yaml.safe_load((MIXTURES / name / "band.yaml").read_text())
         cfg = Config.from_dict(merge(variant, band))
@@ -121,7 +130,9 @@ def cmd_detect(args):
         t0 = time.perf_counter()
         for attempt in range(30):  # other sessions share the GPU
             try:
-                res = detect_oracle(name, out, cfg, args.min_snr, args.device)
+                res = detect_oracle(
+                    name, out, cfg, args.min_snr, args.device, args.truth
+                )
                 break
             except RuntimeError as e:
                 if "out of memory" not in str(e) or attempt == 29:
@@ -129,13 +140,19 @@ def cmd_detect(args):
                 print("  GPU out of memory, retrying in 60 s", flush=True)
                 time.sleep(60)
         t_det = time.perf_counter() - t0
-        res.meta["oracle"] = {"detections": "truth", "min_snr": args.min_snr}
+        res.meta["oracle"] = {
+            "detections": "truth",
+            "min_snr": args.min_snr,
+            "truth": args.truth,
+        }
         t_track = pipeline.track_results(res, cfg)
         res.save(out)
-        summary, table = score(MIXTURES / name, out)
-        summary |= {"tag": args.tag, "detect_s": t_det, "track_s": t_track}
-        (out / "score.json").write_text(json.dumps(summary, indent=1))
-        np.savez_compressed(out / "frames.npz", **table)
+        summary = write_scores(
+            name,
+            out,
+            truths,
+            {"tag": args.tag, "detect_s": t_det, "track_s": t_track},
+        )
         print(
             f"{args.tag} {name}: {len(res.fund_v)} detections, recall "
             f"{summary['recall']:.3f} idf1 {summary['idf1']:.3f} precision "
@@ -188,6 +205,12 @@ def main(argv=None):
     a.add_argument("--split", default="ldev")
     a.add_argument("--only", nargs="*")
     a.add_argument("--min-snr", type=float, default=None, help="dB; default: all")
+    a.add_argument(
+        "--truth",
+        default="default",
+        choices=sorted(TRUTHS),
+        help="truth the detections come from (rises: truth_rises.npz)",
+    )
     a.add_argument("--device", default="auto")
     a.add_argument("--overwrite", action="store_true")
     a.set_defaults(func=cmd_detect)
