@@ -80,13 +80,7 @@ is only the detector's salience per detection. Ideas, not decided:
 - a confidence map over the spectrogram (salience plus association
   confidence) shown in the GUI next to the tracks.
 
-## Why the boat take's constant fish is missed (in progress, branch learned-boatfish)
-
-The one fish present for the whole of `DR0000_0209` (probably the ~308 Hz
-line: v1 found it in 19 % of its frames, classic in 60 %) is barely
-tracked. Diagnosis only; the boat takes are not evaluation data.
-
-## Close pairs (in progress, branches learned-pairtrack, learned-assocnet)
+## Close pairs (rule-based approach in progress, branch learned-pairtrack; learned association merged)
 
 Two fish closer than about 1.2 Hz are limited by association: even a
 perfect pair detector lowers IDF1 because the tracker swaps the two
