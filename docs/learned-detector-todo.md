@@ -35,6 +35,22 @@ boat fish 19 % -> 58 % of its frames, on one identity (classic 59 %). Its
 salience is calibrated higher (precision at 0.5: 0.91 / 0.93 against
 0.96 / 0.96), so the detection threshold has to be re-tuned with it.
 
+Through `learned-rises` on `ldev` + `ldev-field` (model swapped, against
+learned-rises and against a fine-tune without the shelf) IDF1 is unchanged
+(-0.001 [-0.007, +0.006]), but harmonics reported as fish come back (0.14
+-> 0.32 per frame), precision drops by 0.029 [-0.048, -0.012] and false
+identities >= 30 s rise from 0.5 to 1.4 per mixture: once missing
+harmonics are no reason to reject, a fish's own 2nd-5th harmonic looks like
+a fish. The network cannot tell "no harmonic because the floor there is
+20 dB higher" from "no harmonic on the same floor" (a harmonic line, a pure
+tone), since the 100-Hz normalisation removes the floor level. So the
+retraining should also give it the floor: per harmonic channel, the band
+median of the normalisation at h*k minus that at k (a `SalienceSpec`
+field, off by default; untested). Check on `ldev` / `ldev2` with harmonics
+per frame and false identities, not only IDF1. Lowering the threshold or
+`start_salience` does not help this fish (at most 37-48 % of its frames,
+nothing in 125-225 s).
+
 ## Truth misses the steep part of rises (2026-11-11, noticed by the user)
 
 At most rises the tracks stop at the onset and continue only after the
