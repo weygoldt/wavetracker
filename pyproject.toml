@@ -67,8 +67,9 @@ markers = [
 [tool.ruff]
 line-length = 88
 target-version = "py311"
-# The original tracker, kept frozen as the reference of the equivalence tests.
-extend-exclude = ["tests/legacy_tracking.py"]
+# The original tracker, kept frozen as the reference of the equivalence tests,
+# and the one-off scripts that built the research explainer.
+extend-exclude = ["tests/legacy_tracking.py", "research"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B", "SIM", "NPY", "RUF"]
