@@ -1,11 +1,16 @@
-"""Classic and learned detector side by side on real field recordings.
+"""Classic and default (learned) pipeline side by side on real field recordings.
 
 There is no truth here and nothing is scored: the figures are for judging by
-eye whether the learned detector (trained on lab tube mixtures plus field
-noise, see docs/benchmarks.md "Learned detector (v1)") transfers to real field
-fish. The two runs of a segment differ only in the `detector` section of the
-config, and both panels of a figure show the same spectrogram (the classic
-run's stored fine spectrogram; it does not depend on the detector).
+eye whether the learned pipeline (trained on lab tube mixtures plus field
+noise, see docs/benchmarks.md) transfers to real field fish. The two runs of
+a segment share every setting of the recording (band, mains, interference,
+blocks); `classic` is `detector.method: classic` (harmonic groups, the
+rule-based tracker, the classic linker), `default` wavetracker's default
+pipeline (learned detector, learned association, its linker, the rise joiner,
+review confidences). Both panels of a figure show the same spectrogram (the
+classic run's stored fine spectrogram; it does not depend on the pipeline).
+`learned` (the v1 detector with the classic tracker) and `--candidate` models
+keep the meaning they had before the default changed.
 
 Recordings:
 
@@ -13,6 +18,9 @@ Recordings:
   files, decoded with ffmpeg; the venv's audioio cannot read them). Its day
   is fish-free; the day-2 hours 10:48-15:38 (files 282-340) were training
   noise of the learned detector and are refused here.
+* three grids of the second site, iriri02 (Igarape dos Trempes, a rocky
+  forest stream), never used for training or tuning: night files with
+  spectral lines by a 30-s survey of 21:00, 01:00 and 04:00 on all six grids.
 * the 2-electrode boat take DR0000_0209 (48 kHz WAV, about 40 fish in a
   chorus, moving electrodes). DR0000_0208 and its corrections are never used.
 
@@ -58,8 +66,18 @@ TRAINING_NOISE = range(282, 341)  # grid files that were training noise: refused
 DATA = Path(
     os.environ.get("WT_FIELD_CHECK", "~/wrk/data/wavetracker_benchmark/field_check")
 ).expanduser()
-FIG = Path("~/wrk/data/wavetracker_benchmark/figures/field_side_by_side").expanduser()
-DETECTORS = ["classic", "learned"]
+TREMPES = Path(
+    os.environ.get(
+        "WT_FIELD_TREMPES",
+        "/run/media/weygoldt/data1/efish/fielddata/iriri2026/iriri2026_recordings/"
+        "iriri02_igarape-dos-trempes",
+    )
+)
+FIG = Path(
+    "~/wrk/data/wavetracker_benchmark/figures/field_default_vs_classic"
+).expanduser()
+DETECTORS = ["classic", "default"]
+V1 = Path("~/wrk/data/wavetracker_benchmark/salience/v1/last.pt").expanduser()
 # extra learned models to compare (`--candidate NAME MODEL THRESHOLD`)
 CANDIDATES: dict[str, tuple[str, float]] = {}
 
@@ -70,6 +88,27 @@ SEGMENTS = {
     "grid01_f140_2258": {"recording": "grid", "file": 140},
     "grid01_f172_0138": {"recording": "grid", "file": 172},
     "grid01_f204_0418": {"recording": "grid", "file": 204},
+    # iriri02, nights of 7./8. Sep (survey: lines in 150-2000 Hz)
+    "trempes_g02_f326_2103": {
+        "recording": "grid",
+        "dir": "grid02/iriri02-grid02-dev08-20260906T1752",
+        "file": 326,
+    },
+    "trempes_g03_f376_0100": {
+        "recording": "grid",
+        "dir": "grid03/iriri02-grid03-dev19-20260906T1740",
+        "file": 376,
+    },
+    "trempes_g06_f329_2101": {
+        "recording": "grid",
+        "dir": "grid06/iriri02-grid06-dev16-20260906T1735",
+        "file": 329,
+    },
+    "trempes_g06_f377_0101": {
+        "recording": "grid",
+        "dir": "grid06/iriri02-grid06-dev16-20260906T1735",
+        "file": 377,
+    },
     "boat_DR0000_0209": {"recording": "boat"},
 }
 
@@ -116,14 +155,34 @@ BASE = {
 }
 
 
+# `learned` and candidates: a learned detector with the classic pipeline's
+# tracking (as before the default changed)
+_CLASSIC_TRACKING = {
+    "tracking": {"method": "classic", "min_identity_salience": None},
+    "linking": {
+        "threshold": 0.9,
+        "max_shared": 0.05,
+        "max_parallel": 0.3,
+        "model": None,
+    },
+    "rises": {"enabled": False},
+    "review": {"enabled": False},
+}
+
+
 def config_dict(recording: str, detector: str) -> dict:
     d = json.loads(json.dumps(_COMMON))
     for sec, vals in BASE[recording].items():
         d.setdefault(sec, {}).update(vals)
-    d["detector"] = {"method": detector}
-    if detector in CANDIDATES:
-        model, thr = CANDIDATES[detector]
+    if detector == "default":
+        d["detector"] = {}  # wavetracker's default pipeline
+    elif detector == "classic":
+        d["detector"] = {"method": "classic"}
+    else:
+        model, thr = CANDIDATES.get(detector, (str(V1), 0.6))
         d["detector"] = {"method": "learned", "model": model, "threshold": thr}
+        for sec, vals in _CLASSIC_TRACKING.items():
+            d.setdefault(sec, {}).update(vals)
     return {k: d[k] for k in sorted(d, key=_SECTION_ORDER.index)}
 
 
@@ -136,6 +195,8 @@ _SECTION_ORDER = [
     "tracking",
     "stitching",
     "linking",
+    "rises",
+    "review",
     "output",
 ]
 
@@ -171,19 +232,24 @@ def run_dir(name: str, detector: str) -> Path:
     return DATA / "runs" / name / detector
 
 
-def grid_files() -> list[Path]:
-    files = sorted(GRID.glob("*.wv"))
+def grid_dir(name: str) -> Path:
+    seg = SEGMENTS[name]
+    return TREMPES / seg["dir"] if "dir" in seg else GRID
+
+
+def grid_files(folder: Path = GRID) -> list[Path]:
+    files = sorted(folder.glob("*.wv"))
     if not files:
-        raise FileNotFoundError(f"no .wv files in {GRID} (set WT_FIELD_GRID)")
+        raise FileNotFoundError(f"no .wv files in {folder} (set WT_FIELD_GRID)")
     return files
 
 
-def grid_file(index: int) -> Path:
-    if index in TRAINING_NOISE:
+def grid_file(index: int, folder: Path = GRID) -> Path:
+    if folder == GRID and index in TRAINING_NOISE:
         raise ValueError(
             f"grid file {index} was training noise of the learned detector"
         )
-    return grid_files()[index]
+    return grid_files(folder)[index]
 
 
 def clock(path: Path) -> datetime:
@@ -320,7 +386,7 @@ def convert(args):
         seg = SEGMENTS[name]
         if seg["recording"] != "grid":
             continue
-        src, dst = grid_file(seg["file"]), segment_input(name)
+        src, dst = grid_file(seg["file"], grid_dir(name)), segment_input(name)
         if dst.exists():
             continue
         print(f"{src.name} -> {dst}", flush=True)
@@ -390,8 +456,9 @@ PALETTE = [
     "#7a9a01",
 ]
 LABELS = {
-    "classic": "classic (peaks + harmonic groups)",
-    "learned": "learned v1 (threshold 0.6)",
+    "classic": "classic pipeline (harmonic groups, rule-based tracker, linker)",
+    "default": "default pipeline (learned detector + learned association)",
+    "learned": "learned v1 (threshold 0.6), classic tracking",
 }
 LINE_DB = 6.0  # a spectrogram cell counts as a line this far above its 20-Hz median
 
@@ -564,15 +631,17 @@ def _title(name: str) -> str:
     seg = SEGMENTS[name]
     if seg["recording"] == "boat":
         return f"{BOAT.name} (2 electrodes, boat take)"
-    src = grid_file(seg["file"])
-    return f"{src.name} (grid01, 16 electrodes, file {seg['file']})"
+    src = grid_file(seg["file"], grid_dir(name))
+    return f"{src.name} (16 electrodes, file {seg['file']})"
 
 
 def _short(name: str) -> str:
     seg = SEGMENTS[name]
     if seg["recording"] == "boat":
         return BOAT.stem
-    return f"grid01 file {seg['file']} ({clock(grid_file(seg['file'])):%d. %H:%M})"
+    src = grid_file(seg["file"], grid_dir(name))
+    site = "-".join(src.name.split("-")[:2])
+    return f"{site} file {seg['file']} ({clock(src):%d. %H:%M})"
 
 
 def overview(names: list[str], title: str):
@@ -627,28 +696,40 @@ def plot(args):
     FIG.mkdir(parents=True, exist_ok=True)
     done = [n for n in SEGMENTS if all(_has_run(n, d) for d in DETECTORS)]
     grid = [n for n in done if SEGMENTS[n]["recording"] == "grid"]
+    iriri01 = [n for n in grid if "dir" not in SEGMENTS[n]]
+    iriri02 = [n for n in grid if "dir" in SEGMENTS[n]]
     boat = [n for n in done if SEGMENTS[n]["recording"] == "boat"]
+    left_right = f"left {LABELS[DETECTORS[0]]}, right {LABELS[DETECTORS[-1]]}"
     figs = [
         (
-            "overview_grid01_night",
+            "overview_iriri01_grid01_night",
             lambda: overview(
-                grid,
-                "Overview: grid01, four 5-min files of the night 5./6. Sep "
-                "(left classic, right learned; identities coloured, unassigned "
-                "grey; fish range 200-1500 Hz). The learned detector bursts in "
-                "the first and last ~3 s of every file (edge artifact).",
+                iriri01,
+                "Overview: iriri01 grid01, four 5-min files of the night 5./6. "
+                f"Sep ({left_right};\nidentities coloured, unassigned grey; fish "
+                "range 200-1500 Hz)",
+            ),
+        ),
+        (
+            "overview_iriri02_nights",
+            lambda: overview(
+                iriri02,
+                "Overview: iriri02 (a site never used for training or tuning), "
+                f"5-min files of three grids, nights 7./8. Sep ({left_right};\n"
+                "identities coloured, unassigned grey; fish range 200-1500 Hz)",
             ),
         ),
         (
             "overview_boat_DR0000_0209",
             lambda: overview(
                 boat,
-                "Overview: boat take DR0000_0209 (left classic, right learned; "
+                f"Overview: boat take DR0000_0209 ({left_right}; "
                 "fish range 80-2000 Hz)",
             ),
         ),
     ]
-    figs = [f for f in figs if not f[0].endswith("night") or grid]
+    figs = [f for f in figs if not f[0].startswith("overview_iriri01") or iriri01]
+    figs = [f for f in figs if not f[0].startswith("overview_iriri02") or iriri02]
     figs = [f for f in figs if not f[0].startswith("overview_boat") or boat]
     for k, (name, win, kind) in enumerate(w for w in windows() if w[0] in done):
         tag = f"{k + 1:02d}_{name}_{win[2]:.0f}-{win[3]:.0f}Hz"
@@ -788,13 +869,13 @@ def main(argv=None):
     if args.candidate:
         global FIG
         name, model, thr = args.candidate
-        if name in ("classic", "learned"):
-            raise ValueError("candidate names classic and learned are taken")
+        if name in ("classic", "learned", "default"):
+            raise ValueError("candidate names classic, learned, default are taken")
         CANDIDATES[name] = (str(Path(model).expanduser().resolve()), float(thr))
         DETECTORS.append(name)
         LABELS[name] = f"{name} (threshold {float(thr):g})"
         FIG = FIG.with_name(f"{FIG.name}_{name}")
-        if getattr(args, "detectors", None) == ["classic", "learned"]:
+        if getattr(args, "detectors", None) == ["classic", "default"]:
             args.detectors = list(DETECTORS)
     args.func(args)
 

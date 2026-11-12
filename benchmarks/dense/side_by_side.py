@@ -45,8 +45,9 @@ PALETTE = [
     "#7a9a01",
 ]
 LABELS = {
-    "classic-ldev": "classic (peaks + harmonic groups)",
+    "classic-ldev": "classic pipeline (dense-linked.yaml)",
     "s5000-t0.6": "learned v1 (threshold 0.6)",
+    "F-an-t0.5": "default pipeline (learned-assocnet.yaml, threshold 0.5)",
 }
 
 
@@ -194,8 +195,10 @@ def main(argv=None):
         "--worst", action="store_true", help="add the window worst for the 2nd tag"
     )
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--out", help="figure folder (default: figures/side_by_side)")
     args = p.parse_args(argv)
-    OUT.mkdir(parents=True, exist_ok=True)
+    out = DATA / "figures" / args.out if args.out else OUT
+    out.mkdir(parents=True, exist_ok=True)
     dev = torch.device(args.device)
     neutral = "window: middle of the mixture, densest band"
     todo = [(m, None, neutral) for m in args.mixtures]
@@ -223,7 +226,7 @@ def main(argv=None):
             ha="left",
             fontsize=11,
         )
-        path = OUT / f"{k + 1:02d}_{name.replace('/', '_')}.png"
+        path = out / f"{k + 1:02d}_{name.replace('/', '_')}.png"
         fig.savefig(path, dpi=120)
         plt.close(fig)
         paths.append(path)
