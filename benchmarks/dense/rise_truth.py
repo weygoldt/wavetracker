@@ -47,6 +47,7 @@ Usage::
     python benchmarks/dense/rise_truth.py mixtures --splits ltrain ldev ldev2
     python benchmarks/dense/rise_truth.py mixtures --check   # old truth reproduced?
     python benchmarks/dense/rise_truth.py report             # validation figures
+    python benchmarks/dense/rise_truth.py runs --tags A B --mixtures ldev/density-10-s0
 """
 
 from __future__ import annotations
@@ -955,6 +956,142 @@ def plot_mixture_onsets(name: str, path: Path, n: int = 4):
     return path
 
 
+def rise_windows(name: str, n: int, min_change: float = 4.0, seed: int = 0):
+    """Up to `n` corrected onsets of a mixture (fish, centre time), chosen
+    from those whose truth changed by at least `min_change` Hz, at random
+    (not by any run's result)."""
+    import mixture as mx
+
+    d = mx.MIXTURES / name
+    old = np.load(d / "truth.npz")
+    new = np.load(d / TRUTH_FILE)
+    t = new["times"]
+    cands = []
+    for j in range(len(new["rise"])):
+        idx = np.flatnonzero(new["rise"][j])
+        if len(idx) == 0:
+            continue
+        for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1):
+            change = np.nanmax(np.abs(new["freqs"][j, run] - old["freqs"][j, run]))
+            tc = float(t[run].mean())
+            if change >= min_change and 5.0 < tc < t[-1] - 6.0:  # whole window
+                cands.append((j, tc))
+    rng = np.random.default_rng(seed)
+    pick = rng.choice(len(cands), size=min(n, len(cands)), replace=False)
+    return [cands[i] for i in sorted(pick)]
+
+
+def plot_rise_runs(name: str, tags: list[str], path: Path, n: int = 4, seed: int = 0):
+    """Detections of runs (rows) at corrected onsets of a mixture (columns)
+    over its spectrogram, with the corrected truth: identities in colours,
+    the fish's own (IDF1) identity in blue, detections that match no fish in
+    red, the new rise frames as red rings."""
+    import matplotlib.pyplot as plt
+    import mixture as mx
+    from common import MIX_CHANNELS
+    from score import match, truth_at
+
+    from wavetracker.results import Results
+
+    d = mx.MIXTURES / name
+    new = dict(np.load(d / TRUTH_FILE))
+    wins = rise_windows(name, n, seed=seed)
+    if not wins:
+        return None
+    raw = np.memmap(d / "traces-grid1.raw", np.float32, mode="r").reshape(
+        -1, MIX_CHANNELS
+    )
+    runs = {}
+    for tag in tags:
+        res = Results.load(DATA / "runs" / tag / name)
+        F = truth_at(new, res.times)
+        fish = match(res, F)
+        ids = np.unique(res.ident_v[np.isfinite(res.ident_v)])
+        counts = np.zeros((len(ids), len(F)), int)
+        m = (fish >= 0) & np.isfinite(res.ident_v)
+        np.add.at(counts, (np.searchsorted(ids, res.ident_v[m]), fish[m]), 1)
+        from scipy.optimize import linear_sum_assignment
+
+        r, c = linear_sum_assignment(-counts)
+        own = {int(cc): ids[rr] for rr, cc in zip(r, c, strict=True) if counts[rr, cc]}
+        runs[tag] = (res, fish, own)
+    other = ["#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#6250d6", "#52514e"]
+    fig, axs = plt.subplots(
+        len(tags),
+        len(wins),
+        figsize=(3.8 * len(wins), 3.4 * len(tags)),
+        squeeze=False,
+        layout="constrained",
+    )
+    t = new["times"]
+    for col, (j, tc) in enumerate(wins):
+        t0, t1 = tc - 4, tc + 5
+        i0 = max(0, int((t0 - 1) * RATE))
+        x = np.asarray(raw[i0 : int((t1 + 1) * RATE)], np.float64)
+        ff, tt, db = _spec(x, i0 / RATE, 2**15, 1000)
+        w = (t >= t0) & (t <= t1)
+        lo = np.nanmin(new["freqs_filled"][j, w]) - 5
+        hi = np.nanmax(new["freqs_filled"][j, w]) + 5
+        fm = (ff >= lo) & (ff <= hi)
+        tm = (tt >= t0) & (tt <= t1)
+        dd = db[fm][:, tm]
+        for row, tag in enumerate(tags):
+            ax = axs[row, col]
+            res, fish, own = runs[tag]
+            ax.pcolormesh(
+                tt[tm] - tc,
+                ff[fm],
+                dd,
+                cmap="gray_r",
+                vmin=np.percentile(dd, 30),
+                vmax=dd.max(),
+                shading="auto",
+                rasterized=True,
+            )
+            ax.plot(t[w] - tc, new["freqs"][j, w], "-", lw=0.6, color="#0b0b0b")
+            fl = w & new["rise"][j]
+            ax.plot(
+                t[fl] - tc, new["freqs"][j, fl], "o", ms=5, mfc="none", color="#d03b3b"
+            )
+            td = res.times[res.idx_v]
+            sel = (td >= t0) & (td <= t1) & (res.fund_v >= lo) & (res.fund_v <= hi)
+            ids = res.ident_v[sel]
+            for k, i in enumerate(np.unique(ids[np.isfinite(ids)])):
+                mi = sel & (res.ident_v == i)
+                color = "#2a78d6" if own.get(j) == i else other[k % len(other)]
+                ax.plot(td[mi] - tc, res.fund_v[mi], ".", ms=3.5, color=color)
+            un = sel & (fish < 0)
+            ax.plot(td[un] - tc, res.fund_v[un], "x", ms=3, color="#d03b3b")
+            ax.set_ylim(lo, hi)
+            ax.set_xlim(-4, 5)
+            fr = res.idx_v[(fish == j) & (td >= t0) & (td <= t1)]
+            rt = truth_at(
+                {"times": t, "rise": new["rise"].astype(float)}, res.times, "rise"
+            )[j]
+            hit = int((rt[fr] > 0).sum())
+            n_r = int(((rt > 0) & (res.times >= t0) & (res.times <= t1)).sum())
+            ax.set_title(
+                f"{tag}\n{name} fish {j}, rise frames found {hit}/{n_r}",
+                loc="left",
+                fontsize=7,
+            )
+            ax.tick_params(labelsize=7)
+    axs[-1, 0].set_xlabel("time [s]", fontsize=8)
+    axs[-1, 0].set_ylabel("frequency [Hz]", fontsize=8)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=120)
+    plt.close(fig)
+    return path
+
+
+def cmd_runs(args):
+    for name in args.mixtures:
+        stem = "_vs_".join(args.tags) + "_" + name.replace("/", "_")
+        p = plot_rise_runs(name, args.tags, FIG / f"runs_{stem}.png", args.n, args.seed)
+        if p:
+            print(p)
+
+
 def cmd_report(args):
     library = json.loads((DATA / "library.json").read_text())
     FIG.mkdir(parents=True, exist_ok=True)
@@ -992,6 +1129,12 @@ def main(argv=None):
         ],
     )
     c.set_defaults(func=cmd_report)
+    r = sub.add_parser("runs", help="runs at corrected onsets, side by side")
+    r.add_argument("--tags", nargs="+", required=True)
+    r.add_argument("--mixtures", nargs="+", required=True)
+    r.add_argument("--n", type=int, default=4)
+    r.add_argument("--seed", type=int, default=0)
+    r.set_defaults(func=cmd_runs)
     args = p.parse_args(argv)
     args.func(args)
 
