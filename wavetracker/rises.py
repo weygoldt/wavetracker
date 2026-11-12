@@ -104,11 +104,29 @@ def join_rises(
     times: np.ndarray,
     cfg: RisesConfig,
     sal_v: np.ndarray | None = None,
+    trace: dict | None = None,
 ) -> np.ndarray:
     """Identities with the two sides of rise onsets joined (see module doc).
-    `sal_v` (salience per detection) is needed for ``cfg.min_salience``."""
+    `sal_v` (salience per detection) is needed for ``cfg.min_salience``.
+
+    `trace` (optional, for `wavetracker.review`): filled with the candidate
+    pairs, best first, as identities (``a`` stops, ``b`` starts), their
+    pattern rms difference (``rms``), the start of b and the stop of a
+    (``t_start``, ``t_stop`` [s]), whether they were joined (``accepted``) and
+    the detections of a's tail dropped by each join (``dropped``); the result
+    does not depend on it."""
     from .stitching import resolve_duplicates
 
+    if trace is not None:
+        trace.update(
+            a=np.zeros(0),
+            b=np.zeros(0),
+            rms=np.zeros(0),
+            t_start=np.zeros(0),
+            t_stop=np.zeros(0),
+            accepted=np.zeros(0, bool),
+            dropped=np.zeros(0, np.int64),
+        )
     if not cfg.enabled or not np.isfinite(ident_v).any():
         return ident_v.copy()
     if cfg.min_salience is not None and sal_v is None:
@@ -133,7 +151,9 @@ def join_rises(
         return i
 
     drop = []
-    for _, a, b, t_s, t_e in pairs:
+    accepted = np.zeros(len(pairs), bool)
+    n_dropped = np.zeros(len(pairs), np.int64)
+    for q, (_, a, b, t_s, t_e) in enumerate(pairs):
         ra, rb = find(a), find(b)
         if ra == rb:
             continue
@@ -146,11 +166,23 @@ def join_rises(
         if shared > cfg.max_shared * min(len(fa), len(fb)):
             continue
         drop.append(tail)
+        accepted[q] = True
+        n_dropped[q] = len(tail)
         if len(fa) < len(fb) or (len(fa) == len(fb) and rb < ra):
             ra, rb, fa, fb = rb, ra, fb, fa
         parent[rb] = ra
         frames[ra] = np.union1d(fa, fb)
         frames[rb] = None
+    if trace is not None:
+        trace.update(
+            a=np.array([ids[x[1]] for x in pairs], dtype=float),
+            b=np.array([ids[x[2]] for x in pairs], dtype=float),
+            rms=np.array([x[0] for x in pairs], dtype=float),
+            t_start=np.array([x[3] for x in pairs], dtype=float),
+            t_stop=np.array([x[4] for x in pairs], dtype=float),
+            accepted=accepted,
+            dropped=n_dropped,
+        )
     out = ident_v.copy()
     for p, m in enumerate(members):
         r = find(p)

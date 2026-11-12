@@ -655,6 +655,7 @@ def track(
     v6_compat: bool = False,
     sal_v: np.ndarray | None = None,
     cplx_v: np.ndarray | None = None,
+    trace: dict | None = None,
 ) -> np.ndarray:
     """Assign identities to detections.
 
@@ -679,6 +680,11 @@ def track(
         Complex spectra of every detection (n, channels); the learned
         association (``cfg.method == "learned"``) takes the relative signs of
         the electrodes from them (without: all in phase).
+    trace
+        Optional, for `wavetracker.review`: the learned association
+        (``assoc_mode: link``) fills it with ``link_p`` and ``alt_p`` per
+        detection (see `assocnet.link_evidence`; NaN and 0 where not
+        tracked). The result does not depend on it.
 
     Returns
     -------
@@ -694,7 +700,9 @@ def track(
     if np.any(np.diff(idx_v) < 0):
         raise ValueError("idx_v must be sorted")
     if cfg.method == "learned" and cfg.assoc_mode == "link":
-        return _track_learned(fund_v, idx_v, sign_v, cplx_v, sal_v, times, cfg, valid)
+        return _track_learned(
+            fund_v, idx_v, sign_v, cplx_v, sal_v, times, cfg, valid, trace
+        )
     if cfg.min_support > 0:  # isolated detections are not tracked
         valid &= (
             support(fund_v, idx_v, times, cfg.support_window, cfg.support_freq)
@@ -754,12 +762,13 @@ def track(
     return ident_v
 
 
-def _track_learned(fund_v, idx_v, sign_v, cplx_v, sal_v, times, cfg, valid):
+def _track_learned(fund_v, idx_v, sign_v, cplx_v, sal_v, times, cfg, valid, trace=None):
     """`track` with the learned association (wavetracker.assocnet)."""
     from . import assocnet
 
     model = assocnet.load_model(cfg.assoc_model, cfg.assoc_device)
     sel = np.flatnonzero(valid)
+    sub = {} if trace is not None else None
     ident = assocnet.track_learned(
         fund_v[sel],
         idx_v[sel],
@@ -771,9 +780,15 @@ def _track_learned(fund_v, idx_v, sign_v, cplx_v, sal_v, times, cfg, valid):
         threshold=cfg.assoc_threshold,
         min_detections=cfg.assoc_min_detections,
         device=cfg.assoc_device,
+        trace=sub,
     )
     ident_v = np.full(len(fund_v), np.nan)
     ident_v[sel] = ident
+    if trace is not None:
+        trace["link_p"] = np.full(len(fund_v), np.nan)
+        trace["alt_p"] = np.zeros(len(fund_v))
+        trace["link_p"][sel] = sub["link_p"]
+        trace["alt_p"][sel] = sub["alt_p"]
     return ident_v
 
 

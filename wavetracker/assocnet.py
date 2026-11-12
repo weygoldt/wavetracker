@@ -487,11 +487,19 @@ def track_learned(
     min_detections: int = 1,
     device="cpu",
     chunk_frames: int = 3000,
+    trace: dict | None = None,
 ) -> np.ndarray:
     """Identity of every detection (NaN: none) from the learned association.
-    `idx_v` must be sorted."""
+    `idx_v` must be sorted.
+
+    `trace` (optional, for `wavetracker.review`): filled with ``link_p``, the
+    probability of the link from each detection's predecessor on its track
+    (NaN for the first), and ``alt_p``, the most probable link into it from
+    another track (0 if none); the result does not depend on it."""
     n = len(fund_v)
     ident = np.full(n, np.nan)
+    if trace is not None:
+        trace.update(link_p=np.full(n, np.nan), alt_p=np.zeros(n))
     if n < 2 or len(times) < 2:
         return ident
     frame_dt = float(times[1] - times[0])
@@ -500,7 +508,34 @@ def track_learned(
     d = detection_inputs(fund_v, idx_v, times, sign_v, cplx_v, sal_v, device)
     prob = edge_probabilities(model, d, idx_v, src, dst, frame_dt, chunk_frames)
     tr = link_edges(idx_v, src, dst, prob, threshold)
+    if trace is not None:
+        link_p, alt_p = link_evidence(tr, src, dst, prob)
+        trace.update(link_p=link_p, alt_p=alt_p)
     size = np.bincount(tr)
     ok = size[tr] >= min_detections
     ident[ok] = tr[ok]
     return ident
+
+
+def link_evidence(track, src, dst, prob):
+    """Per detection: the probability of the link from its predecessor on
+    its track (NaN for a track's first detection) and the most probable
+    link into it from a detection of another track (0 if none)."""
+    n = len(track)
+    link_p = np.full(n, np.nan)
+    alt_p = np.zeros(n)
+    if not len(src):
+        return link_p, alt_p
+    # a track is a chain: consecutive members (by index; idx_v is sorted)
+    order = np.lexsort((np.arange(n), track))
+    same = track[order[1:]] == track[order[:-1]]
+    a, b = order[:-1][same], order[1:][same]
+    key = src.astype(np.int64) * n + dst.astype(np.int64)
+    srt = np.argsort(key, kind="stable")
+    want = a.astype(np.int64) * n + b
+    pos = np.clip(np.searchsorted(key[srt], want), 0, len(key) - 1)
+    hit = key[srt][pos] == want
+    link_p[b[hit]] = prob[srt][pos[hit]]
+    other = track[src] != track[dst]
+    np.maximum.at(alt_p, dst[other], prob[other])
+    return link_p, alt_p
