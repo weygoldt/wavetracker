@@ -6,6 +6,9 @@ detection thresholds, with the fixed tracker and linker of
     python benchmarks/dense/det_sweep.py run --model $WT_BENCHMARK_DATA/salience/B-det-x/model.pt \
         --tag B-det-x --thresholds 0.5 0.6 0.7
     python benchmarks/dense/det_sweep.py table --tags 'B-det-v1-s*' 'B-det-x-*'
+    python benchmarks/dense/det_sweep.py run --base benchmarks/dense/configs/learned-rises.yaml \
+        --model ... --tag D-rt-s0 --splits ldev ldev-field ldev2 ldev2-field \
+        --truth default rises --jobs 1
 
 Run tags are ``<tag>-t<threshold>``; each (threshold, split) runs as its own
 process (``--jobs`` at a time).
@@ -70,6 +73,8 @@ def run(args):
             sp,
             "--device",
             args.device,
+            "--truth",
+            *args.truth,
         ]
         with open(log, "w") as f:
             r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT)
@@ -187,6 +192,12 @@ def main(argv=None):
     a.add_argument("--splits", nargs="+", default=list(SPLITS))
     a.add_argument("--jobs", type=int, default=6)
     a.add_argument("--device", default="auto", help="of the runs (cpu: GPU busy)")
+    a.add_argument(
+        "--truth",
+        nargs="+",
+        default=["default"],
+        help="truths the runs are scored on (run.py track --truth)",
+    )
     b = sub.add_parser("table")
     b.add_argument("--tags", nargs="+", required=True)
     b.add_argument("--json")
