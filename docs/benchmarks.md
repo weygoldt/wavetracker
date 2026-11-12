@@ -1306,6 +1306,19 @@ truth detections have no ghost tails), and `min_jump` 0.5 Hz instead of
 on bridged rises (+0.0023 [+0.0014, +0.0034]): not an effect of tracing
 the climb; to be checked with a real detector.
 
+**Retrained on the corrected truth.** Two seeds of the step-B recipe trained
+with `--truth rises` (`D-rt-tcn64aug-s0/s1`), compared through
+`learned-rises.yaml` with the step-B detector at the same threshold 0.5
+(`D-rt-old-s0-t0.5`), 51 dev mixtures, corrected truth: IDF1 +0.001 / -0.001
+(n.s.), steep-part frames detected +0.011 [+0.006, +0.017] / +0.009, on
+their own identity n.s., harmonic detections slightly more. The corrected
+truth barely changes what the network learns (rise frames are 0.35 % of the
+targets); the models are not adopted. The comparison showed something else:
+the step-B detector at threshold 0.5 instead of 0.6 in `learned-rises.yaml`
+gains IDF1 +0.0043 [+0.0006, ...] (recall +0.012, precision -0.013, long
+false identities 0.51 -> 0.29 per mixture, harmonic detections per frame
+0.13 -> 0.20).
+
 ### Review confidence (step E)
 
 Run tags `E-cf-*`; files in `$WT_BENCHMARK_DATA/confidence/`, notes in
