@@ -11,6 +11,12 @@ Usage::
     python benchmarks/dense/linker.py train --base dense
     python benchmarks/dense/linker.py apply --base dense --tag dense-linked --splits dev dev-field
     python benchmarks/dense/run.py report --tags dense dense-linked
+
+On the learned detector's fragments (its own training mixtures, ltrain), with
+the tracker settings of the run given explicitly::
+
+    python benchmarks/dense/linker.py build --base A-learned -c benchmarks/dense/configs/learned-linked.yaml --splits ltrain ltrain-field ldev ldev-field
+    python benchmarks/dense/linker.py train --base A-learned --train-splits ltrain ltrain-field --val-splits ldev ldev-field --out <model.npz>
 """
 
 from __future__ import annotations
@@ -40,22 +46,26 @@ WORK = DATA / "linker"
 CONFIGS = Path(__file__).with_name("configs")
 
 
-def base_config(base: str, name: str) -> Config:
-    path = CONFIGS / f"{base}.yaml"
+def base_config(base: str, name: str, config: str | None = None) -> Config:
+    """The config of the base run: `config` if given, else configs/<base>.yaml."""
+    path = Path(config) if config else CONFIGS / f"{base}.yaml"
+    if config and not path.exists():
+        raise FileNotFoundError(path)
     variant = (yaml.safe_load(path.read_text()) if path.exists() else {}) or {}
     band = yaml.safe_load((MIX / name / "band.yaml").read_text())
     return Config.from_dict(merge(variant, band))
 
 
-def tracked(base: str, name: str):
+def tracked(base: str, name: str, config: str | None = None):
     """Results of the base run with the tracker's identities before stitching
-    (cached), and the fish of every detection."""
+    (cached), and the fish of every detection. The tracker's settings come
+    from `config` (default: configs/<base>.yaml)."""
     res = Results.load(RUNS / base / name)
     cache = WORK / base / name / "track.npz"
     if cache.exists():
         z = np.load(cache)
         return res, z["ident"], z["fish"]
-    cfg = base_config(base, name)
+    cfg = base_config(base, name, config)
     hg = cfg.harmonic_groups
     ident = track(
         res.fund_v,
@@ -65,6 +75,8 @@ def tracked(base: str, name: str):
         cfg.tracking,
         hg.min_freq,
         hg.max_freq,
+        sal_v=res.sal_v,
+        cplx_v=res.cplx_v,
     )
     truth = dict(np.load(MIX / name / "truth.npz"))
     fish = match(res, truth_at(truth, res.times), TOL)
@@ -96,8 +108,10 @@ def pair_labels(pairs, maj):
     return y, w
 
 
-def build_one(base: str, name: str, cfg: LinkingConfig) -> dict:
-    res, ident, fish = tracked(base, name)
+def build_one(
+    base: str, name: str, cfg: LinkingConfig, config: str | None = None
+) -> dict:
+    res, ident, fish = tracked(base, name, config)
     fr = linking.fragments(
         res.fund_v, res.idx_v, res.sign_v, res.cplx_v, ident, res.times, cfg
     )
@@ -132,14 +146,16 @@ def build_one(base: str, name: str, cfg: LinkingConfig) -> dict:
 
 
 def build(args):
-    cfg = LinkingConfig()
+    cfg = LinkingConfig(
+        **{k: float(v) for k, v in (kv.split("=") for kv in args.set or [])}
+    )
     for split in args.splits:
         for name in mixtures(split, args.only):
             out = WORK / args.base / name / "pairs.npz"
             if out.exists() and not args.overwrite:
                 continue
             t0 = time.perf_counter()
-            d = build_one(args.base, name, cfg)
+            d = build_one(args.base, name, cfg, args.config)
             np.savez(out, **d)
             print(
                 f"{name}: {len(d['y'])} pairs ({d['y'].sum():.0f} same fish), "
@@ -309,7 +325,7 @@ def apply(args):
     rows = []
     for split in args.splits:
         for name in mixtures(split, args.only):
-            res, ident, fish = tracked(args.base, name)
+            res, ident, fish = tracked(args.base, name, args.config)
             t0 = time.perf_counter()
             res.ident_v = linking.link(
                 res.fund_v,
@@ -365,14 +381,14 @@ class Sweep:
     """Everything linking needs per mixture, in memory, to compare models
     and thresholds quickly (dev splits)."""
 
-    def __init__(self, base, splits, only=None):
+    def __init__(self, base, splits, only=None, config=None):
         from score import classify_unmatched
 
         cfg = LinkingConfig()
         self.items = []
         for split in splits:
             for name in mixtures(split, only):
-                res, ident, fish = tracked(base, name)
+                res, ident, fish = tracked(base, name, config)
                 truth = dict(np.load(MIX / name / "truth.npz"))
                 F = truth_at(truth, res.times)
                 Ff = truth_at(truth, res.times, "freqs_filled")
@@ -423,7 +439,8 @@ class Sweep:
 
 def summarize(rows) -> str:
     parts = []
-    for sp in ("dev/", "dev-field/"):
+    splits = list(dict.fromkeys(x["name"].split("/")[0] + "/" for x in rows))
+    for sp in splits:
         r = [x for x in rows if x["name"].startswith(sp)]
         if r:
             parts.append(
@@ -434,7 +451,7 @@ def summarize(rows) -> str:
 
 
 def sweep(args):
-    sw = Sweep(args.base, args.splits)
+    sw = Sweep(args.base, args.splits, config=args.config)
     base = sw.run(lambda it: np.zeros(len(it["pairs"])), 1.0)
     print(f"{'tracker only':28s} {summarize(base)}")
     oracle = sw.run(
@@ -459,7 +476,7 @@ def tradeoff(args):
     model = linking.LinkModel.load(args.model)
     over = {k: float(v) for k, v in (kv.split("=") for kv in args.set or [])}
     out = {"model": str(args.model), "set": over, "panels": {}}
-    sw = Sweep(args.base, ["dev", "dev-field"])
+    sw = Sweep(args.base, ["dev", "dev-field"], config=args.config)
     for sp in ("dev", "dev-field"):
 
         def mean(rows, sp=sp):
@@ -598,10 +615,16 @@ def main(argv=None):
     a = sub.add_parser("build")
     a.add_argument("--base", default="dense")
     a.add_argument(
+        "-c", "--config", help="config of the base run (default: configs/<base>.yaml)"
+    )
+    a.add_argument(
         "--splits", nargs="+", default=["train", "train-field", "dev", "dev-field"]
     )
     a.add_argument("--only", nargs="*")
     a.add_argument("--overwrite", action="store_true")
+    a.add_argument(
+        "--set", nargs="*", help="LinkingConfig overrides for the candidates, key=value"
+    )
     a.set_defaults(func=build)
     b = sub.add_parser("train")
     b.add_argument("--base", default="dense")
@@ -616,6 +639,9 @@ def main(argv=None):
     b.set_defaults(func=train)
     c = sub.add_parser("apply")
     c.add_argument("--base", default="dense")
+    c.add_argument(
+        "-c", "--config", help="config of the base run (default: configs/<base>.yaml)"
+    )
     c.add_argument("--tag", required=True)
     c.add_argument("--model")
     c.add_argument("--splits", nargs="+", default=["dev", "dev-field"])
@@ -627,6 +653,9 @@ def main(argv=None):
     c.set_defaults(func=apply)
     d = sub.add_parser("sweep")
     d.add_argument("--base", default="dense")
+    d.add_argument(
+        "-c", "--config", help="config of the base run (default: configs/<base>.yaml)"
+    )
     d.add_argument("--splits", nargs="+", default=["dev", "dev-field"])
     d.add_argument("--models", nargs="+", required=True)
     d.add_argument("--thresholds", nargs="+", type=float, default=[0.5, 0.7, 0.9])
@@ -634,6 +663,9 @@ def main(argv=None):
     d.set_defaults(func=sweep)
     e = sub.add_parser("tradeoff")
     e.add_argument("--base", default="dense")
+    e.add_argument(
+        "-c", "--config", help="config of the base run (default: configs/<base>.yaml)"
+    )
     e.add_argument("--model", required=True)
     e.add_argument("--set", nargs="*", help="LinkingConfig overrides, key=value")
     e.add_argument("--out", default=str(DATA / "figures" / "linker" / "tradeoff.png"))

@@ -10,3 +10,5 @@ tracking:
   gap_tolerance_rate: 0.1
 linking:
   enabled: true
+detector:
+  method: classic

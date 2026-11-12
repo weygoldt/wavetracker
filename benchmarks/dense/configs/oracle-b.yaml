@@ -1,0 +1,20 @@
+# The association of learned-b.yaml for truth detections (oracle.py detect,
+# run A-oracle-snr0): the motion model and the looser association rules, but
+# the packaged linker at 0.9 and no salience filter (the oracle detections
+# have no salience of their own). Reproduces B-assoc-OC2-oracle:
+# ldev / ldev-field IDF1 0.790 / 0.757.
+harmonic_groups:
+  low_thresh_factor: 4.0
+  high_thresh_factor: 7.0
+  min_group_size: 2
+tracking:
+  min_support: 3
+  gap_tolerance: 0.5
+  gap_tolerance_rate: 0.1
+  motion_window: 2
+linking:
+  enabled: true
+  max_shared: 0.3
+  max_parallel: 0.6
+detector:
+  method: classic

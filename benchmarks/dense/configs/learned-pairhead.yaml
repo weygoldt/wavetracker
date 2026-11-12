@@ -1,0 +1,34 @@
+# learned-rises.yaml with the pair head (B-pair-fz-s0: frozen learned-b trunk,
+# pair threshold 0.3) and its second detections tracked last (pairs.enabled,
+# partners: fill): they only extend identities through their gaps, so every
+# other detection keeps the identity learned-rises gives it.
+# 51 dev mixtures: +0.0005 [+0.0001, +0.0009] IDF1 over learned-rises
+# (tracking the splits like any detection: -0.0033).
+detector:
+  method: learned
+  threshold: 0.6
+  model: /home/weygoldt/wrk/data/wavetracker_benchmark/salience/B-pair-fz-s0/last.pt
+  pair_threshold: 0.3
+harmonic_groups:
+  high_thresh_factor: 7.0
+  low_thresh_factor: 4.0
+  min_group_size: 2
+linking:
+  enabled: true
+  max_parallel: 0.6
+  max_shared: 0.3
+  model: /home/weygoldt/wrk/data/wavetracker_benchmark/assoc/linker-learned-v1-motion2.npz
+  threshold: 0.6
+rises:
+  enabled: true
+pairs:
+  enabled: true
+tracking:
+  method: classic
+  gap_tolerance: 0.5
+  gap_tolerance_rate: 0.1
+  min_identity_salience: 0.75
+  min_support: 3
+  motion_window: 2.0
+review:
+  enabled: false

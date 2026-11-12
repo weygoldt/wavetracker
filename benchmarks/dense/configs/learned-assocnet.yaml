@@ -1,0 +1,46 @@
+# learned-rises.yaml with the learned association (wavetracker.assocnet,
+# tracking.method: learned) instead of the rule-based tracker: a message-passing
+# network scores the links between detections of the next 2 s (within 2.5 Hz),
+# trained on the learned-b detections of ltrain (benchmarks/dense/assocnet.py,
+# tag C-an-v0; weights not packaged), and a frame-by-frame linking builds the
+# fragments from links of probability >= 0.7; tracks of fewer than 10
+# detections stay unassigned. The fragment linker (retrained on this tracker's
+# ltrain fragments), rise joiner and identity salience filter follow as in
+# learned-rises.yaml.
+# 51 dev mixtures (ldev + ldev2), lab / field: IDF1 0.776 / 0.769 against
+# 0.766 / 0.759 for learned-rises (+0.0099 [+0.0042, +0.0162]), 41 % fewer
+# identity switches; against the rule-based tracker with a linker retrained the
+# same way +0.0092 [+0.0036, +0.0154]. Threshold and minimum track length were
+# chosen with this network; a second seed (C-an-v0s1) gains +0.0038
+# [-0.0008, +0.0086], the mean of both +0.0068 [+0.0022, +0.0120].
+# Detector threshold 0.5 instead of 0.6 (2026-11-12; the association network
+# and the linker were trained at 0.6): lab / field IDF1 0.783 / 0.776 against
+# 0.776 / 0.769 (+0.0071 [+0.0040, +0.0101], 84 better, 18 worse); against
+# learned-rises at 0.5 +0.0127 [+0.0069, +0.0191].
+detector:
+  method: learned
+  threshold: 0.5
+  model: /home/weygoldt/wrk/data/wavetracker_benchmark/salience/B-det-tcn64aug-s0/last.pt
+harmonic_groups:
+  high_thresh_factor: 7.0
+  low_thresh_factor: 4.0
+  min_group_size: 2
+linking:
+  enabled: true
+  max_parallel: 0.6
+  max_shared: 0.3
+  model: /home/weygoldt/wrk/data/wavetracker_benchmark/assocnet/C-an-v0/linker.npz
+  threshold: 0.6
+rises:
+  enabled: true
+tracking:
+  method: learned
+  assoc_model: /home/weygoldt/wrk/data/wavetracker_benchmark/assocnet/C-an-v0/best.pt
+  assoc_threshold: 0.7
+  assoc_min_detections: 10
+  min_identity_salience: 0.75
+# Confidences and review flags (wavetracker.review, docs/review-flags.md),
+# calibrated on ltrain for this pipeline (benchmarks/dense/review.py, E-cf-assoc-t05).
+review:
+  enabled: true
+  model: /home/weygoldt/wrk/data/wavetracker_benchmark/confidence/E-cf-assoc-t05/model-v1.npz

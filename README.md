@@ -8,21 +8,36 @@
 Detect and track the EOD frequencies of individual **wave-type electric fish**
 in long, multi-electrode recordings.
 
-The pipeline:
+The pipeline (the default; the classic one is selected with
+`detector.method: classic`, see [Two pipelines](docs/configuration.md#two-pipelines)):
 
 1. **Spectrogram** – static is removed from the traces, then one-sided power
    spectral densities of every electrode are computed block-wise on the GPU
    with PyTorch (CPU works too). Stationary interference combs are detected
    and removed per electrode.
-2. **Harmonic groups** – peaks of the electrode-summed spectrum are grouped
-   into harmonic series; each group is one fish (parallel numba code).
-3. **Tracking** – detections are linked into identities using their
-   frequency and their amplitude pattern across electrodes
-   ([Raab et al. 2022](https://doi.org/10.3389/fnint.2022.965211)).
+2. **Detection** – a neural network marks the fundamentals in the
+   electrode-summed spectrogram
+   ([Learned detector](docs/algorithms.md#learned-detector)). Classic: peaks
+   are grouped into harmonic series by rules; each group is one fish.
+3. **Tracking** – a second network links detections into tracks using their
+   frequency, salience and amplitude pattern across electrodes
+   ([Learned association](docs/algorithms.md#learned-association)). Classic:
+   the rule-based tracker of
+   [Raab et al. 2022](https://doi.org/10.3389/fnint.2022.965211).
 4. **Linking** – a learned linker joins the track fragments of a fish across
-   rises, dropouts and close neighbours
-   ([Learned linking](docs/algorithms.md#learned-linking)); the earlier
-   rule-based stitching is available with `linking.enabled: false`.
+   dropouts and close neighbours, and identities are joined across rise
+   onsets by their electrode patterns
+   ([Learned linking](docs/algorithms.md#learned-linking),
+   [Joining across rises](docs/algorithms.md#joining-across-rises)).
+5. **Review** – every identity and join gets a calibrated confidence, and
+   `review.json` lists the places most likely wrong with a suggested fix
+   ([Review flags](docs/review-flags.md)).
+
+On the dense benchmark (mixtures of real recordings of fish held out from
+training, in lab and field noise) the default pipeline identifies the fish
+in 78 % of the frames (IDF1) against 64 % for the classic one
+([benchmarks](docs/benchmarks.md#detection-threshold-05)). All its models
+are shipped with wavetracker.
 
 Set the frequency range of your fish (see [Usage](#usage)); the default
 range is a broad catch-all.
@@ -31,8 +46,13 @@ A recording may start long before there is a fish in it, with the electrodes
 still out of the water or in empty water, for seconds or for hours: results for
 a fish [do not depend on what came before](docs/algorithms.md#recordings-without-fish).
 
-It runs at several hundred times realtime on an 11-channel, 20 kHz recording
-(a 4 h recording takes about a minute on an RTX 4080, mostly disk IO).
+Everything that runs on PyTorch runs on the GPU when there is one and falls
+back to the CPU when there is none or the GPU runs out of memory. On an RTX
+4080 the default pipeline processes 1 h of an 11-channel, 20 kHz recording in
+23 s (154x realtime, 4 GB of GPU memory), 4 h in 3.9 min (62x) and a 5-min,
+16-channel, 48 kHz field file in 6 s (53x); the classic pipeline takes 21 s
+for the hour and 1.7 min for the 4 h (mostly disk IO). Without a GPU the
+default pipeline runs at about realtime.
 
 ## Installation
 
@@ -109,9 +129,9 @@ Post-processing and tools:
 ### Configuration
 
 All parameters live in one YAML file: `wavetracker config cfg.yaml` writes the
-defaults, pass your edited copy with `-c cfg.yaml`. The
-[parameter reference](docs/configuration.md) lists the relevant ones and every
-file in a results directory.
+defaults (`--classic`: the classic pipeline), pass your edited copy with `-c
+cfg.yaml`. The [parameter reference](docs/configuration.md) lists the
+relevant ones and every file in a results directory.
 
 ### Results
 
@@ -132,7 +152,7 @@ for fish in r.ids():
 from wavetracker.config import Config
 from wavetracker.pipeline import detect, track_results
 
-cfg = Config.load("cfg.yaml")  # or Config()
+cfg = Config.load("cfg.yaml")  # or Config(), or Config.classic()
 out = detect("/data/rec", "results/rec", cfg, start=0, duration=600)
 track_results(out.results, cfg)
 out.results.save("results/rec")
@@ -167,6 +187,13 @@ history; tracks that are harmonics of another fish are flagged. Saving keeps
 the original identities as `ident_v.tracked.npy` and the directory stays
 readable by `Results.load`.
 
+To know where to look: the default pipeline rates every identity and every
+join with the probability that it is right and writes the places most likely
+wrong, each with a suggested fix, to `review.json` (see [review
+flags](docs/review-flags.md)). On dense benchmark mixtures, fixing them in
+that order recovers half of what such fixes can gain after about 4 places per
+10 minutes of recording.
+
 New to it? The [quickstart](https://github.com/weygoldt/audian/blob/master/docs/wavetracker-quickstart.md)
 walks through tracking and correcting a demo recording in about 15 minutes.
 
@@ -178,6 +205,8 @@ walks through tracking and correcting a demo recording in about 15 minutes.
   implementation, interference removal, stitching, known limitations.
 * [Post-processing](docs/post-processing.md) – cleanup, harmonics tracked as
   fish, merging by position for moving electrodes.
+* [Review flags](docs/review-flags.md) – confidences of identities and joins,
+  and where a result most likely needs a correction (`review.json`).
 * [Field recordings and dense populations](docs/field-recordings.md) – settings
   and observations for short recordings with many fish.
 * [Benchmarks](docs/benchmarks.md) – results on tube-competition recordings,

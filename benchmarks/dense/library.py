@@ -40,6 +40,7 @@ ASSIGN_TOL = 30.0  # Hz, detections farther from both coarse traces are dropped
 def source_config() -> Config:
     return Config.from_dict(
         {
+            "detector": {"method": "classic"},
             "harmonic_groups": {
                 "min_freq": 400.0,
                 "max_freq": 1200.0,
@@ -47,7 +48,7 @@ def source_config() -> Config:
                 # mains_freq stays at 50 Hz: without it hum teeth are detected
                 # and can capture a fish's trace; a fish on a mains harmonic
                 # is unknown there instead
-            }
+            },
         }
     )
 

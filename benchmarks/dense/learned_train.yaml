@@ -1,0 +1,142 @@
+# Training mixtures of the learned detector (benchmarks/dense/mixture.py).
+#
+# The families of suite.yaml, split `ltrain`: sources from the dev fish groups
+# 2019-g3 and 2022-p1/p2/p3 only (mixture.POOL, 20 trials), so that the fish
+# of the development mixtures (learned_dev.yaml, `ldev`: 2019-g4, 2022-p4)
+# are never seen in training and the test groups stay unseen. Seeds of their
+# own and other densities and bands than the dev suite. Field-noise variants
+# (`ltrain-field`, noise.py derive) use hours of the second, also empty, day
+# of the noise recording, which no other split uses (noise.DAY_LTRAIN).
+#
+#   python benchmarks/dense/mixture.py --suite benchmarks/dense/learned_train.yaml
+#   python benchmarks/dense/noise.py derive --splits ltrain
+#
+# Keys: see suite.yaml.
+
+defaults:
+  duration: 600.0
+  drift: 0.005
+  drift_timescale: 300.0
+  noise_db: 0.0
+  splits: [ltrain]
+
+scenarios:
+  # --- density ---------------------------------------------------------------
+  - name: density-06
+    n_fish: 6
+    band: [400, 1100]
+    seeds: [200]
+  - name: density-12
+    n_fish: 12
+    band: [400, 1100]
+    seeds: [200, 201]
+  - name: density-18
+    n_fish: 18
+    band: [400, 1100]
+    seeds: [200, 201]
+  - name: density-24
+    n_fish: 24
+    band: [400, 1100]
+    seeds: [200]
+  - name: density-30
+    n_fish: 30
+    band: [400, 1100]
+    seeds: [200, 201]
+  - name: crowded-20 # ~10 Hz between neighbours
+    n_fish: 20
+    band: [580, 780]
+    seeds: [200]
+  - name: crowded-30
+    n_fish: 30
+    band: [520, 820]
+    seeds: [200, 201]
+
+  # --- low frequencies ---------------------------------------------------------
+  - name: lowonly-08
+    n_fish: 8
+    band: [70, 260]
+    placement: log
+    seeds: [200]
+  - name: lowonly-14
+    n_fish: 14
+    band: [60, 350]
+    placement: log
+    seeds: [201]
+  - name: lowfreq-24
+    n_fish: 24
+    band: [60, 1200]
+    placement: log
+    seeds: [200]
+  - name: lowfreq-30
+    n_fish: 30
+    band: [60, 1300]
+    placement: log
+    seeds: [200, 201]
+
+  # --- attenuation -------------------------------------------------------------
+  - name: atten-fish-30
+    n_fish: 30
+    band: [150, 1300]
+    placement: log
+    seeds: [200, 201]
+    gain:
+      per: fish
+      static_db: [-40, 0]
+      wander_db: 3.0
+      wander_tau: 60.0
+      fades: {rate: 1.0, depth_db: [10, 40], duration_s: [20, 120]}
+      channel_db: 3.0
+      channel_tau: 90.0
+  - name: atten-fish-20
+    n_fish: 20
+    band: [300, 1100]
+    seeds: [200]
+    gain:
+      per: fish
+      static_db: [-30, 0]
+      wander_db: 4.0
+      wander_tau: 40.0
+      fades: {rate: 2.0, depth_db: [10, 40], duration_s: [10, 90]}
+      channel_db: 4.0
+      channel_tau: 60.0
+  - name: atten-dyad-30
+    n_fish: 30
+    band: [150, 1300]
+    placement: log
+    seeds: [200, 201]
+    gain:
+      per: dyad
+      fraction: 0.5
+      static_db: [-45, -15]
+      wander_db: 3.0
+      fades: {rate: 1.0, depth_db: [10, 30], duration_s: [30, 180]}
+      channel_db: 3.0
+  - name: atten-dyad-20
+    n_fish: 20
+    band: [200, 1200]
+    placement: log
+    seeds: [200]
+    gain:
+      per: dyad
+      fraction: 0.6
+      static_db: [-40, -10]
+      wander_db: 4.0
+      fades: {rate: 1.5, depth_db: [10, 30], duration_s: [20, 150]}
+      channel_db: 3.0
+  - name: ladder-14
+    n_fish: 14
+    band: [300, 1300]
+    seeds: [200]
+    gain: {ramp_db: 60.0, channel_db: 2.0}
+  - name: ladder-22
+    n_fish: 22
+    band: [200, 1300]
+    placement: log
+    seeds: [201]
+    gain: {ramp_db: 50.0, channel_db: 3.0}
+  - name: ladder-30
+    n_fish: 30
+    band: [150, 1300]
+    placement: log
+    seeds: [200, 201]
+    gain: {ramp_db: 60.0, channel_db: 2.0}

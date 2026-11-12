@@ -1,0 +1,912 @@
+<title>Wavetracker learned detector</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=JetBrains+Mono:wght@400;600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&display=swap">
+<style>
+/* Layout: one reading column (~68ch) inside a wider frame; figures use the full frame width. */
+:root {
+  --bg: #f3f5f4; --surface: #fcfdfc; --ink: #13212a; --ink-2: #44545c; --muted: #6f7f86;
+  --rule: #d8dfde; --accent: #1d6b86; --accent-soft: #e2eef1;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s7: #6250d6;
+  --spec-lo: #fcfdfc; --spec-mid: #8aaab6; --spec-hi: #0c2430;
+  --display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --body: "Source Serif 4", "Iowan Old Style", Georgia, serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e1416; --surface: #141b1e; --ink: #e3e9e9; --ink-2: #b0bdc0; --muted: #85949a;
+    --rule: #27333a; --accent: #66b8d2; --accent-soft: #16303a;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s7: #9085e9;
+    --spec-lo: #141b1e; --spec-mid: #3f6a78; --spec-hi: #ecf5f4;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e1416; --surface: #141b1e; --ink: #e3e9e9; --ink-2: #b0bdc0; --muted: #85949a;
+  --rule: #27333a; --accent: #66b8d2; --accent-soft: #16303a;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s7: #9085e9;
+  --spec-lo: #141b1e; --spec-mid: #3f6a78; --spec-hi: #ecf5f4;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 400 17px/1.62 var(--body); }
+.frame { max-width: 1060px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 40px 80px; }
+.prose { max-width: 68ch; }
+h1, h2, h3 { font-family: var(--display); font-weight: 700; text-wrap: balance; line-height: 1.15; letter-spacing: -0.01em; }
+h1 { font-size: clamp(2rem, 5vw, 3.1rem); margin: 0.2em 0 0.35em; }
+h2 { font-size: clamp(1.45rem, 3vw, 1.85rem); margin: 2.6em 0 0.5em; padding-top: 0.9em; border-top: 1px solid var(--rule); }
+h3 { font-size: 1.12rem; font-weight: 500; margin: 1.8em 0 0.4em; }
+p { margin: 0 0 1em; }
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible, button:focus-visible, input:focus-visible, label:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, .mono { font-family: var(--mono); font-size: 0.86em; }
+code { background: var(--accent-soft); padding: 0.05em 0.3em; border-radius: 3px; }
+.kicker { font: 600 0.74rem/1.4 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 16px; }
+.lede { font-size: 1.16rem; color: var(--ink-2); max-width: 64ch; }
+nav.toc { margin: 1.4em 0 0; display: flex; flex-wrap: wrap; gap: 6px 14px; font: 0.82rem/1.5 var(--mono); }
+nav.toc a { color: var(--ink-2); text-decoration: none; border-bottom: 1px solid var(--rule); }
+nav.toc a:hover { color: var(--accent); border-color: var(--accent); }
+.tag { font: 600 0.64rem/1 var(--mono); letter-spacing: 0.05em; text-transform: uppercase; padding: 3px 5px 2px; border-radius: 3px; white-space: nowrap; vertical-align: 0.15em; border: 1px solid; }
+.tag.pub { color: var(--accent); border-color: var(--accent); }
+.tag.meas { color: var(--ink-2); border-color: var(--ink-2); }
+.tag.ours { color: var(--muted); border-color: var(--muted); border-style: dashed; }
+figure { margin: 1.8em 0 2.2em; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px; min-width: 0; }
+figcaption { font-size: 0.93rem; line-height: 1.5; color: var(--ink-2); margin-top: 12px; max-width: 80ch; }
+figcaption b { color: var(--ink); font-weight: 600; }
+.controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; font: 0.78rem/1.4 var(--mono); color: var(--ink-2); margin-bottom: 12px; }
+.controls label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.controls input[type=range] { accent-color: var(--accent); width: 150px; }
+.controls input[type=checkbox] { accent-color: var(--accent); }
+.controls output { color: var(--ink); min-width: 5.5ch; display: inline-block; font-variant-numeric: tabular-nums; }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 4px; overflow: hidden; }
+.seg button, .btn { font: 600 0.74rem/1 var(--mono); color: var(--ink-2); background: var(--surface); border: 0; padding: 7px 10px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--rule); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--surface); }
+.btn { border: 1px solid var(--rule); border-radius: 4px; }
+.btn:hover, .seg button:hover { color: var(--ink); }
+.swatch { display: inline-block; width: 18px; height: 0; border-top: 2px solid; vertical-align: middle; }
+.swatch.dash { border-top-style: dashed; }
+.swatch.dot { width: 8px; height: 8px; border: 0; border-radius: 50%; }
+canvas { display: block; width: 100%; }
+.readout { font: 0.78rem/1.5 var(--mono); color: var(--ink-2); min-height: 1.5em; margin-top: 8px; font-variant-numeric: tabular-nums; }
+.readout b { color: var(--ink); font-weight: 600; }
+.scroll { overflow-x: auto; }
+svg { display: block; max-width: 100%; height: auto; font-family: var(--mono); }
+svg text { fill: currentColor; }
+.diagram { color: var(--ink); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.grid2 > * { min-width: 0; }
+.egrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.ecell { position: relative; }
+.ecell span { position: absolute; left: 4px; top: 2px; font: 600 0.66rem/1.2 var(--mono); color: var(--ink-2); background: color-mix(in srgb, var(--surface) 80%, transparent); padding: 0 3px; border-radius: 2px; }
+.ewrap { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 18px; align-items: start; }
+@media (max-width: 680px) { .ewrap { grid-template-columns: 1fr; } }
+.note { background: var(--accent-soft); border-radius: 6px; padding: 14px 18px; margin: 1.4em 0; max-width: 72ch; }
+.note h4 { font: 600 0.74rem/1.3 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; margin: 0 0 0.4em; color: var(--accent); }
+.note p:last-child { margin-bottom: 0; }
+table { border-collapse: collapse; font-size: 0.9rem; width: 100%; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font: 600 0.72rem/1.3 var(--mono); letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--mono); font-size: 0.82rem; }
+.tablewrap { overflow-x: auto; margin: 1.2em 0 1.8em; }
+ol.stages { list-style: none; padding: 0; margin: 1.4em 0; display: grid; gap: 12px; counter-reset: st -1; }
+ol.stages > li { counter-increment: st; display: grid; grid-template-columns: 3.2rem minmax(0, 1fr); gap: 4px 14px; padding: 14px 16px; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+ol.stages > li::before { content: counter(st); font: 700 1.6rem/1 var(--display); color: var(--accent); grid-row: span 2; }
+ol.stages h3 { margin: 0; font-size: 1.02rem; }
+ol.stages p { margin: 0.3em 0 0; font-size: 0.95rem; }
+ol.stages li.gate { border-style: dashed; border-color: var(--accent); background: var(--accent-soft); }
+ol.stages li.gate { counter-increment: none; }
+ol.stages li.gate::before { content: "?"; }
+ul.tight { margin: 0.4em 0 1em; padding-left: 1.2em; }
+ul.tight li { margin: 0.2em 0; }
+.sources li { font-size: 0.92rem; margin: 0.35em 0; }
+footer { margin-top: 3em; padding-top: 1em; border-top: 1px solid var(--rule); font: 0.78rem/1.6 var(--mono); color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<div class="frame">
+<header>
+  <div class="kicker"><span>wavetracker</span><span>branch learned-detector</span><span>10 Nov 2026</span></div>
+  <h1>A learned detector for wavetracker</h1>
+  <p class="lede">How a small neural network can read the spectrogram the way you do when you correct tracks by eye: by looking at whole lines, their harmonics and their history at once. This page explains the design we chose after the literature search, with real benchmark data and a few things you can play with.</p>
+  <nav class="toc" aria-label="Sections">
+    <a href="#problem">The picture</a><a href="#pipeline">What changes</a><a href="#salience">Salience</a><a href="#stack">Harmonic stack</a><a href="#close">Two fish, one peak</a><a href="#network">The network</a><a href="#electrodes">Electrodes</a><a href="#training">Training data</a><a href="#tracking">Tracking</a><a href="#measuring">Measuring</a><a href="#plan">Plan</a><a href="#sources">Sources</a>
+  </nav>
+  <p class="prose" style="margin-top:1.2em;font-size:0.95rem;color:var(--ink-2)">Claims carry a tag: <span class="tag pub">published</span> means a paper reports it, <span class="tag meas">measured</span> means our dense benchmark shows it, and <span class="tag ours">our reasoning</span> means arithmetic or physics nobody has tested yet. The full report with all citations is <code>research/reports/Learned detector for EOD tracking.md</code> on the branch.</p>
+</header>
+
+<section id="problem">
+<h2>The picture the detector has to read</h2>
+<div class="prose">
+<p>Below is one minute of a dev mixture from the dense benchmark (<code>ladder-30-s0</code>, 60 to 120 s, 340 to 500 Hz). Thirty fish are in the recording; this band holds eight of them plus the harmonics of fish further down. The image is the electrode-summed power spectrogram at the resolution wavetracker uses today: 0.61 Hz bins and a 1.64 s Hann window moved in 0.164 s steps. Turn on the overlays to compare it with the truth and with what the classic detector (the <code>dense-linked</code> run) found.</p>
+</div>
+<figure>
+  <div class="controls">
+    <span class="seg" role="group" aria-label="View"><button type="button" id="v-full" aria-pressed="true">Whole crop</button><button type="button" id="v-zoom" aria-pressed="false">Zoom: 372–392 Hz</button></span>
+    <label><input type="checkbox" id="ov-truth" checked><span class="swatch" style="border-color:var(--s1)"></span>truth fundamentals</label>
+    <label><input type="checkbox" id="ov-harm" checked><span class="swatch dash" style="border-color:var(--s3)"></span>harmonics of lower fish</label>
+    <label><input type="checkbox" id="ov-det" checked><span class="swatch dot" style="background:var(--s2)"></span>classic detections</label>
+    <label><input type="checkbox" id="ov-notes" checked>notes</label>
+  </div>
+  <canvas id="crop" style="height:clamp(300px, 52vw, 470px)" aria-label="Spectrogram of 60 seconds of a dense benchmark mixture with truth lines and classic detections"></canvas>
+  <div class="readout" id="crop-read">Hover over the spectrogram to read time, frequency and power.</div>
+  <figcaption><b>Real data, dev mixture <code>ladder-30-s0</code>.</b> Dark means more power in the light theme (light in the dark theme). The fish at 447 Hz (SNR 20 dB) has a detection within 1 Hz in 81 % of the frames. The faint fish at 463 Hz (median SNR −5 dB, with a rise at 75 s) and at 348 Hz (−1 dB) get none. The bright line at 398 Hz is the 2nd harmonic of a 199 Hz fish; the classic rules correctly leave it out here, but in denser places such lines become false fish. Zoom in on 372–392 Hz: three lines run within 3 Hz there. They are a strong fish at 381 Hz (22 dB), the 2nd harmonic of a 190 Hz fish about 1.2 Hz below it, and a faint fish at 378.6 Hz. The classic detector follows the strong fish until about 77 s and then loses it (19 % of its frames), and never finds the faint one.</figcaption>
+</figure>
+<div class="prose">
+<p>On the benchmark, the misses and errors of the classic pipeline fall into four groups. Every design decision below is aimed at one of them.</p>
+<ul class="tight">
+  <li><b>(a) Faint fish.</b> Of the missed frames, 56 % (lab) and 72 % (field noise) have an SNR below 6 dB. 15 % and 27 % of all truth frames are below the noise and cannot be recovered by anything. <span class="tag meas">measured</span></li>
+  <li><b>(b) Close fish.</b> 32 % and 20 % of misses are within 3 Hz of another line. Two fish often make one spectral peak. <span class="tag meas">measured</span></li>
+  <li><b>(c) False lines.</b> Harmonics of low fish and stray lines become long false identities once the tracker connects them. <span class="tag meas">measured</span></li>
+  <li><b>(d) Fragmentation.</b> One fish split into many identities, which the linker only partly repairs. <span class="tag meas">measured</span></li>
+</ul>
+<p>The hand-made fixes have saturated. Halving the bin width to 0.31 Hz gave +0.05 recall but doubled the false lines and left IDF1 where it was. A track-guided faint-peak acceptor raised field IDF1 from 0.613 to 0.649, and its false additions extended false lines. <span class="tag meas">measured</span> Adding peaks without looking at their context does not help identities.</p>
+</div>
+</section>
+
+<section id="pipeline">
+<h2>What changes and what stays</h2>
+<div class="prose">
+<p>Only the detector is replaced. Today it finds peaks in each frame and groups them into a fundamental plus harmonics with fixed rules. The learned detector replaces both steps with one network that looks at a whole patch of the spectrogram and says, for every time–frequency bin, how likely it is that a fish's fundamental is there. Everything after the detections stays: the tracker, the fragment linker, the results format and the eodsorter GUI. The old detector stays selectable with <code>detector.method: classic | learned</code>, and the benchmark baselines keep pinning <code>classic</code>.</p>
+</div>
+<figure>
+  <div class="scroll"><svg class="diagram" viewBox="0 0 980 330" role="img" aria-label="Pipeline: the classic and the learned detector produce the same detections, which feed the unchanged tracker, linker and GUI">
+    <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+    <g font-size="12">
+      <text x="14" y="22" font-size="11" opacity="0.7">detector.method: classic</text>
+      <rect x="14" y="32" width="150" height="44" rx="4" fill="none" stroke="currentColor"/><text x="89" y="58" text-anchor="middle">spectrogram</text>
+      <rect x="200" y="32" width="150" height="44" rx="4" fill="none" stroke="currentColor"/><text x="275" y="51" text-anchor="middle">peaks per frame</text><text x="275" y="66" text-anchor="middle" font-size="10.5" opacity="0.75">thresholds</text>
+      <rect x="386" y="32" width="160" height="44" rx="4" fill="none" stroke="currentColor"/><text x="466" y="51" text-anchor="middle">harmonic groups</text><text x="466" y="66" text-anchor="middle" font-size="10.5" opacity="0.75">fixed rules</text>
+      <line x1="164" y1="54" x2="198" y2="54" stroke="currentColor" marker-end="url(#ar)"/>
+      <line x1="350" y1="54" x2="384" y2="54" stroke="currentColor" marker-end="url(#ar)"/>
+      <path d="M546,54 H600 V150 H618" fill="none" stroke="currentColor" marker-end="url(#ar)"/>
+
+      <text x="14" y="122" font-size="11" fill="var(--accent)" style="fill:var(--accent)">detector.method: learned</text>
+      <rect x="14" y="132" width="120" height="44" rx="4" fill="none" stroke="var(--accent)" stroke-width="1.5"/><text x="74" y="151" text-anchor="middle">summed</text><text x="74" y="166" text-anchor="middle">spectrogram</text>
+      <rect x="160" y="132" width="110" height="44" rx="4" fill="none" stroke="var(--accent)" stroke-width="1.5"/><text x="215" y="151" text-anchor="middle">harmonic</text><text x="215" y="166" text-anchor="middle">stack</text>
+      <rect x="296" y="132" width="110" height="44" rx="4" fill="none" stroke="var(--accent)" stroke-width="1.5"/><text x="351" y="151" text-anchor="middle">CNN trunk</text><text x="351" y="166" text-anchor="middle" font-size="10.5" opacity="0.75">no freq. pooling</text>
+      <rect x="432" y="132" width="110" height="44" rx="4" fill="none" stroke="var(--accent)" stroke-width="1.5"/><text x="487" y="151" text-anchor="middle">heads</text><text x="487" y="166" text-anchor="middle" font-size="10.5" opacity="0.75">salience, offset</text>
+      <line x1="134" y1="154" x2="158" y2="154" stroke="var(--accent)" marker-end="url(#ar)" style="color:var(--accent)"/>
+      <line x1="270" y1="154" x2="294" y2="154" stroke="var(--accent)" marker-end="url(#ar)" style="color:var(--accent)"/>
+      <line x1="406" y1="154" x2="430" y2="154" stroke="var(--accent)" marker-end="url(#ar)" style="color:var(--accent)"/>
+      <line x1="542" y1="154" x2="616" y2="154" stroke="var(--accent)" marker-end="url(#ar)" style="color:var(--accent)"/>
+      <text x="579" y="146" text-anchor="middle" font-size="10.5" opacity="0.8">peaks</text>
+
+      <rect x="14" y="236" width="120" height="44" rx="4" fill="none" stroke="currentColor" stroke-dasharray="5 4"/><text x="74" y="255" text-anchor="middle">per-electrode</text><text x="74" y="270" text-anchor="middle">spectrograms</text>
+      <rect x="196" y="236" width="140" height="44" rx="4" fill="none" stroke="currentColor" stroke-dasharray="5 4"/><text x="266" y="255" text-anchor="middle">electrode branch</text><text x="266" y="270" text-anchor="middle" font-size="10.5" opacity="0.75">shared encoder, any N</text>
+      <line x1="134" y1="258" x2="194" y2="258" stroke="currentColor" stroke-dasharray="5 4" marker-end="url(#ar)"/>
+      <path d="M336,258 H351 V180" fill="none" stroke="currentColor" stroke-dasharray="5 4" marker-end="url(#ar)"/>
+      <text x="358" y="222" font-size="10.5" opacity="0.8">gated, stage 3</text>
+
+      <rect x="620" y="128" width="104" height="52" rx="4" fill="var(--accent-soft)" stroke="currentColor" style="fill:var(--accent-soft)"/><text x="672" y="150" text-anchor="middle">detections</text><text x="672" y="166" text-anchor="middle" font-size="10.5" opacity="0.75">f + powers</text>
+      <rect x="752" y="128" width="96" height="52" rx="4" fill="none" stroke="currentColor"/><text x="800" y="150" text-anchor="middle">tracker</text><text x="800" y="166" text-anchor="middle" font-size="10.5" opacity="0.75">two thresholds</text>
+      <rect x="752" y="214" width="96" height="44" rx="4" fill="none" stroke="currentColor"/><text x="800" y="240" text-anchor="middle">linker</text>
+      <rect x="870" y="214" width="96" height="44" rx="4" fill="none" stroke="currentColor"/><text x="918" y="233" text-anchor="middle">results,</text><text x="918" y="248" text-anchor="middle">eodsorter</text>
+      <line x1="724" y1="154" x2="750" y2="154" stroke="currentColor" marker-end="url(#ar)"/>
+      <line x1="800" y1="180" x2="800" y2="212" stroke="currentColor" marker-end="url(#ar)"/>
+      <line x1="848" y1="236" x2="868" y2="236" stroke="currentColor" marker-end="url(#ar)"/>
+      <text x="806" y="200" font-size="10.5" opacity="0.8">fragments</text>
+      <text x="672" y="112" text-anchor="middle" font-size="10.5" opacity="0.8">same format</text>
+      <text x="860" y="300" text-anchor="middle" font-size="10.5" opacity="0.8">unchanged except retraining</text>
+    </g>
+  </svg></div>
+  <figcaption><b>Both detectors emit the same detections</b>: a frequency per detection plus the power on every electrode, read from the spectrogram as today. The learned path adds a salience score per detection, which the tracker uses for a two-threshold association (see <a href="#tracking">Tracking</a>). The electrode branch (dashed) is the third stage, added only after the summed-stream network has shown a gain.</figcaption>
+</figure>
+<div class="prose">
+<p>Why keep the tracker instead of letting a network also decide identity? Every learned identity method we found handles a handful of sources at most: two speakers, four choir voices. They fail exactly where the sources share a range. <span class="tag pub">published</span> In multi-object tracking of near-identical dancers, adding learned appearance features made association worse, while better motion models helped. <span class="tag pub">published</span> Same-species fish a few Hz apart are the extreme version of that. The electrode pattern, which wavetracker already uses, behaves like a slowly changing position, and it already beats frequency on hard assignment conflicts (99.57 % vs 94.83 % in Raab et al. 2022). <span class="tag pub">published</span> So the network's job is better detections with honest scores, and identity stays where it works.</p>
+</div>
+</section>
+
+<section id="salience">
+<h2>Salience: a map instead of rules</h2>
+<div class="prose">
+<p>The network outputs a <b>salience map</b>: one number between 0 and 1 for every time–frequency bin, meaning "a fish's fundamental is here". It is trained like an image segmentation net. The target for each frame is zero everywhere except for a small bump at each true fundamental. Peaks in the output become detections. This is the "deep salience" design from music multi-pitch estimation (Bittner et al. 2017). <span class="tag pub">published</span></p>
+<p>The bump width has to be set in Hz. Music models use pitch-relative bumps that fall to zero within a quarter tone. At 800 Hz that is ±23 Hz, which would swallow every neighbour of a fish. Our bumps are Gaussians with σ ≈ 0.6 Hz (one bin). Where two fish are close, the targets are combined by taking the maximum, not the sum, so two bumps stay two bumps. <span class="tag ours">our reasoning</span></p>
+</div>
+<figure>
+  <div class="scroll"><svg class="diagram" id="target-svg" viewBox="0 0 900 230" role="img" aria-label="Target bumps for three fish 2.5 and 6 Hz apart: music-style quarter-tone targets merge them into one, Hz-scale targets keep three peaks"></svg></div>
+  <figcaption><b>Training targets for three fish at 797.5, 800 and 806 Hz.</b> Top: a music-style target that decays within a quarter tone (±23 Hz at 800 Hz) merges them into one blob. Bottom: Gaussians with σ = 0.6 Hz, merged by maximum, keep three separate peaks that peak picking can recover. Ticks mark the 0.61 Hz bins.</figcaption>
+</figure>
+<div class="prose">
+<p>Besides the salience, the first version gets a sub-bin <b>offset</b>: a second output that says how far the true frequency lies from the bin centre, trained only where a fish is (as in CenterNet, Zhou et al. 2019). <span class="tag pub">published</span> Later versions add a "line but not a fundamental" score for harmonics, hum and stray lines, and a count of fish per bin (0, 1, 2+) for the close-pair case. Peaks are picked along frequency with a low threshold. The salience value travels with each detection, so the tracker can treat confident and doubtful detections differently. The threshold itself must be tuned on dev, separately for lab and field noise: deep salience's best threshold was 0.3 on its validation set and 0.05 on another dataset. <span class="tag pub">published</span></p>
+</div>
+</section>
+
+<section id="stack">
+<h2>The harmonic stack, rebuilt for a linear axis</h2>
+<div class="prose">
+<p>A plain CNN has a hard time with harmonics. A fish at 410 Hz has its 2nd harmonic 410 Hz higher; a fish at 640 Hz has it 640 Hz higher. No fixed-size kernel sees a fundamental and its harmonics together. Music models fix this with the <b>harmonic stack</b>: they build several copies of the spectrum, each read at a multiple of the frequency, and put them on top of each other as input channels. Then channel <i>h</i> at position <i>f</i> holds the power at <i>h·f</i>, and a small kernel at position <i>f</i> sees the whole harmonic series of a candidate fundamental at once. Removing the stack "substantially reduces performance across all metrics and datasets" in Basic Pitch. <span class="tag pub">published</span></p>
+<p>Music does this on a log-frequency axis with 20-cent bins. Those are 11.6 Hz wide at 1 kHz, far too coarse for fish 3 Hz apart. Keeping 0.61 Hz on a log axis up to 2 kHz would need about 11,500 bins instead of 3,180. <span class="tag ours">our reasoning</span> On a linear axis that starts at 0 Hz the stack is simpler: harmonic <i>h</i> of bin <i>k</i> is exactly bin <i>h·k</i>. So the stack is an index lookup, with a small maximum over about <i>h</i> neighbouring bins because a fish rarely sits on a bin centre. <span class="tag ours">our reasoning</span> The channels <i>f/2</i> and <i>f/3</i> look below the candidate. A real fundamental has nothing there; a harmonic has its own fundamental there.</p>
+</div>
+<figure>
+  <div class="controls">
+    <label for="hs-f">candidate f <input type="range" id="hs-f" min="100" max="700" step="0.6103515625" value="460"><output id="hs-f-out">460.0 Hz</output></label>
+    <span class="seg" role="group" aria-label="Presets"><button type="button" data-f="410">410 Hz, fish A</button><button type="button" data-f="460">460 Hz</button><button type="button" data-f="230">230 Hz, fish C</button><button type="button" data-f="640">640 Hz, fish B</button></span>
+  </div>
+  <svg class="diagram" id="hs-spec" viewBox="0 0 900 200" role="img" aria-label="Synthetic spectrum of three fish with harmonics, with the harmonic comb of the selected candidate frequency"></svg>
+  <div class="ewrap" style="margin-top:10px">
+    <div><canvas id="hs-stack" style="height:190px" aria-label="Harmonic stack: seven channels over candidate fundamental frequency"></canvas></div>
+    <div><svg class="diagram" id="hs-bars" viewBox="0 0 360 190" role="img" aria-label="Power in each harmonic channel at the selected candidate"></svg></div>
+  </div>
+  <div class="readout" id="hs-read"></div>
+  <figcaption><b>Synthetic spectrum with three fish:</b> A at 410 Hz, B at 640 Hz and a strong low fish C at 230 Hz with many harmonics. Its 2nd harmonic at 460 Hz is stronger than fish A's fundamental, so a "strongest peak is a fundamental" rule would take it for a fish. Top: the spectrum and the comb of the chosen candidate. Bottom left: the harmonic stack, seven channels drawn as rows over the candidate frequency. A fish makes a vertical column that is bright from <i>f</i> upward and dark at <i>f/2</i> and <i>f/3</i>. Bottom right: the seven values the network sees at the cursor. At 460 Hz the <i>f/2</i> channel lights up because fish C sits an octave below. The network learns these patterns from data; it is not given a rule. That matters for <i>A. leptorhynchus</i>, whose fundamental can be weaker than its 2nd harmonic on some electrodes.</figcaption>
+</figure>
+</section>
+
+<section id="close">
+<h2>Two fish, one peak</h2>
+<div class="prose">
+<p>Failure mode (b) is about physics more than rules, so it helps to see what two close fish do to the spectrogram. A Hann window of 1.64 s gives each fish a main lobe about 2.4 Hz wide. Two equally strong fish separate into two peaks only when they are more than about 1.2 Hz apart; a weaker fish needs more distance before it shows up as more than a shoulder. Closer than that, the two fish add up inside one lobe, and their relative phase turns once every 1/Δf seconds. The bin's power rises and falls with that period: a <b>beat</b>. Frames come every 0.164 s, so beats up to 3 Hz are sampled without aliasing. <span class="tag ours">our reasoning</span></p>
+</div>
+<figure>
+  <div class="controls">
+    <label for="tt-df">Δf <input type="range" id="tt-df" min="0.1" max="4" step="0.05" value="0.8"><output id="tt-df-out">0.80 Hz</output></label>
+    <label for="tt-lev">fish 2 level <input type="range" id="tt-lev" min="-20" max="0" step="1" value="-4"><output id="tt-lev-out">−4 dB</output></label>
+    <label for="tt-t">time <input type="range" id="tt-t" min="0" max="120" step="1" value="0"><output id="tt-t-out">0.0 s</output></label>
+    <button type="button" class="btn" id="tt-play">Play</button>
+    <label><input type="checkbox" id="tt-pow">mix power spectrograms instead</label>
+  </div>
+  <div class="grid2">
+    <svg class="diagram" id="tt-spec" viewBox="0 0 440 230" role="img" aria-label="Spectrum of one frame with two close fish"></svg>
+    <div><canvas id="tt-strip" style="height:230px" aria-label="Spectrogram strip of the two fish over 20 seconds"></canvas></div>
+  </div>
+  <div class="readout" id="tt-read"></div>
+  <figcaption><b>Two pure tones through wavetracker's window</b> (computed exactly, no noise). Left: one frame's spectrum; the dots are the 0.61 Hz bins a detector sees. Right: 20 s of frames. Above about 1.2 Hz you see two lines. Below, you see one line whose brightness pulses at Δf. Tick "mix power spectrograms instead" to see what training data looks like if mixtures are made by adding power spectrograms: the beat disappears, along with the most direct evidence that two fish share the peak. This is why training mixtures are summed as signals, not as power.</figcaption>
+</figure>
+<div class="prose">
+<p>Two consequences shape the design. First, for pairs between roughly 1.2 and 3 Hz apart, the information is already in a single frame's spectrum as two lobes or a shoulder. The classic peak picker loses it; a network that sees the full lobe shape can learn to keep it. Second, below about 1.2 Hz only two cues remain: the beat over time, and the electrodes. Each fish has its own amplitude pattern across the grid, so the beat is deep on electrodes where both fish are similarly strong and shallow where one dominates. We will check that this cue survives real SNRs before building anything for it (stage 3).</p>
+</div>
+</section>
+
+<section id="network">
+<h2>The network, layer by layer</h2>
+<div class="prose">
+<p>The network is a fully convolutional net that never pools or strides along frequency, so its output keeps the full 0.61 Hz resolution. Deep salience, PESTO and the dolphin-whistle network all avoid frequency pooling for the same reason: pooling throws away exactly the position information that separates close pitches. <span class="tag pub">published</span> All sizes are set in Hz and seconds and converted to bins and frames from the spectrogram settings, which are stored with the model.</p>
+</div>
+<div class="tablewrap"><table>
+  <thead><tr><th>Part</th><th>First version (stage 1)</th><th>Later</th><th>Why</th></tr></thead>
+  <tbody>
+    <tr><td>Input</td><td>log power of the electrode sum, divided by the noise floor; 7 stack channels <i>f/3 … 5f</i></td><td>plus electrode branch</td><td>physical units at any sample rate</td></tr>
+    <tr><td>Trunk</td><td>6 conv layers, 32 channels, kernels 5 bins × 3 frames, time dilations 1, 2, 4, 8, 16, 1</td><td>wider if needed</td><td>sees ±7 Hz and ±5 s; about 0.08 M parameters <span class="tag ours">estimate</span></td></tr>
+    <tr><td>Temporal module</td><td>none (the dilations give ±5 s)</td><td>bidirectional GRU or dilated 1-D convs along time per bin, 30–60 s</td><td>faint lines, fragmentation, crossings</td></tr>
+    <tr><td>Heads</td><td>salience (sigmoid), sub-bin offset</td><td>line-not-fundamental score, fish count per bin</td><td>false lines, close pairs</td></tr>
+    <tr><td>Long recordings</td><td colspan="2">60 s chunks with overlap larger than the receptive field; keep the centre. No identity in the output, so nothing to stitch.</td><td>hours of data</td></tr>
+  </tbody>
+</table></div>
+<div class="prose">
+<h3>Why time context recovers faint fish</h3>
+<p>A fish line lasts minutes to hours, but noise in a bin changes from window to window. Averaging the evidence along a line over <i>n</i> independent windows shrinks the noise by √<i>n</i> while the line stays. That is how you spot a faint fish by eye: you follow it. The cleanest published number for the value of time context comes from piano transcription: removing the recurrent layers from Onsets and Frames dropped frame F1 from 78.3 to 67.6. <span class="tag pub">published</span> The widget below averages a synthetic spectrogram along time. Try a faint SNR and a long window, then look at what happens to the rise at 25 s.</p>
+</div>
+<figure>
+  <div class="controls">
+    <label for="ti-snr">fish SNR per bin <input type="range" id="ti-snr" min="-10" max="6" step="1" value="-3"><output id="ti-snr-out">−3 dB</output></label>
+    <label for="ti-T">average over <input type="range" id="ti-T" min="0" max="7" step="1" value="4"><output id="ti-T-out">5 s</output></label>
+  </div>
+  <canvas id="ti" style="height:260px" aria-label="Synthetic spectrogram with two faint fish, averaged along time"></canvas>
+  <div class="readout" id="ti-read"></div>
+  <figcaption><b>Synthetic, 60 s × 40 Hz.</b> Two fish at the chosen SNR: a steady one near 612 Hz and one that rises by 6 Hz at 25 s and relaxes back. The noise is correlated over about ten frames, like real frames that overlap by 90 %. Set the window to 0.16 s and the −3 dB fish disappears; averaging over a few seconds pulls it back out of the noise. Averaging over 20 s smears the rise. A plain moving average has to trade these off; a learned temporal module can integrate along the line's actual path, which is why it should see 30–60 s and why rises must be scored separately.</figcaption>
+</figure>
+<div class="note">
+<h4>GRU and attention in two paragraphs</h4>
+<p>A <b>GRU</b> reads a sequence one step at a time and carries a small memory vector forward. At each step a learned gate decides how much of the old memory to keep and how much of the new input to write. Run it once forward and once backward along time, separately for every frequency bin with shared weights, and each bin's output knows what happened at that frequency over the last and next tens of seconds. Dilated 1-D convolutions reach the same span by skipping frames: kernels with dilation 1, 2, 4, 8 … double their reach every layer.</p>
+<p><b>Attention</b> is a learned weighted average whose weights depend on content. Every element emits a query ("what I am looking for"), a key ("what I contain") and a value ("what I pass on"). Element <i>i</i>'s output is the average of all values, weighted by how well its query matches each key. A convolution mixes a fixed neighbourhood with fixed weights; attention picks what to mix. We do not need it for the first versions. It becomes an option for the temporal module, and for letting the summed stream ask the electrodes "which of you see this peak?".</p>
+</div>
+</section>
+
+<section id="electrodes">
+<h2>Electrodes: summed for finding, separate for separating</h2>
+<div class="prose">
+<p>The summed spectrogram is sparse and keeps lines gap-free, which is why it finds the ridges. It throws away where each fish is. Here is the close group from the crop above (372–392 Hz), electrode by electrode, in the 3×3 grid layout of the recording.</p>
+</div>
+<figure>
+  <div class="ewrap">
+    <div class="egrid" id="egrid"></div>
+    <div><canvas id="esum" style="height:200px" aria-label="Electrode-summed spectrogram of the close pair"></canvas><div class="readout">Electrode sum, 372–392 Hz, 60–120 s</div></div>
+  </div>
+  <figcaption><b>Real data, the close group at 377–383 Hz.</b> Each small panel is one electrode over the same 60 s and 372–392 Hz, on a common colour scale. In the sum (right) the lines run together. On electrodes 2 to 6 the strongest line is the 381 Hz fish. From about 75 s on, electrode 7 is dominated by a line 1.2 Hz lower, at the frequency of the 2nd harmonic of a 190 Hz fish. Electrodes 1, 8 and 9 see little. The patterns change over time as the fish move. This is the information the electrode branch is for, and it is also a reminder that "close lines" include harmonics of other fish.</figcaption>
+</figure>
+<div class="prose">
+<p>The branch has to work for 2 electrodes on a boat, 9 in the benchmark and 16 or more on field grids, with any ordering. The pattern that does this in speech separation with ad-hoc microphone arrays is <b>TAC</b> (transform, average, concatenate; Luo et al. 2020). The same small network processes every electrode. The only operation across electrodes is a symmetric one, an average and a maximum, which does not care how many electrodes there are or in which order they come. <span class="tag pub">published</span> With 2, 4 and 6 microphones, adding TAC raised separation from 9.0, 8.9 and 9.5 dB to 9.8, 11.2 and 11.7 dB, and stacking channels in a fixed order scored worse than averaging them (6.9 vs 8.7 dB). <span class="tag pub">published</span> VarArray (Yoshioka et al. 2022) feeds each microphone the magnitude of the array average plus that microphone's phase relative to it, which is the "summed stream plus per-electrode detail" idea in published form. <span class="tag pub">published</span></p>
+</div>
+<figure>
+  <div class="controls"><span>electrodes</span><span class="seg" role="group" aria-label="Electrode count"><button type="button" data-n="2" aria-pressed="false">2</button><button type="button" data-n="4" aria-pressed="false">4</button><button type="button" data-n="9" aria-pressed="true">9</button></span></div>
+  <div class="scroll"><svg class="diagram" id="tac" viewBox="0 0 900 340" role="img" aria-label="TAC electrode branch: a shared encoder per electrode, average and maximum across electrodes, sent back to every electrode, pooled again and gated into the trunk"></svg></div>
+  <figcaption><b>The electrode branch for any number of electrodes.</b> Each electrode's spectrogram crop goes through the same encoder (same weights, so the parameter count does not change with N). The features are averaged and maximised across electrodes, and that summary is sent back to every electrode, so each one knows what the others see. A second shared layer and a final pooling give one feature map, which enters the trunk through a gate that starts at zero: the network starts as "summed stream only" and opens the gate only where electrodes help. Inputs per electrode: its log power and its log ratio to the sum, a pattern that does not depend on overall level.</figcaption>
+</figure>
+<div class="prose">
+<h3>Why there is no separate max-over-electrodes channel</h3>
+<p>A fish seen on only a few electrodes is diluted in the sum. A per-bin maximum across electrodes looks like a fix, but it also takes the maximum of the noise. We simulated a fish on <i>k</i> of <i>N</i> electrodes and measured how well each pooling separates it from noise (AUC, 1 is perfect). <span class="tag ours">our simulation</span></p>
+</div>
+<div class="tablewrap"><table>
+  <thead><tr><th class="num">Electrodes</th><th class="num">Fish on</th><th class="num">SNR per electrode</th><th class="num">One frame: sum</th><th class="num">One frame: max</th><th class="num">10 windows averaged: sum</th><th class="num">10 windows averaged: max</th></tr></thead>
+  <tbody>
+    <tr><td class="num">16</td><td class="num">1</td><td class="num">0 dB</td><td class="num">0.56</td><td class="num">0.56</td><td class="num">0.71</td><td class="num"><b>0.82</b></td></tr>
+    <tr><td class="num">16</td><td class="num">8</td><td class="num">0 dB</td><td class="num"><b>0.88</b></td><td class="num">0.79</td><td class="num">1.00</td><td class="num">1.00</td></tr>
+    <tr><td class="num">64</td><td class="num">2</td><td class="num">0 dB</td><td class="num">0.57</td><td class="num">0.55</td><td class="num">0.71</td><td class="num"><b>0.85</b></td></tr>
+    <tr><td class="num">9</td><td class="num">1</td><td class="num">6 dB</td><td class="num">0.79</td><td class="num">0.82</td><td class="num">0.99</td><td class="num">1.00</td></tr>
+  </tbody>
+</table></div>
+<div class="prose">
+<p>On single frames the maximum gains nothing, as you suspected. It helps only after each electrode's evidence has been averaged over time, and only for fish seen on a few electrodes; for fish on many electrodes the sum wins. The electrode branch integrates over time per electrode before it pools, and pools with both mean and max, so it gets the benefit where it exists without a separate channel.</p>
+<p>One more physical cue may matter later. At EOD frequencies the field in water is quasi-static, so for a single fish all electrodes are in phase or in antiphase. Two fish in one bin break that pattern. Power spectrograms discard phase, but the training data will keep it, so signed or complex electrode inputs can be tried as an ablation. <span class="tag ours">our reasoning</span></p>
+</div>
+</section>
+
+<section id="training">
+<h2>Training data: mixed as signals, with honest labels</h2>
+<div class="prose">
+<p>In every field that measured it, the training data decided more than the architecture. Dolphin-whistle networks trained on synthetic contours placed into real ocean noise came within 0.09 F1 of fully supervised training. <span class="tag pub">published</span> A domain-randomised bioacoustic detector lost F1 when its training was limited to high-SNR events (0.445 to 0.402). <span class="tag pub">published</span> For us that means real field noise, an SNR range that reaches well below 0 dB, and mixtures that keep beats.</p>
+<p>The benchmark already builds mixtures from real two-fish tube recordings. For training we make new mixtures on the fly, on the GPU, from raw traces. Nothing but the raw traces and their truth is stored, so every feature (phase, beats, the full band) stays available.</p>
+</div>
+<figure>
+  <div class="scroll"><svg class="diagram" viewBox="0 0 980 250" role="img" aria-label="Training data pipeline: raw traces of the train trials are cropped, warped, attenuated, summed with field noise in the time domain, transformed on the GPU and paired with targets and masks from the truth">
+    <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>
+    <g font-size="12">
+      <rect x="10" y="40" width="130" height="58" rx="4" fill="none" stroke="currentColor"/><text x="75" y="62" text-anchor="middle">20 train trials</text><text x="75" y="78" text-anchor="middle" font-size="10.5" opacity="0.75">raw traces, 9 el.</text><text x="75" y="91" text-anchor="middle" font-size="10.5" opacity="0.75">~9 GB, on NVMe</text>
+      <rect x="170" y="40" width="120" height="58" rx="4" fill="none" stroke="currentColor"/><text x="230" y="62" text-anchor="middle">60 s crop</text><text x="230" y="78" text-anchor="middle" font-size="10.5" opacity="0.75">random start,</text><text x="230" y="91" text-anchor="middle" font-size="10.5" opacity="0.75">~15 sources</text>
+      <rect x="320" y="40" width="120" height="58" rx="4" fill="none" stroke="currentColor"/><text x="380" y="62" text-anchor="middle">resample</text><text x="380" y="78" text-anchor="middle" font-size="10.5" opacity="0.75">warp ×0.4–1.6</text><text x="380" y="91" text-anchor="middle" font-size="10.5" opacity="0.75">(wider later)</text>
+      <rect x="470" y="40" width="120" height="58" rx="4" fill="none" stroke="currentColor"/><text x="530" y="62" text-anchor="middle">gains, fades</text><text x="530" y="78" text-anchor="middle" font-size="10.5" opacity="0.75">per fish or pair,</text><text x="530" y="91" text-anchor="middle" font-size="10.5" opacity="0.75">−45 to 0 dB</text>
+      <rect x="620" y="40" width="120" height="58" rx="4" fill="none" stroke="currentColor"/><text x="680" y="62" text-anchor="middle">Σ per electrode</text><text x="680" y="78" text-anchor="middle" font-size="10.5" opacity="0.75">+ real field noise</text><text x="680" y="91" text-anchor="middle" font-size="10.5" opacity="0.75">time domain</text>
+      <rect x="770" y="40" width="120" height="58" rx="4" fill="var(--accent-soft)" stroke="currentColor" style="fill:var(--accent-soft)"/><text x="830" y="62" text-anchor="middle">STFT on GPU</text><text x="830" y="78" text-anchor="middle" font-size="10.5" opacity="0.75">power after</text><text x="830" y="91" text-anchor="middle" font-size="10.5" opacity="0.75">summing: beats kept</text>
+      <line x1="140" y1="69" x2="168" y2="69" stroke="currentColor" marker-end="url(#ar2)"/>
+      <line x1="290" y1="69" x2="318" y2="69" stroke="currentColor" marker-end="url(#ar2)"/>
+      <line x1="440" y1="69" x2="468" y2="69" stroke="currentColor" marker-end="url(#ar2)"/>
+      <line x1="590" y1="69" x2="618" y2="69" stroke="currentColor" marker-end="url(#ar2)"/>
+      <line x1="740" y1="69" x2="768" y2="69" stroke="currentColor" marker-end="url(#ar2)"/>
+      <path d="M890,69 H950 V150" fill="none" stroke="currentColor" marker-end="url(#ar2)"/>
+      <rect x="10" y="150" width="130" height="44" rx="4" fill="none" stroke="currentColor"/><text x="75" y="169" text-anchor="middle">truth per source</text><text x="75" y="184" text-anchor="middle" font-size="10.5" opacity="0.75">f(t), snr_db, residuals</text>
+      <path d="M75,98 V148" fill="none" stroke="currentColor" stroke-dasharray="3 3"/>
+      <line x1="140" y1="172" x2="618" y2="172" stroke="currentColor" marker-end="url(#ar2)"/>
+      <text x="380" y="164" text-anchor="middle" font-size="10.5" opacity="0.8">same warp, offset and gains applied to the labels</text>
+      <rect x="620" y="150" width="150" height="44" rx="4" fill="none" stroke="currentColor"/><text x="695" y="169" text-anchor="middle">targets + masks</text><text x="695" y="184" text-anchor="middle" font-size="10.5" opacity="0.75">σ = 0.6 Hz bumps</text>
+      <rect x="880" y="152" width="90" height="40" rx="4" fill="none" stroke="var(--accent)" stroke-width="1.5"/><text x="925" y="176" text-anchor="middle">network</text>
+      <line x1="770" y1="172" x2="878" y2="172" stroke="currentColor" marker-end="url(#ar2)"/>
+      <text x="490" y="232" text-anchor="middle" font-size="10.5" opacity="0.8">Stage 2 adds a per-fish harmonic-profile change: per source, in the complex STFT, before summing</text>
+    </g>
+  </svg></div>
+  <figcaption><b>Training mixtures are made fresh for every batch.</b> Summing the traces in the time domain is exact, so the network sees the same beats and leakage as in a real recording. The labels follow every transformation of their source. Only the 20-minute segments that already have truth are used at first (about 9 GB of raw traces). The full 6 hours per trial come once the first version has shown a gain.</figcaption>
+</figure>
+<div class="prose">
+<p><b>The source split changes.</b> Today's train mixtures reuse the dev sources. A linker can live with that, but a network trained on thousands of mixtures could learn the individual fish and inflate every dev score. The sources are re-split by recording group: train is 2019-g3 plus 2022-p1 to p3 (20 trials), dev is 2019-g4 plus 2022-p4 (10 trials), and test stays as it is. The classic detector is re-scored on the new dev.</p>
+<h3>Masks: three truth defects, three treatments</h3>
+<p>The loss is computed per bin and multiplied by a mask. Getting the mask wrong teaches the wrong thing, and this has been measured: whistle networks trained naively on labels made by the old tracker scored worse than that tracker (F1 74.1 vs 75.95), while a loss that respects missing labels reached 86.3, close to full supervision (87.5). <span class="tag pub">published</span></p>
+</div>
+<figure>
+  <div class="scroll"><svg class="diagram" id="masks" viewBox="0 0 900 280" role="img" aria-label="How each kind of line in a training source is treated by the loss"></svg></div>
+  <figcaption><b>How the loss treats each kind of line in a source</b> (schematic). Truth fundamentals are positives. A stretch where the fish was attenuated below the noise (<code>snr_db</code>) is ignored in both directions, since calling it a fish teaches hallucination and calling it noise teaches the net to drop faint fish. Ridge-completed frames are kept at half weight. A real line the truth does not know (such as the 1066 Hz line 28 dB below the fish in <code>density-04-s0</code>) is found on the source alone and ignored. It warps and shifts with its source. Harmonics of labelled fish are never masked: they are the negatives that teach the difference between a harmonic and a fish.</figcaption>
+</figure>
+</section>
+
+<section id="tracking">
+<h2>Tracking with scores</h2>
+<div class="prose">
+<p>A detector that finds faint fish also produces more doubtful detections. If the tracker treats them all alike, it either misses the faint fish (high threshold) or builds false identities out of clutter (low threshold). ByteTrack (Zhang et al. 2022) resolves this with two thresholds: new tracks start only from confident detections, but existing tracks may absorb weak detections near where they are expected. Applied to nine trackers, this raised IDF1 by 1 to 10 points. <span class="tag pub">published</span> We add it to wavetracker's tracker early, behind config, so that the classic detector can use it too and the comparison stays fair. Classic peaks get a stand-in score from their peak SNR.</p>
+</div>
+<figure>
+  <div class="controls"><span class="seg" role="group" aria-label="Association rule"><button type="button" data-m="high" aria-pressed="false">one threshold, high</button><button type="button" data-m="low" aria-pressed="false">one threshold, low</button><button type="button" data-m="two" aria-pressed="true">two thresholds</button></span></div>
+  <canvas id="bt" style="height:270px" aria-label="Synthetic detections with salience and the tracks formed by each association rule"></canvas>
+  <div class="readout" id="bt-read"></div>
+  <figcaption><b>Synthetic detections over 60 s.</b> Dot opacity is the salience. A strong fish near 518 Hz, a faint fish near 525 Hz, a faint stray line near 531 Hz from 30 to 52 s, and scattered clutter with a few confident false detections. A track counts once it has three detections above the start threshold. Tracks are drawn in the colour of the source most of their detections came from; orange tracks are false. With one high threshold the faint fish is lost. With one low threshold clutter forms false tracks. With two thresholds (start at 0.6, extend from 0.25) the faint fish is followed, and neither isolated clutter nor the stray line can start a track.</figcaption>
+</figure>
+<div class="prose">
+<p>The fragment linker was trained on fragments from the classic detector. It is retrained on fragments from the learned one, with mean salience as an extra feature. Learned identity cues (an embedding per detection, or a windowed linker in the style of Trackastra) are a later, optional step, kept only if an ablation shows an IDF1 gain.</p>
+</div>
+</section>
+
+<section id="measuring">
+<h2>Measuring it</h2>
+<div class="prose">
+<p>Music metrics count a pitch as correct within half a semitone. At 800 Hz that is ±23 Hz, which would credit a detection to any of several neighbouring fish. We match detections to truth one-to-one per frame with tolerances of 0.6, 1.2 and 2.5 Hz.</p>
+</div>
+<figure>
+  <div class="scroll"><svg class="diagram" id="tol" viewBox="0 0 900 150" role="img" aria-label="Tolerance windows around a fish at 800 Hz: the music default of half a semitone covers three neighbours, the Hz tolerances do not"></svg></div>
+  <figcaption><b>Tolerance windows around a fish at 800 Hz</b>, with neighbours at 797.5, 803 and 806.5 Hz. The music default (<code>mir_eval</code>, ±0.5 semitone) covers all four fish.</figcaption>
+</figure>
+<div class="prose">
+<p>Every number is reported per stratum, so that each failure mode has its own figure:</p>
+<ul class="tight">
+  <li>recall by SNR band, with the frames below the noise reported apart and neither rewarded nor punished;</li>
+  <li>recall by distance to the nearest other line (&lt; 1.2, 1.2–3, &gt; 3 Hz), the split the window physics suggests;</li>
+  <li>recall on rises separately, to catch over-smoothing;</li>
+  <li>false positives by type: harmonic of a truth fish, hum, known real line missing from the truth, other;</li>
+  <li>after tracking and linking: IDF1, HOTA, fragments per fish, and the number and duration of false identities.</li>
+</ul>
+<p>Two oracle runs show what is left to gain: truth detections through the tracker and linker (the ceiling for any detector), and learned detections with perfect association (the ceiling for any tracker). All development uses dev. Test is scored once at the end.</p>
+</div>
+</section>
+
+<section id="plan">
+<h2>Plan: light first, then earn the rest</h2>
+<div class="prose">
+<p>The first version has one job: show on dev whether a small learned detector beats the hand-tuned one. Heavy parts come only after that.</p>
+</div>
+<ol class="stages">
+  <li><h3>Harness</h3><p>New source split and rebuilt dev mixtures; stratified scoring with typed false positives and the two oracle runs; classic re-scored on the new dev; two-threshold association behind config; the time-domain mixer and the loss masks; <code>detector.method: classic | learned</code> stub.</p></li>
+  <li><h3>Light salience network</h3><p>Summed stream, harmonic stack, the six-layer CNN (about 0.08 M parameters), salience and offset heads, masked BCE. Trained on the existing 20-minute segments with on-the-fly mixing and field noise. Expected training time about an hour or two on the RTX 4080 <span class="tag ours">estimate</span>.</p></li>
+  <li class="gate"><h3>Go or stop</h3><p>Compare with classic on the new dev, lab and field noise, through the same tracker and linker: recall below 6 dB, the 1.2–3 Hz stratum, false-identity time and IDF1. Continue only if the learned detector wins without more false identities.</p></li>
+  <li><h3>Context and generality</h3><p>Temporal module over 30–60 s, focal loss, wider warp and per-fish harmonic-profile augmentation, truth for the full 6 h of the train trials, retrained linker.</p></li>
+  <li><h3>Electrode branch</h3><p>First a cheap check without learning: do two fish in one bin show up in the electrode covariance at real SNRs, split by Δf below and above 1.2 Hz? If yes, the TAC branch with mean+max pooling, zero-initialised gate and a fish-count head.</p></li>
+  <li><h3>Later, if they pay</h3><p>Identity embeddings and a windowed linker; 16+ electrodes via a virtual grid; signed or complex electrode inputs; self-training on the unlabelled field archive.</p></li>
+</ol>
+<div class="prose">
+<h3>Decisions so far</h3>
+<ul class="tight">
+  <li>Identity stays with the tracker and linker.</li>
+  <li>Training data keeps every feature: raw traces mixed in the time domain, spectrograms computed per batch.</li>
+  <li>No separate max-over-electrodes channel.</li>
+  <li>Two-threshold association comes early, for both detectors.</li>
+  <li>Sources re-split by group; full trial hours once the first version shows a gain.</li>
+  <li>16+ electrodes later. Other species and frequencies through a wider warp and harmonic-profile augmentation.</li>
+  <li>Evaluation on the dense benchmark only; test once at the end.</li>
+</ul>
+<h3>Main risks</h3>
+<ul class="tight">
+  <li>Few distinct fish. Twenty train trials of one species may not generalise; a learning curve over the number of trials will show whether more recordings would pay.</li>
+  <li>Mask errors leak both ways: a missed residual line becomes a hidden negative, a masked harmonic stops being one.</li>
+  <li>Time context can also carry a line through noise into a false identity. False-identity time is watched at every stage.</li>
+  <li>The electrode cue for pairs closer than 1.2 Hz is untested, and close fish often swim close together, where spatial cues fade.</li>
+</ul>
+</div>
+</section>
+
+<section id="sources">
+<h2>Sources</h2>
+<ul class="sources prose">
+  <li>Bittner, McFee, Salamon, Li, Bello (2017). <a href="https://brianmcfee.net/papers/ismir2017_salience.pdf">Deep salience representations for f0 estimation in polyphonic music</a>. ISMIR.</li>
+  <li>Bittner et al. (2022). <a href="https://arxiv.org/abs/2203.09893">A lightweight instrument-agnostic model for polyphonic note transcription and multipitch estimation</a> (Basic Pitch). ICASSP.</li>
+  <li>Riou et al. (2023). <a href="https://arxiv.org/abs/2309.02265">PESTO: pitch estimation with self-supervised transposition-equivariant objective</a>. ISMIR.</li>
+  <li>Li, Liu, Palmer, Fleishman, Gillespie, Nosal, Shiu, Klinck, Cholewiak, Helble, Roch (2020). <a href="https://arxiv.org/pdf/2005.08894">Learning deep models from synthetic data for extracting dolphin whistle contours</a>. IJCNN.</li>
+  <li>Li et al. (2023). <a href="https://repository.library.noaa.gov/view/noaa/65889/noaa_65889_DS1.pdf">Learning to extract whistle contours from noisy labels</a>. JASA.</li>
+  <li>Hawthorne et al. (2018). <a href="https://arxiv.org/pdf/1710.11153">Onsets and Frames: dual-objective piano transcription</a>. ISMIR.</li>
+  <li>Luo, Chen, Yoshioka, Mesgarani (2020). <a href="https://arxiv.org/abs/1910.14104">End-to-end microphone permutation and number invariant multi-channel speech separation</a> (FaSNet-TAC). ICASSP.</li>
+  <li>Yoshioka et al. (2022). <a href="https://arxiv.org/abs/2110.05745">VarArray: array-geometry-agnostic continuous speech separation</a>. ICASSP.</li>
+  <li>Zhang et al. (2022). <a href="https://www.ecva.net/papers/eccv_2022/papers_ECCV/html/315_ECCV_2022_paper.php">ByteTrack: multi-object tracking by associating every detection box</a>. ECCV.</li>
+  <li>Sun et al. (2022). <a href="https://arxiv.org/html/2111.14690v3">DanceTrack: multi-object tracking in uniform appearance and diverse motion</a>. CVPR.</li>
+  <li>Zhou, Wang, Krähenbühl (2019). <a href="https://arxiv.org/pdf/1904.07850">Objects as points</a> (CenterNet).</li>
+  <li>Hoffman et al. (2025). <a href="https://arxiv.org/html/2503.00296v2">Synthetic data for bioacoustic detection (DRASDIC)</a>. Preprint.</li>
+  <li>Raab, Bayezit, Erdle, Benda (2022). <a href="https://doi.org/10.3389/fnint.2022.965211">Electrocommunication signals indicate motivation to compete during dyadic interactions of an electric fish</a> (wavetracker methods). Frontiers in Integrative Neuroscience.</li>
+</ul>
+</section>
+
+<footer>Built from the research notes on branch <code>learned-detector</code>. Real data: dense benchmark dev mixture <code>ladder-30-s0</code>, classic run <code>dense-linked</code>. Widgets use synthetic signals computed in the page.</footer>
+</div>
+
+<script type="application/json" id="crop-data">/*CROP_JSON*/</script>
+<script type="application/json" id="elec-data">/*ELEC_JSON*/</script>
+<script>
+(function () {
+"use strict";
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => Array.from(document.querySelectorAll(s));
+const tok = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+function hex2rgb(h) { h = h.replace("#", ""); if (h.length === 3) h = h.split("").map((c) => c + c).join(""); const n = parseInt(h, 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; }
+function makeLut() {
+  const a = hex2rgb(tok("--spec-lo")), m = hex2rgb(tok("--spec-mid")), b = hex2rgb(tok("--spec-hi"));
+  const L = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const v = Math.pow(i / 255, 0.72); let c;
+    if (v < 0.5) { const t = v / 0.5; c = a.map((x, j) => x + (m[j] - x) * t); }
+    else { const t = (v - 0.5) / 0.5; c = m.map((x, j) => x + (b[j] - x) * t); }
+    L[i * 3] = c[0]; L[i * 3 + 1] = c[1]; L[i * 3 + 2] = c[2];
+  }
+  return L;
+}
+let LUT = makeLut();
+const redraws = [];
+function onRedraw(f) { redraws.push(f); }
+function redrawAll() { LUT = makeLut(); redraws.forEach((f) => f()); }
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", redrawAll);
+new MutationObserver(redrawAll).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+function fit(cv) {
+  const r = cv.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1;
+  const w = Math.max(10, Math.round(r.width)), h = Math.max(10, Math.round(r.height));
+  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  const ctx = cv.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); return { ctx, w, h };
+}
+function watchSize(el, f) { if ("ResizeObserver" in window) { let last = 0; new ResizeObserver(() => { const w = el.getBoundingClientRect().width; if (Math.abs(w - last) > 1) { last = w; f(); } }).observe(el); } window.addEventListener("load", f); }
+function b64(s) { const bin = atob(s); const a = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) a[i] = bin.charCodeAt(i); return a; }
+function toImage(bytes, w, h) {
+  const c = document.createElement("canvas"); c.width = w; c.height = h; const x = c.getContext("2d"); const im = x.createImageData(w, h);
+  for (let i = 0; i < w * h; i++) { const v = bytes[i]; im.data[i * 4] = LUT[v * 3]; im.data[i * 4 + 1] = LUT[v * 3 + 1]; im.data[i * 4 + 2] = LUT[v * 3 + 2]; im.data[i * 4 + 3] = 255; }
+  x.putImageData(im, 0, 0); return c;
+}
+function mulberry(a) { return function () { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function gauss(r) { let u = 0, v = 0; while (u === 0) u = r(); while (v === 0) v = r(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); }
+const NS = "http://www.w3.org/2000/svg";
+function el(tag, attrs, parent, text) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (text !== undefined) e.textContent = text; if (parent) parent.appendChild(e); return e; }
+function clear(svg) { while (svg.firstChild) svg.removeChild(svg.firstChild); }
+function pathFrom(pts) { let d = ""; let pen = false; for (const p of pts) { if (p === null) { pen = false; continue; } d += (pen ? "L" : "M") + p[0].toFixed(1) + "," + p[1].toFixed(1); pen = true; } return d; }
+const fmtMinus = (x, d) => (x < 0 ? "−" : "") + Math.abs(x).toFixed(d);
+const sinc = (x) => (Math.abs(x) < 1e-9 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x));
+const TWIN = 32768 / 20000; // 1.6384 s Hann window
+const DF = 20000 / 32768;   // 0.6104 Hz bins
+const DT = 3276 / 20000;    // 0.1638 s steps
+function hannW(nu) { const x = nu * TWIN; return (0.5 * sinc(x) + 0.25 * sinc(x - 1) + 0.25 * sinc(x + 1)) / 0.5; } // 1 at 0
+
+/* ---------- 1. Real crop viewer ---------- */
+(function cropViewer() {
+  const C = JSON.parse($("#crop-data").textContent);
+  const bytes = b64(C.img);
+  const tA = C.t0, tB = C.t0 + (C.nt - 1) * C.dt;
+  const ranges = { full: [C.f0, C.f0 + (C.nf - 1) * C.df], zoom: [372, 392] };
+  let view = "full", img = null, geom = null;
+  const notes = [
+    { fish: 11, h: 1, t: 96, text: "faint fish (−5 dB): no detections", dy: -16 },
+    { fish: 20, h: 1, t: 96, text: "faint fish (−1 dB): no detections", dy: 18 },
+    { fish: 0, h: 2, t: 70, text: "2nd harmonic of a 199 Hz fish", dy: -14 },
+    { fish: 21, h: 1, t: 92, text: "strong fish lost after 77 s: a harmonic runs 1.2 Hz below", dy: 22 },
+  ];
+  const lineAt = (ln, t) => { const i = Math.round((t - C.t0) / C.dt); const v = ln.f[Math.max(0, Math.min(C.nt - 1, i))]; return v === null ? NaN : v; };
+  function draw() {
+    const cv = $("#crop"); const { ctx, w, h } = fit(cv);
+    if (!img) img = toImage(bytes, C.nt, C.nf);
+    const padL = 60, padR = 12, padT = 10, padB = 30; const pw = w - padL - padR, ph = h - padT - padB;
+    const [fa, fb] = ranges[view];
+    ctx.fillStyle = tok("--surface"); ctx.fillRect(0, 0, w, h);
+    const ka = (fa - C.f0) / C.df, kb = (fb - C.f0) / C.df;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(img, 0.5, C.nf - 0.5 - kb, C.nt - 1, kb - ka, padL, padT, pw, ph);
+    const X = (t) => padL + ((t - tA) / (tB - tA)) * pw, Y = (f) => padT + ((fb - f) / (fb - fa)) * ph;
+    geom = { padL, padT, pw, ph, fa, fb, X, Y };
+    ctx.save(); ctx.beginPath(); ctx.rect(padL, padT, pw, ph); ctx.clip();
+    if ($("#ov-harm").checked) {
+      ctx.strokeStyle = tok("--s3"); ctx.lineWidth = 1.3; ctx.setLineDash([5, 4]); ctx.globalAlpha = 0.95;
+      for (const ln of C.lines) if (ln.h > 1) strokeLine(ctx, ln, X, Y);
+      ctx.setLineDash([]);
+    }
+    if ($("#ov-truth").checked) {
+      ctx.strokeStyle = tok("--s1"); ctx.lineWidth = view === "zoom" ? 1.8 : 1.1; ctx.globalAlpha = 0.7;
+      for (const ln of C.lines) if (ln.h === 1) strokeLine(ctx, ln, X, Y);
+    }
+    if ($("#ov-det").checked) {
+      ctx.globalAlpha = 0.9; ctx.fillStyle = tok("--s2"); const r = view === "zoom" ? 2.6 : 1.5;
+      for (let i = 0; i < C.det.t.length; i++) { const f = C.det.f[i]; if (f < fa || f > fb) continue; ctx.beginPath(); ctx.arc(X(C.det.t[i]), Y(f), r, 0, 2 * Math.PI); ctx.fill(); }
+    }
+    ctx.globalAlpha = 1;
+    if ($("#ov-notes").checked && view === "full") {
+      ctx.font = "600 11.5px " + tok("--mono");
+      for (const n of notes) {
+        const ln = C.lines.find((l) => l.fish === n.fish && l.h === n.h); if (!ln) continue;
+        const f = lineAt(ln, n.t); if (!isFinite(f)) continue;
+        const x = X(n.t), y = Y(f), ty = y + n.dy; const tw = ctx.measureText(n.text).width;
+        ctx.strokeStyle = tok("--ink"); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, ty + (n.dy < 0 ? 4 : -10)); ctx.stroke();
+        const bx = Math.min(x - 6, padL + pw - tw - 14);
+        ctx.fillStyle = tok("--surface"); ctx.globalAlpha = 0.92; ctx.fillRect(bx, ty - 11, tw + 10, 16); ctx.globalAlpha = 1;
+        ctx.fillStyle = tok("--ink"); ctx.fillText(n.text, bx + 5, ty + 1);
+      }
+    }
+    ctx.restore();
+    ctx.strokeStyle = tok("--rule"); ctx.lineWidth = 1; ctx.strokeRect(padL + 0.5, padT + 0.5, pw - 1, ph - 1);
+    ctx.fillStyle = tok("--muted"); ctx.font = "11px " + tok("--mono"); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    const fstep = view === "zoom" ? 5 : 20;
+    for (let f = Math.ceil(fa / fstep) * fstep; f <= fb; f += fstep) { ctx.fillText(f + "", padL - 6, Y(f)); }
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    for (let t = Math.ceil(tA / 10) * 10; t <= tB; t += 10) ctx.fillText(t + " s", X(t), padT + ph + 8);
+    ctx.save(); ctx.translate(12, padT + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textAlign = "center"; ctx.fillText("Hz", 0, 0); ctx.restore();
+  }
+  function strokeLine(ctx, ln, X, Y) {
+    ctx.beginPath(); let pen = false;
+    for (let i = 0; i < C.nt; i++) { const f = ln.f[i]; if (f === null) { pen = false; continue; } const x = X(C.t0 + i * C.dt), y = Y(f); if (pen) ctx.lineTo(x, y); else ctx.moveTo(x, y); pen = true; }
+    ctx.stroke();
+  }
+  function setView(v) { view = v; $("#v-full").setAttribute("aria-pressed", v === "full"); $("#v-zoom").setAttribute("aria-pressed", v === "zoom"); draw(); }
+  $("#v-full").addEventListener("click", () => setView("full"));
+  $("#v-zoom").addEventListener("click", () => setView("zoom"));
+  ["#ov-truth", "#ov-harm", "#ov-det", "#ov-notes"].forEach((s) => $(s).addEventListener("change", draw));
+  $("#crop").addEventListener("mousemove", (e) => {
+    if (!geom) return; const r = e.currentTarget.getBoundingClientRect(); const x = e.clientX - r.left, y = e.clientY - r.top;
+    const { padL, padT, pw, ph, fa, fb } = geom; if (x < padL || x > padL + pw || y < padT || y > padT + ph) return;
+    const t = tA + ((x - padL) / pw) * (tB - tA), f = fb - ((y - padT) / ph) * (fb - fa);
+    const c = Math.round((t - C.t0) / C.dt), k = Math.round((f - C.f0) / C.df);
+    const v = bytes[(C.nf - 1 - k) * C.nt + c]; const db = C.db_range[0] + (v / 255) * (C.db_range[1] - C.db_range[0]) - (C.db_range[0] + 3);
+    let near = null, best = 1.0;
+    for (const ln of C.lines) { const lf = ln.f[c]; if (lf === null) continue; const d = Math.abs(lf - f); if (d < best) { best = d; near = ln; } }
+    let what = "";
+    if (near) what = near.h === 1 ? ` · truth: fundamental, median SNR ${fmtMinus(near.snr, 0)} dB` : ` · harmonic ${near.h} of a ${(near.f[c] / near.h).toFixed(0)} Hz fish`;
+    $("#crop-read").innerHTML = `<b>${t.toFixed(1)} s</b> · <b>${f.toFixed(1)} Hz</b> · ${fmtMinus(db, 0)} dB over the crop's median${what}`;
+  });
+  watchSize($("#crop"), draw); onRedraw(() => { img = null; draw(); });
+  draw();
+})();
+
+/* ---------- 2. Target widths ---------- */
+(function targets() {
+  const svg = $("#target-svg"); const fish = [797.5, 800, 806];
+  function draw() {
+    clear(svg); const W = 900, x0 = 50, x1 = 880; const fa = 770, fb = 830; const X = (f) => x0 + ((f - fa) / (fb - fa)) * (x1 - x0);
+    const rows = [{ y: 20, label: "quarter-tone target (music)", fn: (f) => Math.max(...fish.map((c) => { const cents = 1200 * Math.log2(f / c); return Math.max(0, Math.cos((Math.PI / 2) * Math.min(1, Math.abs(cents) / 50))) ** 2; })) },
+                  { y: 120, label: "σ = 0.6 Hz, merged by maximum (ours)", fn: (f) => Math.max(...fish.map((c) => Math.exp(-0.5 * ((f - c) / 0.6) ** 2))) }];
+    for (const r of rows) {
+      const H = 70; const pts = []; for (let f = fa; f <= fb; f += 0.05) pts.push([X(f), r.y + H - r.fn(f) * H]);
+      el("text", { x: x0, y: r.y - 4, "font-size": 11.5 }, svg, r.label);
+      el("line", { x1: x0, x2: x1, y1: r.y + H, y2: r.y + H, stroke: "currentColor", "stroke-opacity": 0.35 }, svg);
+      el("path", { d: pathFrom(pts), fill: "none", stroke: "var(--accent)", "stroke-width": 2, style: "stroke:var(--accent)" }, svg);
+      for (const c of fish) el("line", { x1: X(c), x2: X(c), y1: r.y + H, y2: r.y + H + 6, stroke: "var(--s1)", style: "stroke:var(--s1)", "stroke-width": 2 }, svg);
+      for (let k = Math.ceil(fa / DF); k * DF <= fb; k++) el("line", { x1: X(k * DF), x2: X(k * DF), y1: r.y + H, y2: r.y + H + 3, stroke: "currentColor", "stroke-opacity": 0.3 }, svg);
+    }
+    for (let f = 770; f <= 830; f += 10) el("text", { x: X(f), y: 222, "text-anchor": "middle", "font-size": 11, opacity: 0.7 }, svg, f + " Hz");
+  }
+  draw(); onRedraw(draw);
+})();
+
+/* ---------- 3. Harmonic stack ---------- */
+(function harmonicStack() {
+  const NB = Math.round(2000 / DF);
+  const r = mulberry(7); const P = new Float64Array(NB);
+  for (let k = 0; k < NB; k++) P[k] = -Math.log(1 - r());
+  const fishes = [{ f0: 410.3, db: [24, 17, 12, 8, 4] }, { f0: 640.7, db: [15, 15, 7, 3, 0] }, { f0: 229.8, db: [30, 28, 21, 16, 12, 9, 6] }];
+  for (const fi of fishes) fi.db.forEach((d, i) => { const fh = (i + 1) * fi.f0; const kc = Math.round(fh / DF); for (let k = kc - 6; k <= kc + 6; k++) { if (k < 0 || k >= NB) continue; const w = hannW(k * DF - fh); P[k] += Math.pow(10, d / 10) * w * w; } });
+  const dB = Array.from(P, (p) => 10 * Math.log10(p));
+  const H = [1 / 3, 1 / 2, 1, 2, 3, 4, 5], HL = ["f/3", "f/2", "f", "2f", "3f", "4f", "5f"];
+  function chan(h, kf) { const c = h * kf; const rad = h >= 1 ? Math.max(1, Math.round(h / 2)) : 1; let m = -99; for (let k = Math.round(c) - rad; k <= Math.round(c) + rad; k++) if (k >= 0 && k < NB) m = Math.max(m, dB[k]); return m; }
+  const kLo = Math.round(100 / DF), kHi = Math.round(700 / DF);
+  const stack = H.map((h) => { const a = []; for (let k = kLo; k <= kHi; k++) a.push(chan(h, k)); return a; });
+  let fsel = 460;
+  function drawSpec() {
+    const svg = $("#hs-spec"); clear(svg); const x0 = 40, x1 = 890, y0 = 14, y1 = 170, fa = 0, fb = 1700, da = -2, db = 34;
+    const X = (f) => x0 + ((f - fa) / (fb - fa)) * (x1 - x0), Y = (d) => y1 - ((d - da) / (db - da)) * (y1 - y0);
+    const pts = []; const step = Math.max(1, Math.floor((fb / DF) / 850));
+    for (let k = 0; k < fb / DF; k += step) { let m = -99; for (let j = k; j < k + step; j++) m = Math.max(m, dB[j]); pts.push([X(k * DF), Y(Math.max(da, m))]); }
+    el("path", { d: pathFrom(pts), fill: "none", stroke: "currentColor", "stroke-width": 1, "stroke-opacity": 0.8 }, svg);
+    H.forEach((h, i) => { const fh = h * fsel; if (fh > fb) return; const sub = h < 1; el("line", { x1: X(fh), x2: X(fh), y1: y0, y2: y1, stroke: "var(--s2)", style: "stroke:var(--s2)", "stroke-width": 1.4, "stroke-dasharray": sub ? "4 3" : "none" }, svg); el("text", { x: X(fh), y: y0 + 2, "text-anchor": "middle", "font-size": 10.5, dy: "0.6em" }, svg, HL[i]); });
+    for (let f = 0; f <= fb; f += 200) el("text", { x: X(f), y: 190, "text-anchor": "middle", "font-size": 11, opacity: 0.7 }, svg, f + "");
+    el("text", { x: x1, y: 190, "text-anchor": "end", "font-size": 11, opacity: 0.7 }, svg, "Hz");
+    el("text", { x: 4, y: Y(30), "font-size": 10.5, opacity: 0.7 }, svg, "30 dB"); el("text", { x: 4, y: Y(0), "font-size": 10.5, opacity: 0.7 }, svg, "0");
+  }
+  function drawStack() {
+    const cv = $("#hs-stack"); const { ctx, w, h } = fit(cv); const padL = 34, padB = 22, padT = 4; const pw = w - padL - 8, ph = h - padB - padT; const rowH = ph / 7;
+    ctx.fillStyle = tok("--surface"); ctx.fillRect(0, 0, w, h);
+    const n = stack[0].length; const off = document.createElement("canvas"); off.width = n; off.height = 7; const ox = off.getContext("2d"); const im = ox.createImageData(n, 7);
+    for (let row = 0; row < 7; row++) { const hi = 6 - row; for (let i = 0; i < n; i++) { const v = Math.max(0, Math.min(255, Math.round(((stack[hi][i] - 8) / 22) * 255))); const p = (row * n + i) * 4; im.data[p] = LUT[v * 3]; im.data[p + 1] = LUT[v * 3 + 1]; im.data[p + 2] = LUT[v * 3 + 2]; im.data[p + 3] = 255; } }
+    ox.putImageData(im, 0, 0); ctx.imageSmoothingEnabled = false; ctx.drawImage(off, padL, padT, pw, ph);
+    ctx.fillStyle = tok("--muted"); ctx.font = "10.5px " + tok("--mono"); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    for (let row = 0; row < 7; row++) ctx.fillText(HL[6 - row], padL - 5, padT + rowH * (row + 0.5));
+    const X = (f) => padL + ((f - 100) / 600) * pw; ctx.textAlign = "center"; ctx.textBaseline = "top";
+    for (let f = 100; f <= 700; f += 100) ctx.fillText(f + "", X(f), padT + ph + 5);
+    ctx.strokeStyle = tok("--s2"); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X(fsel), padT); ctx.lineTo(X(fsel), padT + ph); ctx.stroke();
+  }
+  function drawBars() {
+    const svg = $("#hs-bars"); clear(svg); const kf = Math.round(fsel / DF); const vals = H.map((h) => chan(h, kf));
+    const x0 = 50, bw = 38, gap = 6, y1 = 150, y0 = 14, Y = (d) => y1 - (Math.max(0, Math.min(32, d)) / 32) * (y1 - y0);
+    el("line", { x1: x0 - 4, x2: x0 + 7 * (bw + gap), y1: y1, y2: y1, stroke: "currentColor", "stroke-opacity": 0.4 }, svg);
+    vals.forEach((v, i) => { const x = x0 + i * (bw + gap); if (v < -90) { el("text", { x: x + bw / 2, y: y1 + 16, "text-anchor": "middle", "font-size": 11 }, svg, HL[i]); el("text", { x: x + bw / 2, y: y1 - 6, "text-anchor": "middle", "font-size": 10, opacity: 0.6 }, svg, "n/a"); return; } el("rect", { x: x, y: Y(v), width: bw, height: y1 - Y(v), rx: 2, fill: "var(--accent)", style: "fill:var(--accent)" }, svg); el("text", { x: x + bw / 2, y: y1 + 16, "text-anchor": "middle", "font-size": 11 }, svg, HL[i]); el("text", { x: x + bw / 2, y: Y(v) - 4, "text-anchor": "middle", "font-size": 10, opacity: 0.75 }, svg, v.toFixed(0)); });
+    el("text", { x: 4, y: 12, "font-size": 10.5, opacity: 0.7 }, svg, "dB over noise");
+    const sub = Math.max(vals[0], vals[1]); let msg;
+    if (vals[2] < 8) msg = "Little power at f: no line here.";
+    else if (sub > 12) msg = `Strong power at ${vals[1] > vals[0] ? "f/2" : "f/3"} (${(fsel * (vals[1] > vals[0] ? 0.5 : 1 / 3)).toFixed(0)} Hz): this line is probably a harmonic of a lower fish.`;
+    else msg = "Power at f and its harmonics, nothing below: looks like a fundamental.";
+    $("#hs-read").innerHTML = `<b>candidate ${fsel.toFixed(1)} Hz</b> · ${msg}`;
+  }
+  function set(f) { fsel = Math.round(f / DF) * DF; $("#hs-f").value = fsel; $("#hs-f-out").textContent = fsel.toFixed(1) + " Hz"; drawSpec(); drawStack(); drawBars(); }
+  $("#hs-f").addEventListener("input", (e) => set(+e.target.value));
+  $$("[data-f]").forEach((b) => b.addEventListener("click", () => set(+b.dataset.f)));
+  $("#hs-stack").addEventListener("click", (e) => { const r = e.currentTarget.getBoundingClientRect(); const x = e.clientX - r.left; const pw = r.width - 42; const f = 100 + ((x - 34) / pw) * 600; if (f >= 100 && f <= 700) set(f); });
+  watchSize($("#hs-stack"), drawStack); onRedraw(() => set(fsel));
+  set(460);
+})();
+
+/* ---------- 4. Two fish, one peak ---------- */
+(function twoTones() {
+  const f1 = 600.27, fa = 596, fb = 608, NF = 122;
+  let frame = 0, playing = null;
+  function params() { return { df: +$("#tt-df").value, a2: Math.pow(10, +$("#tt-lev").value / 20), pow: $("#tt-pow").checked }; }
+  function power(f, t, p) {
+    const f2 = f1 + p.df, w1 = hannW(f - f1), w2 = p.a2 * hannW(f - f2);
+    if (p.pow) return w1 * w1 + w2 * w2;
+    const ph1 = 2 * Math.PI * f1 * t, ph2 = 2 * Math.PI * f2 * t;
+    const re = w1 * Math.cos(ph1) + w2 * Math.cos(ph2), im = w1 * Math.sin(ph1) + w2 * Math.sin(ph2);
+    return re * re + im * im;
+  }
+  const toDb = (p) => Math.max(-40, 10 * Math.log10(p + 1e-12));
+  function drawSpec() {
+    const p = params(); const t = frame * DT; const svg = $("#tt-spec"); clear(svg);
+    const x0 = 40, x1 = 430, y0 = 16, y1 = 196, da = -36, db = 7; const X = (f) => x0 + ((f - fa) / (fb - fa)) * (x1 - x0), Y = (d) => y1 - ((Math.max(da, d) - da) / (db - da)) * (y1 - y0);
+    const pts = []; for (let f = fa; f <= fb; f += 0.02) pts.push([X(f), Y(toDb(power(f, t, p)))]);
+    for (const d of [0, -10, -20, -30]) { el("line", { x1: x0, x2: x1, y1: Y(d), y2: Y(d), stroke: "currentColor", "stroke-opacity": 0.12 }, svg); el("text", { x: x0 - 6, y: Y(d) + 4, "text-anchor": "end", "font-size": 10, opacity: 0.7 }, svg, d === 0 ? "0" : fmtMinus(d, 0)); }
+    el("path", { d: pathFrom(pts), fill: "none", stroke: "currentColor", "stroke-width": 1.5 }, svg);
+    const bins = []; for (let k = Math.ceil(fa / DF); k * DF <= fb; k++) bins.push([k * DF, toDb(power(k * DF, t, p))]);
+    for (const [f, d] of bins) el("circle", { cx: X(f), cy: Y(d), r: 3.2, fill: "var(--accent)", style: "fill:var(--accent)" }, svg);
+    [[f1, "fish 1", "var(--s1)"], [f1 + p.df, "fish 2", "var(--s2)"]].forEach(([f, l, c], i) => { el("line", { x1: X(f), x2: X(f), y1: y1, y2: y1 + 7, stroke: c, style: "stroke:" + c, "stroke-width": 2.5 }, svg); el("text", { x: X(f), y: y1 + 20 + i * 12, "text-anchor": "middle", "font-size": 10.5 }, svg, l); });
+    el("text", { x: x1, y: 12, "text-anchor": "end", "font-size": 10.5, opacity: 0.75 }, svg, `frame at ${t.toFixed(1)} s`);
+    let peaks = 0; for (let i = 1; i < bins.length - 1; i++) { const d = bins[i][1]; if (d > bins[i - 1][1] && d >= bins[i + 1][1] && d > -25) { let lm = d, rm = d; for (let j = i - 1; j >= 0 && bins[j][1] <= lm; j--) lm = Math.min(lm, bins[j][1]); for (let j = i + 1; j < bins.length && bins[j][1] <= rm; j++) rm = Math.min(rm, bins[j][1]); if (d - Math.max(lm, rm) > 1 || peaks === 0) peaks++; } }
+    const beat = p.pow ? "none (power mixing)" : `period ${(1 / p.df).toFixed(2)} s`;
+    $("#tt-read").innerHTML = `<b>Δf ${p.df.toFixed(2)} Hz</b> · the bins show <b>${peaks} peak${peaks === 1 ? "" : "s"}</b> in this frame · beat ${beat} · frames every ${DT.toFixed(3)} s`;
+  }
+  function drawStrip() {
+    const p = params(); const cv = $("#tt-strip"); const { ctx, w, h } = fit(cv); const padL = 40, padB = 22, padT = 6; const pw = w - padL - 8, ph = h - padB - padT;
+    ctx.fillStyle = tok("--surface"); ctx.fillRect(0, 0, w, h);
+    const k0 = Math.ceil(fa / DF), k1 = Math.floor(fb / DF), nk = k1 - k0 + 1; const off = document.createElement("canvas"); off.width = NF; off.height = nk; const ox = off.getContext("2d"); const im = ox.createImageData(NF, nk);
+    for (let i = 0; i < NF; i++) for (let k = 0; k < nk; k++) { const d = toDb(power((k1 - k) * DF, i * DT, p)); const v = Math.max(0, Math.min(255, Math.round(((d + 30) / 31) * 255))); const q = (k * NF + i) * 4; im.data[q] = LUT[v * 3]; im.data[q + 1] = LUT[v * 3 + 1]; im.data[q + 2] = LUT[v * 3 + 2]; im.data[q + 3] = 255; }
+    ox.putImageData(im, 0, 0); ctx.imageSmoothingEnabled = false; ctx.drawImage(off, padL, padT, pw, ph);
+    const x = padL + ((frame % NF) + 0.5) / NF * pw; ctx.strokeStyle = tok("--s2"); ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, padT + ph); ctx.stroke();
+    ctx.fillStyle = tok("--muted"); ctx.font = "10.5px " + tok("--mono"); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    for (let f = 598; f <= 606; f += 4) ctx.fillText(f + "", padL - 5, padT + ((k1 + 0.5 - f / DF) / nk) * ph);
+    ctx.textAlign = "center"; ctx.textBaseline = "top"; for (let s = 0; s <= 15; s += 5) ctx.fillText(s + " s", padL + (s / (NF * DT)) * pw, padT + ph + 5);
+  }
+  function update() { $("#tt-df-out").textContent = (+$("#tt-df").value).toFixed(2) + " Hz"; $("#tt-lev-out").textContent = fmtMinus(+$("#tt-lev").value, 0) + " dB"; $("#tt-t-out").textContent = (frame * DT).toFixed(1) + " s"; drawSpec(); drawStrip(); }
+  ["#tt-df", "#tt-lev", "#tt-pow"].forEach((s) => $(s).addEventListener("input", update));
+  $("#tt-t").max = NF - 1;
+  $("#tt-t").addEventListener("input", (e) => { frame = +e.target.value; update(); });
+  $("#tt-play").addEventListener("click", () => {
+    if (playing) { clearInterval(playing); playing = null; $("#tt-play").textContent = "Play"; return; }
+    $("#tt-play").textContent = "Pause"; playing = setInterval(() => { frame = (frame + 1) % NF; $("#tt-t").value = frame; update(); }, 140);
+  });
+  watchSize($("#tt-strip"), drawStrip); onRedraw(update); update();
+})();
+
+/* ---------- 5. Temporal integration ---------- */
+(function temporal() {
+  const NT = 366, NK = 66, f0 = 600; const r = mulberry(11);
+  const re = new Float64Array(NT * NK), im = new Float64Array(NT * NK);
+  for (let i = 0; i < NT * NK; i++) { re[i] = gauss(r); im[i] = gauss(r); }
+  const ker = []; for (let j = -5; j <= 5; j++) ker.push(0.5 + 0.5 * Math.cos((Math.PI * j) / 6)); const ks = Math.sqrt(ker.reduce((a, b) => a + b * b, 0));
+  const noise = new Float64Array(NT * NK);
+  for (let k = 0; k < NK; k++) for (let i = 0; i < NT; i++) { let a = 0, b = 0; for (let j = -5; j <= 5; j++) { const ii = Math.min(NT - 1, Math.max(0, i + j)); a += ker[j + 5] * re[ii * NK + k]; b += ker[j + 5] * im[ii * NK + k]; } noise[i * NK + k] = (a * a + b * b) / (2 * ks * ks); }
+  function fishF(i) { const t = i * DT; const fA = 612 + 0.8 * Math.sin((2 * Math.PI * t) / 45); let fB = 628; if (t > 25) fB += 6 * Math.min(1, (t - 25) / 1) * Math.exp(-Math.max(0, t - 26) / 8); return [fA, fB]; }
+  const Ts = [0.16, 0.5, 1, 2, 5, 10, 20, 40];
+  function compute() {
+    const s = Math.pow(10, +$("#ti-snr").value / 10); const T = Ts[+$("#ti-T").value]; const n = Math.max(1, Math.round(T / DT)); const half = Math.floor(n / 2);
+    const P = new Float64Array(NT * NK);
+    for (let i = 0; i < NT; i++) { const fs = fishF(i); for (let k = 0; k < NK; k++) { const f = f0 + k * DF; let v = noise[i * NK + k]; for (const fc of fs) { const w = hannW(f - fc); v += s * w * w; } P[i * NK + k] = v; } }
+    const S = new Float64Array(NT * NK), N = new Float64Array(NT * NK);
+    for (let k = 0; k < NK; k++) { let cs = [0], cn = [0]; for (let i = 0; i < NT; i++) { cs.push(cs[i] + P[i * NK + k]); cn.push(cn[i] + noise[i * NK + k]); } for (let i = 0; i < NT; i++) { const a = Math.max(0, i - half), b = Math.min(NT, a + n); S[i * NK + k] = (cs[b] - cs[a]) / (b - a); N[i * NK + k] = (cn[b] - cn[a]) / (b - a); } }
+    let m = 0, v = 0; for (let i = 0; i < N.length; i++) m += N[i]; m /= N.length; for (let i = 0; i < N.length; i++) v += (N[i] - m) ** 2; const sd = Math.sqrt(v / N.length);
+    return { S, m, sd, T, n };
+  }
+  function draw() {
+    const { S, m, sd, T } = compute(); const cv = $("#ti"); const { ctx, w, h } = fit(cv); const padL = 44, padB = 24, padT = 6; const pw = w - padL - 10, ph = h - padB - padT;
+    ctx.fillStyle = tok("--surface"); ctx.fillRect(0, 0, w, h);
+    const off = document.createElement("canvas"); off.width = NT; off.height = NK; const ox = off.getContext("2d"); const im2 = ox.createImageData(NT, NK);
+    for (let i = 0; i < NT; i++) for (let k = 0; k < NK; k++) { const z = (S[i * NK + k] - m) / sd; const vv = Math.max(0, Math.min(255, Math.round(((z + 1.5) / 5) * 255))); const q = ((NK - 1 - k) * NT + i) * 4; im2.data[q] = LUT[vv * 3]; im2.data[q + 1] = LUT[vv * 3 + 1]; im2.data[q + 2] = LUT[vv * 3 + 2]; im2.data[q + 3] = 255; }
+    ox.putImageData(im2, 0, 0); ctx.imageSmoothingEnabled = true; ctx.drawImage(off, padL, padT, pw, ph);
+    ctx.fillStyle = tok("--muted"); ctx.font = "10.5px " + tok("--mono"); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    for (let f = 605; f <= 635; f += 10) ctx.fillText(f + "", padL - 5, padT + ((f0 + (NK - 1) * DF - f) / ((NK - 1) * DF)) * ph);
+    ctx.textAlign = "center"; ctx.textBaseline = "top"; for (let s = 0; s <= 60; s += 10) ctx.fillText(s + " s", padL + (s / (NT * DT)) * pw, padT + ph + 6);
+    const looks = Math.max(1, T / TWIN);
+    $("#ti-T-out").textContent = T < 1 ? T.toFixed(2) + " s" : T.toFixed(0) + " s"; $("#ti-snr-out").textContent = fmtMinus(+$("#ti-snr").value, 0) + " dB";
+    $("#ti-read").innerHTML = `averaging <b>${T < 1 ? T.toFixed(2) : T.toFixed(0)} s</b> ≈ <b>${looks.toFixed(1)}</b> independent windows of 1.64 s · noise spread shrinks about ${Math.sqrt(looks).toFixed(1)}× · colour shows how many noise standard deviations each bin is above the mean`;
+  }
+  ["#ti-snr", "#ti-T"].forEach((s) => $(s).addEventListener("input", draw));
+  watchSize($("#ti"), draw); onRedraw(draw); draw();
+})();
+
+/* ---------- 6. Per-electrode real data ---------- */
+(function electrodes() {
+  const E = JSON.parse($("#elec-data").textContent); const grid = $("#egrid"); const cvs = [];
+  for (let e = 0; e < 9; e++) { const d = document.createElement("div"); d.className = "ecell"; const c = document.createElement("canvas"); c.style.height = "92px"; c.setAttribute("aria-label", "electrode " + (e + 1)); d.appendChild(c); const s = document.createElement("span"); s.textContent = "e" + (e + 1); d.appendChild(s); grid.appendChild(d); cvs.push(c); }
+  const bytes = E.elec.map(b64), sum = b64(E.sum);
+  function draw() {
+    cvs.forEach((c, e) => { const { ctx, w, h } = fit(c); const img = toImage(bytes[e], E.nt, E.nf); ctx.imageSmoothingEnabled = true; ctx.drawImage(img, 0, 0, w, h); });
+    const c = $("#esum"); const { ctx, w, h } = fit(c); const padL = 34, padB = 20; ctx.fillStyle = tok("--surface"); ctx.fillRect(0, 0, w, h);
+    ctx.imageSmoothingEnabled = true; ctx.drawImage(toImage(sum, E.nt, E.nf), padL, 0, w - padL - 4, h - padB);
+    ctx.fillStyle = tok("--muted"); ctx.font = "10.5px " + tok("--mono"); ctx.textAlign = "right"; ctx.textBaseline = "middle";
+    const fTop = E.f0 + (E.nf - 1) * E.df; for (const f of [375, 380, 385, 390]) ctx.fillText(f + "", padL - 4, ((fTop - f) / (fTop - E.f0)) * (h - padB));
+    ctx.textAlign = "center"; ctx.textBaseline = "top"; for (const t of [60, 90, 120]) ctx.fillText(t + " s", padL + ((t - 60) / 60) * (w - padL - 4), h - padB + 4);
+  }
+  watchSize($("#esum"), draw); onRedraw(draw); draw();
+})();
+
+/* ---------- 7. TAC diagram ---------- */
+(function tac() {
+  const svg = $("#tac"); let N = 9;
+  function draw() {
+    clear(svg); const top = 34, rowH = Math.min(52, 280 / N), H = top + N * rowH + 20; svg.setAttribute("viewBox", `0 0 900 ${Math.max(200, H)}`);
+    const defs = el("defs", {}, svg); const mk = el("marker", { id: "ar3", viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 6, markerHeight: 6, orient: "auto-start-reverse" }, defs); el("path", { d: "M0,0 L10,5 L0,10 z", fill: "currentColor" }, mk);
+    const yc = (i) => top + (i + 0.5) * rowH, mid = top + (N * rowH) / 2, bh = Math.min(30, rowH - 6);
+    const cols = { e: 20, enc: 130, pool: 330, lay: 470, pool2: 640, gate: 760, out: 850 };
+    el("text", { x: cols.enc + 50, y: 18, "text-anchor": "middle", "font-size": 11 }, svg, "same encoder (shared weights)");
+    el("text", { x: cols.lay + 55, y: 18, "text-anchor": "middle", "font-size": 11 }, svg, "same layer (shared weights)");
+    for (let i = 0; i < N; i++) {
+      const y = yc(i);
+      el("rect", { x: cols.e, y: y - bh / 2, width: 70, height: bh, rx: 3, fill: "none", stroke: "currentColor" }, svg); el("text", { x: cols.e + 35, y: y + 4, "text-anchor": "middle", "font-size": 11 }, svg, "e" + (i + 1));
+      el("rect", { x: cols.enc, y: y - bh / 2, width: 100, height: bh, rx: 3, fill: "var(--accent-soft)", style: "fill:var(--accent-soft)", stroke: "var(--accent)" }, svg);
+      if (N <= 4 || i === 0) el("text", { x: cols.enc + 50, y: y + 4, "text-anchor": "middle", "font-size": 10.5 }, svg, "encoder");
+      el("line", { x1: cols.e + 70, x2: cols.enc - 2, y1: y, y2: y, stroke: "currentColor", "marker-end": "url(#ar3)" }, svg);
+      el("path", { d: `M${cols.enc + 100},${y} C${cols.enc + 150},${y} ${cols.pool - 40},${mid} ${cols.pool - 2},${mid}`, fill: "none", stroke: "currentColor", "stroke-opacity": 0.55 }, svg);
+      el("path", { d: `M${cols.pool + 80},${mid} C${cols.pool + 110},${mid} ${cols.lay - 30},${y} ${cols.lay - 2},${y}`, fill: "none", stroke: "var(--accent)", style: "stroke:var(--accent)", "stroke-opacity": 0.8, "marker-end": "url(#ar3)" }, svg);
+      el("rect", { x: cols.lay, y: y - bh / 2, width: 110, height: bh, rx: 3, fill: "var(--accent-soft)", style: "fill:var(--accent-soft)", stroke: "var(--accent)" }, svg);
+      if (N <= 4 || i === 0) el("text", { x: cols.lay + 55, y: y + 4, "text-anchor": "middle", "font-size": 10.5 }, svg, "own + summary");
+      el("path", { d: `M${cols.lay + 110},${y} C${cols.lay + 150},${y} ${cols.pool2 - 40},${mid} ${cols.pool2 - 2},${mid}`, fill: "none", stroke: "currentColor", "stroke-opacity": 0.55 }, svg);
+    }
+    el("rect", { x: cols.pool, y: mid - 26, width: 80, height: 52, rx: 4, fill: "none", stroke: "currentColor" }, svg); el("text", { x: cols.pool + 40, y: mid - 4, "text-anchor": "middle", "font-size": 11 }, svg, "mean, max"); el("text", { x: cols.pool + 40, y: mid + 12, "text-anchor": "middle", "font-size": 10, opacity: 0.75 }, svg, "over N");
+    el("text", { x: cols.pool + 40, y: mid + 44, "text-anchor": "middle", "font-size": 10, opacity: 0.8 }, svg, "summary sent back");
+    el("rect", { x: cols.pool2, y: mid - 26, width: 80, height: 52, rx: 4, fill: "none", stroke: "currentColor" }, svg); el("text", { x: cols.pool2 + 40, y: mid - 4, "text-anchor": "middle", "font-size": 11 }, svg, "mean, max"); el("text", { x: cols.pool2 + 40, y: mid + 12, "text-anchor": "middle", "font-size": 10, opacity: 0.75 }, svg, "over N");
+    el("circle", { cx: cols.gate + 22, cy: mid, r: 20, fill: "none", stroke: "currentColor" }, svg); el("text", { x: cols.gate + 22, y: mid + 4, "text-anchor": "middle", "font-size": 12 }, svg, "× g");
+    el("text", { x: cols.gate + 22, y: mid + 38, "text-anchor": "middle", "font-size": 10, opacity: 0.8 }, svg, "g = 0 at start");
+    el("line", { x1: cols.pool2 + 80, x2: cols.gate, y1: mid, y2: mid, stroke: "currentColor", "marker-end": "url(#ar3)" }, svg);
+    el("line", { x1: cols.gate + 42, x2: cols.out - 4, y1: mid, y2: mid, stroke: "currentColor", "marker-end": "url(#ar3)" }, svg);
+    el("text", { x: cols.out + 18, y: mid + 4, "text-anchor": "middle", "font-size": 11 }, svg, "trunk");
+  }
+  $$("[data-n]").forEach((b) => b.addEventListener("click", () => { N = +b.dataset.n; $$("[data-n]").forEach((x) => x.setAttribute("aria-pressed", x === b)); draw(); }));
+  draw();
+})();
+
+/* ---------- 8. Masks schematic ---------- */
+(function masks() {
+  const svg = $("#masks");
+  function draw() {
+    clear(svg); const x0 = 30, x1 = 880; const Y = (f) => 250 - f;
+    const line = (fn, a, b) => { const p = []; for (let x = a; x <= b; x += 4) p.push([x, Y(fn(x))]); return p; };
+    const fishA = (x) => 70 + 6 * Math.sin(x / 90), harm = (x) => 2 * fishA(x) - 30, unknown = (x) => 120 + 3 * Math.sin(x / 140 + 1);
+    el("rect", { x: 330, y: Y(fishA(400)) - 16, width: 150, height: 32, fill: "var(--s4)", style: "fill:var(--s4)", "fill-opacity": 0.22 }, svg);
+    el("rect", { x: x0, y: Y(unknown(400)) - 14, width: x1 - x0, height: 28, fill: "var(--s4)", style: "fill:var(--s4)", "fill-opacity": 0.22 }, svg);
+    for (const seg of [[x0, 330], [480, 600], [690, x1]]) el("path", { d: pathFrom(line(fishA, seg[0], seg[1])), fill: "none", stroke: "var(--s1)", style: "stroke:var(--s1)", "stroke-width": 7, "stroke-opacity": 0.25 }, svg);
+    for (const seg of [[x0, 330], [480, 600], [690, x1]]) el("path", { d: pathFrom(line(fishA, seg[0], seg[1])), fill: "none", stroke: "var(--s1)", style: "stroke:var(--s1)", "stroke-width": 2 }, svg);
+    el("path", { d: pathFrom(line(fishA, 330, 480)), fill: "none", stroke: "var(--s1)", style: "stroke:var(--s1)", "stroke-width": 2, "stroke-dasharray": "2 5" }, svg);
+    el("path", { d: pathFrom(line(fishA, 600, 690)), fill: "none", stroke: "var(--s1)", style: "stroke:var(--s1)", "stroke-width": 2, "stroke-dasharray": "8 4" }, svg);
+    el("path", { d: pathFrom(line(harm, x0, x1)), fill: "none", stroke: "var(--s3)", style: "stroke:var(--s3)", "stroke-width": 2, "stroke-dasharray": "6 4" }, svg);
+    el("path", { d: pathFrom(line(unknown, x0, x1)), fill: "none", stroke: "currentColor", "stroke-width": 1.5, "stroke-opacity": 0.7 }, svg);
+    const lab = (x, y, t, s) => { el("text", { x: x, y: y, "font-size": 11.5 }, svg, t); if (s) el("text", { x: x, y: y + 14, "font-size": 10.5, opacity: 0.75 }, svg, s); };
+    lab(40, Y(fishA(40)) + 26, "truth fundamental: positive (σ = 0.6 Hz bump)");
+    lab(335, Y(fishA(400)) - 26, "below the noise: ignored");
+    lab(610, Y(fishA(640)) + 24, "ridge-completed:", "half weight");
+    lab(40, Y(harm(40)) - 12, "harmonic of that fish: kept as \"no fish\"");
+    lab(520, Y(unknown(520)) - 20, "real line missing from the truth: ignored");
+    el("text", { x: x1, y: 272, "text-anchor": "end", "font-size": 10.5, opacity: 0.7 }, svg, "time →");
+    el("text", { x: 6, y: 20, "font-size": 10.5, opacity: 0.7 }, svg, "frequency ↑");
+  }
+  draw(); onRedraw(draw);
+})();
+
+/* ---------- 9. Two-threshold tracking ---------- */
+(function bytetrack() {
+  const r = mulberry(5); const NT = 366; const dets = [];
+  for (let i = 0; i < NT; i++) {
+    const t = i * DT;
+    if (!(t > 18 && t < 19.6) && !(t > 41 && t < 42.2) && r() < 0.92) dets.push({ i, f: 518 + 1.5 * Math.sin((2 * Math.PI * t) / 50) + 0.08 * gauss(r), s: Math.min(0.98, Math.max(0.3, 0.72 + 0.12 * gauss(r))), src: "A" });
+    if (r() < 0.75) dets.push({ i, f: 525 + 0.015 * t + 0.1 * gauss(r), s: Math.min(0.9, Math.max(0.05, (t > 8 && t < 11 ? 0.66 : 0.38) + 0.11 * gauss(r))), src: "B" });
+    const nc = r() < 0.6 ? 1 : r() < 0.3 ? 2 : 0;
+    for (let j = 0; j < nc; j++) dets.push({ i, f: 511 + 25 * r(), s: r() < 0.035 ? 0.6 + 0.2 * r() : 0.08 + 0.4 * r() * r(), src: "C" });
+    if (t > 30 && t < 52 && r() < 0.7) dets.push({ i, f: 531.5 + 0.2 * Math.sin(t / 4) + 0.08 * gauss(r), s: Math.min(0.52, Math.max(0.1, 0.33 + 0.07 * gauss(r))), src: "C" });
+  }
+  let mode = "two";
+  function track(start, low) {
+    const tracks = []; const byFrame = Array.from({ length: NT }, () => []); dets.forEach((d) => { d.tid = -1; byFrame[d.i].push(d); });
+    for (let i = 0; i < NT; i++) {
+      const cand = byFrame[i].filter((d) => d.s >= low).sort((a, b) => b.s - a.s); const used = new Set();
+      for (const tr of tracks) { if (i - tr.last > 12) continue; let best = null, bd = 1.0; for (const d of cand) { if (used.has(d)) continue; const dd = Math.abs(d.f - tr.lf); if (dd < bd) { bd = dd; best = d; } } if (best) { used.add(best); tr.pts.push(best); tr.last = i; tr.lf = best.f; if (best.s >= start) tr.hi++; } }
+      for (const d of cand) if (!used.has(d) && d.s >= start) tracks.push({ pts: [d], last: i, lf: d.f, hi: 1 });
+    }
+    const shown = tracks.filter((t) => t.pts.length >= 8 && t.hi >= 3);
+    shown.forEach((t, k) => { const c = { A: 0, B: 0, C: 0 }; t.pts.forEach((d) => { c[d.src]++; d.tid = k; }); t.src = c.A >= c.B && c.A >= c.C ? "A" : c.B >= c.C ? "B" : "C"; });
+    return shown;
+  }
+  function draw() {
+    const [start, low] = mode === "high" ? [0.6, 0.6] : mode === "low" ? [0.25, 0.25] : [0.6, 0.25];
+    const tracks = track(start, low); const cv = $("#bt"); const { ctx, w, h } = fit(cv); const padL = 44, padB = 24, padT = 8; const pw = w - padL - 10, ph = h - padB - padT; const fa = 510, fb = 537;
+    const X = (i) => padL + (i / (NT - 1)) * pw, Y = (f) => padT + ((fb - f) / (fb - fa)) * ph;
+    ctx.fillStyle = tok("--surface"); ctx.fillRect(0, 0, w, h);
+    const ink = tok("--ink"); ctx.fillStyle = ink;
+    for (const d of dets) { ctx.globalAlpha = 0.12 + 0.8 * d.s; ctx.beginPath(); ctx.arc(X(d.i), Y(d.f), 1.8, 0, 2 * Math.PI); ctx.fill(); }
+    ctx.globalAlpha = 1; const col = { A: tok("--s1"), B: tok("--s3"), C: tok("--s2") };
+    for (const t of tracks) { ctx.strokeStyle = col[t.src]; ctx.lineWidth = 2.2; ctx.beginPath(); t.pts.forEach((d, k) => { if (k === 0) ctx.moveTo(X(d.i), Y(d.f)); else if (d.i - t.pts[k - 1].i > 1) { ctx.stroke(); ctx.beginPath(); ctx.moveTo(X(d.i), Y(d.f)); } else ctx.lineTo(X(d.i), Y(d.f)); }); ctx.stroke(); }
+    ctx.fillStyle = tok("--muted"); ctx.font = "10.5px " + tok("--mono"); ctx.textAlign = "right"; ctx.textBaseline = "middle"; for (let f = 512; f <= 536; f += 6) ctx.fillText(f + "", padL - 5, Y(f));
+    ctx.textAlign = "center"; ctx.textBaseline = "top"; for (let s = 0; s <= 60; s += 10) ctx.fillText(s + " s", X(s / DT), padT + ph + 6);
+    ctx.font = "600 11px " + tok("--mono"); ctx.textAlign = "left"; ctx.textBaseline = "bottom"; ctx.fillStyle = col.A; ctx.fillText("strong fish", X(3), Y(520.6)); ctx.fillStyle = col.B; ctx.fillText("faint fish", X(3), Y(526.2));
+    const bTotal = dets.filter((d) => d.src === "B").length; const bCov = dets.filter((d) => d.src === "B" && d.tid >= 0 && tracks[d.tid].src === "B").length;
+    const nFalse = tracks.filter((t) => t.src === "C").length;
+    $("#bt-read").innerHTML = `start: 3 detections ≥ <b>${start}</b>, extend ≥ <b>${low}</b> · tracks: <b>${tracks.length}</b> · false tracks: <b>${nFalse}</b> · faint fish detections on its tracks: <b>${Math.round((100 * bCov) / bTotal)} %</b>`;
+  }
+  $$("[data-m]").forEach((b) => b.addEventListener("click", () => { mode = b.dataset.m; $$("[data-m]").forEach((x) => x.setAttribute("aria-pressed", x === b)); draw(); }));
+  watchSize($("#bt"), draw); onRedraw(draw); draw();
+})();
+
+/* ---------- 10. Tolerance windows ---------- */
+(function tolerance() {
+  const svg = $("#tol");
+  function draw() {
+    clear(svg); const x0 = 30, x1 = 880, fa = 770, fb = 830; const X = (f) => x0 + ((f - fa) / (fb - fa)) * (x1 - x0);
+    const semi = 800 * (Math.pow(2, 0.5 / 12) - 1);
+    const bands = [[semi, "±0.5 semitone (music default)", 18], [2.5, "±2.5 Hz", 48], [1.2, "±1.2 Hz", 70], [0.6, "±0.6 Hz", 92]];
+    for (const [hw, lab, y] of bands) { el("rect", { x: X(800 - hw), y: y, width: X(800 + hw) - X(800 - hw), height: 14, rx: 2, fill: "var(--accent)", style: "fill:var(--accent)", "fill-opacity": hw > 5 ? 0.18 : 0.45 }, svg); el("text", { x: X(800 + hw) + 6, y: y + 11, "font-size": 11 }, svg, lab); }
+    el("line", { x1: x0, x2: x1, y1: 118, y2: 118, stroke: "currentColor", "stroke-opacity": 0.4 }, svg);
+    for (const f of [797.5, 800, 803, 806.5]) el("line", { x1: X(f), x2: X(f), y1: 10, y2: 122, stroke: f === 800 ? "var(--s1)" : "var(--s2)", style: "stroke:" + (f === 800 ? "var(--s1)" : "var(--s2)"), "stroke-width": 2 }, svg);
+    for (let f = 770; f <= 830; f += 10) el("text", { x: X(f), y: 140, "text-anchor": "middle", "font-size": 11, opacity: 0.7 }, svg, f + " Hz");
+  }
+  draw(); onRedraw(draw);
+})();
+})();
+</script>

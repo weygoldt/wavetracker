@@ -1,0 +1,249 @@
+"""Compare runs per failure mode: recall by SNR band and by distance to the
+nearest other line, plus the identity scores.
+
+    python benchmarks/dense/strata.py --tags classic-ldev learned-v1 --splits ldev ldev-field
+    python benchmarks/dense/strata.py --tags A B --truth rises   # + rise onsets
+
+With ``--truth rises`` the scores and frames on the truth that follows the
+steep part of rises are used, and the rise-onset stratum is added: recall
+and frames on the fish's IDF1 identity over the frames of the steep part.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).parent))
+from common import DATA
+from score import TRUTHS, score_file
+
+RUNS = DATA / "runs"
+FIG = DATA / "figures"
+SNR_BANDS = [
+    (-99, 0, "< 0 dB"),
+    (0, 6, "0-6 dB"),
+    (6, 20, "6-20 dB"),
+    (20, 99, "≥ 20 dB"),
+]
+NN_BANDS = [
+    (0, 1.2, "< 1.2 Hz"),
+    (1.2, 3, "1.2-3 Hz"),
+    (3, 10, "3-10 Hz"),
+    (10, 1e9, "≥ 10 Hz"),
+]
+SCORES = [
+    "idf1",
+    "purity",
+    "recall",
+    "precision",
+    "false_per_frame",
+    "harmonic_per_frame",
+    "false_ids_30s",
+    "switches_per_fish_min",
+    "ids_30s",
+]
+GROUPS = {  # IDF1 by scenario group
+    "crowded": ("crowded",),
+    "density": ("density",),
+    "atten": ("atten", "ladder"),
+    "lowfreq": ("lowfreq", "lowonly"),
+}
+
+
+PAIR_HZ = 1.2
+_PAIR_CACHE: dict[tuple[str, str], np.ndarray] = {}
+
+
+def nearest_fundamental(
+    split: str, mixture: str, times: np.ndarray, truth: str = "default"
+) -> np.ndarray:
+    """Distance [Hz] of every fish (fish, frames) to the closest fundamental
+    of another fish (not its harmonics): close pairs that make one peak."""
+    key = (split, mixture, truth)
+    if key not in _PAIR_CACHE:
+        from score import truth_at
+
+        tr = dict(np.load(DATA / "mixtures" / split / mixture / TRUTHS[truth]))
+        F = truth_at(tr, times, "freqs_filled")
+        d = np.full(F.shape, np.inf)
+        for k in range(len(F)):
+            for j in range(len(F)):
+                if j != k:
+                    d[k] = np.fmin(d[k], np.abs(F[k] - F[j]))
+        _PAIR_CACHE[key] = d
+    return _PAIR_CACHE[key]
+
+
+def frames(tag: str, split: str, truth: str = "default") -> dict[str, np.ndarray]:
+    from types import SimpleNamespace
+
+    from pair_strata import pair_frames
+
+    paths = sorted(
+        (RUNS / tag / split).glob(f"*/{score_file(truth, 'frames', '.npz')}")
+    )
+    parts = []
+    for p in paths:
+        part = dict(np.load(p))
+        times = np.load(p.parent / "times.npy")
+        nf = nearest_fundamental(split, p.parent.name, times, truth)
+        part["nf_hz"] = nf[part["fish"], part["frame"]].astype(np.float32)
+        # own SNR of the weaker fish of the pair (the truth's holds both)
+        mix = DATA / "mixtures" / split / p.parent.name
+        weak = pair_frames(mix, SimpleNamespace(times=times))["weaker"]
+        part["pair_weak_db"] = weak[part["fish"], part["frame"]].astype(np.float32)
+        parts.append(part)
+    return {k: np.concatenate([p[k] for p in parts]) for k in parts[0]} if parts else {}
+
+
+def scores(tag: str, split: str, truth: str = "default") -> dict[str, float]:
+    rows = [
+        json.loads(p.read_text())
+        for p in sorted((RUNS / tag / split).glob(f"*/{score_file(truth)}"))
+    ]
+    out = {k: float(np.mean([r[k] for r in rows])) for k in SCORES} | {"n": len(rows)}
+    for g, prefixes in GROUPS.items():
+        v = [r["idf1"] for r in rows if r["mixture"].split("/")[1].startswith(prefixes)]
+        out[f"idf1 {g}"] = float(np.mean(v)) if v else np.nan
+    return out
+
+
+def strata(fr: dict) -> dict[str, float]:
+    out = {}
+    for lo, hi, name in SNR_BANDS:
+        m = (fr["snr_db"] >= lo) & (fr["snr_db"] < hi)
+        out[f"snr {name}"] = float(fr["matched"][m].mean()) if m.any() else np.nan
+    for lo, hi, name in NN_BANDS:
+        m = (fr["nn_hz"] >= lo) & (fr["nn_hz"] < hi) & (fr["snr_db"] >= 6)
+        out[f"nn {name}"] = float(fr["matched"][m].mean()) if m.any() else np.nan
+    # another fundamental closer than PAIR_HZ: one peak for two fish
+    m = (fr["nf_hz"] < PAIR_HZ) & (fr["snr_db"] >= 6)
+    out["pair < 1.2 Hz"] = float(fr["matched"][m].mean()) if m.any() else np.nan
+    out["id pair < 1.2 Hz"] = float(fr["assigned"][m].mean()) if m.any() else np.nan
+    # the same with the weaker fish of the pair >= 6 dB on its own (own_snr.py)
+    m = (fr["nf_hz"] < PAIR_HZ) & (fr["pair_weak_db"] >= 6)
+    out["pair < 1.2 Hz, own SNR"] = (
+        float(fr["matched"][m].mean()) if m.any() else np.nan
+    )
+    out["id pair < 1.2 Hz, own SNR"] = (
+        float(fr["assigned"][m].mean()) if m.any() else np.nan
+    )
+    for lo, hi, name in NN_BANDS:  # on the fish's own (IDF1) identity
+        m = (fr["nn_hz"] >= lo) & (fr["nn_hz"] < hi) & (fr["snr_db"] >= 6)
+        out[f"id nn {name}"] = float(fr["assigned"][m].mean()) if m.any() else np.nan
+    if "rise" in fr:  # the steep part of rises (truth "rises")
+        m = fr["rise"]
+        out["rise onset"] = float(fr["matched"][m].mean()) if m.any() else np.nan
+        out["id rise onset"] = float(fr["assigned"][m].mean()) if m.any() else np.nan
+        m = fr["rise"] & (fr["snr_db"] >= 6)
+        out["rise onset >= 6 dB"] = (
+            float(fr["matched"][m].mean()) if m.any() else np.nan
+        )
+    return out
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    p.add_argument("--tags", nargs="+", required=True)
+    p.add_argument("--splits", nargs="+", default=["ldev", "ldev-field"])
+    p.add_argument("--out", default=None, help="figure stem (default: strata_<tags>)")
+    p.add_argument("--truth", default="default", choices=sorted(TRUTHS))
+    args = p.parse_args(argv)
+    table = {}
+    for sp in args.splits:
+        for t in args.tags:
+            fr = frames(t, sp, args.truth)
+            if not fr:
+                print(f"{t}/{sp}: no runs")
+                continue
+            table[(t, sp)] = scores(t, sp, args.truth) | strata(fr)
+    keys = (
+        SCORES
+        + [f"idf1 {g}" for g in GROUPS]
+        + [f"snr {b[2]}" for b in SNR_BANDS]
+        + [f"nn {b[2]}" for b in NN_BANDS]
+        + [f"id nn {b[2]}" for b in NN_BANDS]
+    )
+    if args.truth == "rises":
+        keys += ["rise onset", "id rise onset", "rise onset >= 6 dB"]
+    print(
+        "recall by SNR band (all frames) and by nearest-line distance (frames with "
+        "SNR ≥ 6 dB); id nn: those frames on the fish's own (IDF1) identity"
+    )
+    w = max([len(t + " / " + sp) for t, sp in table] + [28]) + 1
+    print(f"{'':{w}s}" + "".join(f"{k[:13]:>14s}" for k in keys))
+    for (t, sp), row in table.items():
+        print(f"{t + ' / ' + sp:{w}s}" + "".join(f"{row[k]:14.4f}" for k in keys))
+    stem = args.out or "strata_" + "_".join(args.tags)
+    if args.truth != "default" and not args.out:
+        stem += f"_{args.truth}"
+    (FIG / f"{stem}.json").write_text(
+        json.dumps({f"{t}/{sp}": r for (t, sp), r in table.items()}, indent=1)
+    )
+
+    import matplotlib.pyplot as plt
+
+    colors = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#6250d6"]
+    groups = [
+        ("snr", SNR_BANDS, "recall by SNR"),
+        ("nn", NN_BANDS, "recall by distance to nearest line (SNR ≥ 6 dB)"),
+        ("id nn", NN_BANDS, "on the fish's identity, by nearest line (SNR ≥ 6 dB)"),
+    ]
+    fig, axs = plt.subplots(
+        len(args.splits),
+        4,
+        figsize=(21, 3.6 * len(args.splits)),
+        squeeze=False,
+        layout="constrained",
+        gridspec_kw={"width_ratios": [4, 4, 4, 3]},
+    )
+    for si, sp in enumerate(args.splits):
+        tags = [t for t in args.tags if (t, sp) in table]
+        w = 0.8 / max(len(tags), 1)
+        for gi, (pre, bands, title) in enumerate(groups):
+            ax = axs[si, gi]
+            for ti, t in enumerate(tags):
+                v = [table[(t, sp)][f"{pre} {b[2]}"] for b in bands]
+                ax.bar(
+                    np.arange(len(bands)) + (ti - (len(tags) - 1) / 2) * w,
+                    v,
+                    w * 0.92,
+                    color=colors[ti % len(colors)],
+                    label=t,
+                )
+            ax.set_xticks(range(len(bands)), [b[2] for b in bands])
+            ax.set_ylim(0, 1)
+            ax.set_title(f"{sp}: {title}", fontsize=10, loc="left")
+            ax.grid(axis="y", alpha=0.3)
+            ax.spines[["top", "right"]].set_visible(False)
+        ax = axs[si, 3]
+        metrics = ["idf1", "recall", "precision"]
+        for ti, t in enumerate(tags):
+            v = [table[(t, sp)][m] for m in metrics]
+            ax.bar(
+                np.arange(len(metrics)) + (ti - (len(tags) - 1) / 2) * w,
+                v,
+                w * 0.92,
+                color=colors[ti % len(colors)],
+                label=t,
+            )
+        ax.set_xticks(range(len(metrics)), ["IDF1", "recall", "precision"])
+        ax.set_ylim(0, 1)
+        ax.set_title(
+            f"{sp}: identity scores (mean of mixtures)", fontsize=10, loc="left"
+        )
+        ax.grid(axis="y", alpha=0.3)
+        ax.spines[["top", "right"]].set_visible(False)
+        axs[si, 0].legend(frameon=False, fontsize=8, loc="upper left")
+    path = FIG / f"{stem}.png"
+    fig.savefig(path, dpi=130)
+    print(path)
+
+
+if __name__ == "__main__":
+    main()

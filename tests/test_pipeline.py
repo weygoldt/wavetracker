@@ -21,7 +21,7 @@ DEVICES = ["cpu"] + (["cuda"] if torch.cuda.is_available() else [])
 @pytest.mark.parametrize("device", DEVICES)
 def test_synthetic_end_to_end(synthetic_wav, tmp_path, device):
     path, truth = synthetic_wav
-    cfg = Config()
+    cfg = Config.classic()
     cfg.output.save_fine_spec = True
     out = detect(path, tmp_path, cfg, device=device)
     track_results(out.results, cfg)
@@ -49,8 +49,8 @@ def test_synthetic_end_to_end(synthetic_wav, tmp_path, device):
 def test_resolution_and_frame_step_do_not_depend_on_the_rate(tmp_path, rate):
     rec = synthesize([Fish(600.0)], 8.0, rate=rate, channels=2)
     save_recording(rec, tmp_path / "rec.wav")
-    res = detect(tmp_path / "rec.wav", tmp_path, Config(), device="cpu").results
-    sc = Config().spectrogram
+    res = detect(tmp_path / "rec.wav", tmp_path, Config.classic(), device="cpu").results
+    sc = Config.classic().spectrogram
     assert res.meta["freq_resolution"] == pytest.approx(sc.freq_resolution, rel=0.01)
     assert np.diff(res.times).mean() == pytest.approx(
         (1 - sc.overlap_frac) / sc.freq_resolution, rel=0.01
@@ -63,7 +63,7 @@ def test_resolution_and_frame_step_do_not_depend_on_the_rate(tmp_path, rate):
 def test_time_window(synthetic_wav, tmp_path):
     path, _ = synthetic_wav
     res = detect(
-        path, tmp_path, Config(), start=10.0, duration=20.0, device="cpu"
+        path, tmp_path, Config.classic(), start=10.0, duration=20.0, device="cpu"
     ).results
     assert res.times[0] >= 10.0 and res.times[-1] <= 30.0
     assert res.meta["start"] == 10.0
@@ -101,8 +101,8 @@ def test_cli(synthetic_wav, tmp_path):
 @pytest.mark.skipif(not REAL_RECORDING.exists(), reason="recordings not available")
 def test_real_recording_two_fish(tmp_path):
     """The tube-competition recordings contain exactly two fish."""
-    out = detect(REAL_RECORDING, tmp_path, Config(), start=3600, duration=120)
-    track_results(out.results, Config())
+    out = detect(REAL_RECORDING, tmp_path, Config.classic(), start=3600, duration=120)
+    track_results(out.results, Config.classic())
     r = out.results
     sizes = sorted(((r.ident_v == i).sum() for i in r.ids()), reverse=True)
     frames = len(r.times)
@@ -113,7 +113,7 @@ def test_real_recording_two_fish(tmp_path):
 
 def test_exclude_channels(synthetic_wav, tmp_path):
     path, _ = synthetic_wav
-    cfg = Config()
+    cfg = Config.classic()
     cfg.spectrogram.exclude_channels = [0, 3]
     res = detect(path, tmp_path, cfg, duration=10.0, device="cpu").results
     assert res.sign_v.shape[1] == 4
@@ -124,7 +124,7 @@ def test_stored_spectrograms_follow_tracked_range(synthetic_wav, tmp_path):
     """No fixed frequency limit: by default the stored spectrograms cover
     1.25 x harmonic_groups.max_freq; an explicit limit is respected."""
     path, _ = synthetic_wav
-    cfg = Config()
+    cfg = Config.classic()
     cfg.output.save_fine_spec = True
     cfg.harmonic_groups.max_freq = 1600.0
     detect(path, tmp_path / "auto", cfg, duration=10.0, device="cpu")
@@ -151,7 +151,7 @@ def test_cli_reminds_to_set_frequency_range(synthetic_wav, tmp_path):
 
 def test_warns_when_absolute_power_limit_binds(synthetic_wav, tmp_path, caplog):
     path, _ = synthetic_wav
-    cfg = Config()
+    cfg = Config.classic()
     cfg.harmonic_groups.min_good_peak_power = 0.0
     with caplog.at_level("WARNING", logger="wavetracker"):
         detect(path, tmp_path, cfg, duration=5.0, device="cpu")
@@ -164,7 +164,7 @@ def test_silent_recording_gives_empty_results(tmp_path, device):
 
     wav = tmp_path / "silence.wav"
     write_audio(str(wav), np.zeros((40 * 20000, 2), dtype=np.float32), 20000.0)
-    cfg = Config()
+    cfg = Config.classic()
     out = detect(wav, tmp_path / "res", cfg, device=device)
     track_results(out.results, cfg)
     out.results.save(tmp_path / "res")

@@ -3,6 +3,13 @@
 All parameters live in a single :class:`Config` made of one dataclass per
 pipeline stage. A config can be written to / read from YAML; unknown keys are
 rejected so typos do not silently fall back to defaults.
+
+Two pipelines share these sections. The default is the learned pipeline
+(:data:`DEFAULT_PIPELINE`: learned detector, learned association, fragment
+linker, rise joiner, review confidences, all with models shipped in
+``wavetracker/models``). A config with ``detector.method: classic`` starts
+from the classic pipeline instead (rule-based harmonic groups and tracker,
+the classic linker): the per-key defaults of the section classes.
 """
 
 from __future__ import annotations
@@ -12,6 +19,23 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+MODELS_DIR = Path(__file__).with_name("models")
+"""Models shipped with wavetracker."""
+
+
+def model_file(path: str | Path | None, default: str | None = None) -> Path:
+    """Resolve a model path of the config: None is the packaged `default`; a
+    path that exists is used as is; a bare file name that does not exist
+    names a model shipped with wavetracker (e.g. ``assocnet.pt``)."""
+    if path is None:
+        if default is None:
+            raise ValueError("no model given")
+        return MODELS_DIR / default
+    p = Path(path).expanduser()
+    if not p.exists() and p.parent == Path(".") and (MODELS_DIR / p.name).exists():
+        return MODELS_DIR / p.name
+    return p
 
 
 def _fast_fft_size(target: float) -> int:
@@ -125,6 +149,38 @@ class HarmonicGroupsConfig:
     """Upper bound on fish detected in a single spectrum."""
     refine_frequency: bool = True
     """Refine fundamentals with parabolic interpolation (sub-bin precision)."""
+
+
+@dataclass
+class DetectorConfig:
+    method: str = "classic"
+    """How fundamentals are found in each frame: "classic" (spectral peaks
+    grouped into harmonic series by rules, see `harmonic_groups`) or
+    "learned" (a neural network's salience map, see `wavetracker.salience`).
+    Both use the fish range harmonic_groups.min_freq/max_freq."""
+    model: str | None = None
+    """Learned detector: path to the model file; None uses the packaged model
+    (``salience.pt``). The spectrogram resolution and frame step must match
+    the model's."""
+    threshold: float = 0.5
+    """Learned detector: minimum salience (0-1) of a detection (0.5 was best
+    for the packaged model in the default pipeline on the dense benchmark,
+    lab and field noise)."""
+    pair_threshold: float | None = None
+    """Learned detector with a pair head: minimum pair probability (0-1) at
+    which a salience peak becomes two detections, two fish closer than the
+    spectrogram resolves. None: the same as `threshold`. Models without a
+    pair head ignore it."""
+
+    def __post_init__(self):
+        if self.method not in ("classic", "learned"):
+            raise ValueError(
+                f"detector.method must be 'classic' or 'learned', not {self.method!r}"
+            )
+        if not 0.0 < self.threshold < 1.0:
+            raise ValueError("detector.threshold must be between 0 and 1")
+        if self.pair_threshold is not None and not 0.0 < self.pair_threshold <= 1.0:
+            raise ValueError("detector.pair_threshold must be between 0 and 1")
 
 
 @dataclass
@@ -252,6 +308,73 @@ class TrackingConfig:
     """Time window for min_support [s] (+-)."""
     support_freq: float = 1.0
     """Frequency window for min_support [Hz] (+-)."""
+    start_salience: float | None = None
+    """If set, only detections with at least this salience (0-1, `sal_v`)
+    count as evidence for a new identity; weaker ones may still join existing
+    identities (ByteTrack-style association). None: all detections are alike."""
+    start_evidence: float = 0.5
+    """With start_salience: a new identity needs confident detections in this
+    many seconds of frames (round(start_evidence / frame step), at least 1)
+    of the temporary track it starts from, which spans at most 3 * max_dt [s]."""
+    motion_window: float | None = None
+    """If set, links follow each fish's frequency slope: a first pass tracks as
+    usual, every detection gets the slopes of its identity over the
+    motion_window [s] before and after it, and the second pass compares the
+    later detection of a link with the frequency predicted from the earlier
+    one's past slope, and the earlier with the later one's future slope (the
+    mean of both errors), in the link error and the tolerances. Slopes from
+    either side of a crossing are not mixed, so two fish that cross keep their
+    own. Each slope is shrunk by its own uncertainty, and a prediction reaches
+    at most motion_window ahead. None: off (frequencies compared directly)."""
+    motion_max_slope: float = 2.0
+    """Slopes are clipped to +-this [Hz/s] (rise onsets are jumps, not slopes)."""
+    min_identity_salience: float | None = None
+    """If set, identities whose mean detection salience (0-1, `sal_v`) is
+    below this are dropped after linking (or stitching): lines of harmonics
+    and clutter that no confident detection supports. Weak detections inside a
+    confident identity stay. None: off."""
+    method: str = "classic"
+    """"classic": the rule-based tracker (Raab et al. 2022, with the options
+    above). "learned": a trained network scores the links between detections
+    of the next few seconds and a frame-by-frame linking builds the tracks
+    (wavetracker.assocnet); of the options above only min_identity_salience
+    applies."""
+    assoc_mode: str = "link"
+    """Learned association: "link" builds tracks from the learned links alone
+    (frame by frame, links up to the model's horizon of a few seconds); "cost"
+    keeps the rule-based tracker (windows, temporary identities, its
+    candidate tolerances, gaps up to max_dt and the options above) and
+    replaces its error for links within the model's horizon by 1 - the
+    learned probability, dropping links below assoc_threshold."""
+    assoc_model: str | None = None
+    """Weights of the learned association (method "learned"), trained with
+    benchmarks/dense/assocnet.py; None: the packaged model (``assocnet.pt``,
+    trained on the packaged detector's detections)."""
+    assoc_threshold: float = 0.5
+    """Learned association: minimum link probability (0-1)."""
+    assoc_min_detections: int = 1
+    """Learned association: tracks with fewer detections stay unassigned."""
+    assoc_device: str = "auto"
+    """Learned association: torch device of the network. "auto": the device
+    the detections were computed on (``wavetracker.json``) if this machine
+    has it, else the GPU if there is one, else the CPU. If the GPU runs out
+    of memory, the association runs on the CPU (with a warning)."""
+
+    def __post_init__(self):
+        for key in ("start_salience", "min_identity_salience"):
+            v = getattr(self, key)
+            if v is not None and not 0.0 <= v <= 1.0:
+                raise ValueError(f"tracking.{key} must be between 0 and 1")
+        if self.method not in ("classic", "learned"):
+            raise ValueError(
+                f"tracking.method must be 'classic' or 'learned', not {self.method!r}"
+            )
+        if self.assoc_mode not in ("link", "cost"):
+            raise ValueError(
+                f"tracking.assoc_mode must be 'link' or 'cost', not {self.assoc_mode!r}"
+            )
+        if not 0.0 <= self.assoc_threshold <= 1.0:
+            raise ValueError("tracking.assoc_threshold must be between 0 and 1")
 
 
 @dataclass
@@ -335,7 +458,173 @@ class LinkingConfig:
     min_detections: int = 10
     """Fragments with fewer detections are not joined."""
     model: str | None = None
-    """Path to model weights (.npz); None: the model shipped with wavetracker."""
+    """Path to model weights (.npz); None: the packaged linker of the classic
+    pipeline (``linker.npz``). The default pipeline uses
+    ``linker-assocnet.npz``, trained on the learned association's fragments."""
+
+
+@dataclass
+class RisesConfig:
+    """Joining identities across rise onsets (see wavetracker.rises), after
+    linking (or stitching) and before `tracking.min_identity_salience`.
+
+    At a rise the frequency jumps up by a few to about 60 Hz within about a
+    second, too far for the tracker and the linker's candidates, and the fish
+    goes on as a new identity. An identity that stops is joined to one that
+    starts shortly after, a rise-sized jump above it, with the same electrode
+    pattern."""
+
+    enabled: bool = False
+    stop_gap: float = 2.0
+    """An identity stops (or starts) where it has no detection for this long
+    after (before) a detection [s]."""
+    max_gap: float = 5.0
+    """The later identity starts at most this long after the earlier one
+    stops [s] ..."""
+    max_overlap: float = 4.0
+    """... or at most this long before it [s]: detectors with temporal
+    context report the old frequency for a few seconds after the onset. The
+    earlier identity's detections after the later one's start are dropped."""
+    min_jump: float = 1.5
+    """Smallest jump up from the earlier identity's last to the later one's
+    first frequencies (medians over edge_window) [Hz] ..."""
+    max_jump: float = 35.0
+    """... and the largest [Hz]."""
+    edge_window: float = 1.0
+    """Frequencies at a stop or start: median over this [s]."""
+    pattern_window: float = 5.0
+    """Electrode patterns: mean power over this before the stop and after the
+    start [s]."""
+    max_pattern_rms: float = 7.0
+    """Largest rms difference of the two electrode patterns [dB] ..."""
+    min_pattern_corr: float = 0.5
+    """... and the smallest correlation."""
+    min_duration: float = 1.0
+    """The later identity spans at least this after its start [s]."""
+    min_salience: float | None = 0.4
+    """Both identities need a mean detection salience (0-1, `sal_v`) of at
+    least this over their pattern windows: the electrode pattern of a fish
+    near the noise is noise, and two faint fish look alike. None: not
+    checked."""
+    max_shared: float = 0.3
+    """Two identities may share at most this fraction of the smaller one's
+    frames (one fish is detected once per frame)."""
+
+
+PAIRS_STAGES = ("tracking", "linking")
+PAIRS_PARTNERS = ("track", "fill")
+
+
+@dataclass
+class PairsConfig:
+    """Two fish in one spectral peak (see wavetracker.pairs): what to do with
+    the second detections a learned detector's pair head adds to peaks that
+    hide two fish (`partners`), and a pattern-based resolver (`resolve`).
+
+    Resolver: where two identities run closer than `max_df`, a pair episode,
+    the two
+    detections of a shared peak carry the same electrode spectra and the
+    tracker may hand each fish's future to the other. Each episode is
+    decided as a unit: the electrode patterns of the two identities just
+    before and just after it, from detections clear of other lines, say
+    whether the fish left on the identities they entered with; if the
+    exchanged assignment fits better, the two identities swap everything
+    after the episode's closest approach."""
+
+    enabled: bool = False
+    resolve: bool = False
+    """Decide every pair episode by the electrode patterns before and after
+    it (see above)."""
+    partners: str = "fill"
+    """The second detection the learned detector's pair head adds to a peak
+    (`detector.pair_threshold`, flagged in `Results.split_v`), its
+    *partner*: "track" tracks it like any other; "fill" leaves it out of
+    tracking, linking and the rise joiner, so the identities of all other
+    detections are what they would be without it,
+    and then lets the identities grow into their gaps: a partner goes to an
+    identity that has no detection in its frame and whose latest detection
+    (or a partner it took) is at most `fill_gap` before it and `fill_df`
+    away, the closest first, in one sweep forward in time and one backward
+    (ByteTrack's second association: confident detections first, the others
+    only extend identities)."""
+    fill_gap: float = 2.0
+    """Largest step in time from an identity's latest detection to a partner
+    it takes [s] ..."""
+    fill_df: float = 0.4
+    """... and in frequency [Hz]."""
+    partner_tracks: float | None = None
+    """With partners "fill": the partners no identity took are tracked on
+    their own (tracking's settings), and tracks of them that span at least
+    this long become identities [s]: a fish hidden in another's peak for
+    minutes, which the other detections never start. They pass
+    `tracking.min_identity_salience` like any identity. None: off."""
+    stage: str = "linking"
+    """Where: "tracking" (on the tracker's identities, before linking or
+    stitching) or "linking" (after linking and the rise joiner, before
+    `tracking.min_identity_salience`) for the resolver."""
+    max_df: float = 2.0
+    """Two identities with detections in one frame closer than this are in a
+    pair episode [Hz]."""
+    merge_gap: float = 2.0
+    """Close frames of two identities less than this apart are one episode
+    [s]."""
+    clear_df: float = 3.0
+    """Patterns are taken from detections with no other detection in their
+    frame within this [Hz]."""
+    pattern_window: float = 5.0
+    """Patterns: mean power over the clear detections of an identity within
+    this of its last clear detection before the episode, and of its first
+    after it [s] ..."""
+    pattern_reach: float = 30.0
+    """... found at most this far from the episode [s]."""
+    min_pattern: int = 5
+    """Clear detections each of the four patterns needs; otherwise the
+    episode is left as it is."""
+    margin: float = 1.0
+    """Swap only if the exchanged assignment's pattern differences (sum of
+    two rms differences [dB]) are smaller by at least this."""
+    order: bool = False
+    """Also order the detections inside an episode: in frames where both
+    identities have one, the two are given by frequency, in the order the
+    identities had before the episode up to its closest approach and in the
+    order after it from there (two fish that crossed swap order once)."""
+
+    def __post_init__(self):
+        if self.stage not in PAIRS_STAGES:
+            raise ValueError(
+                f"pairs.stage must be one of {PAIRS_STAGES}, not {self.stage!r}"
+            )
+        if self.partners not in PAIRS_PARTNERS:
+            raise ValueError(
+                f"pairs.partners must be one of {PAIRS_PARTNERS}, not {self.partners!r}"
+            )
+
+
+@dataclass
+class ReviewConfig:
+    """Confidence of the tracked result and review flags (see
+    wavetracker.review): after tracking, every identity, every join (of the
+    fragment linker and the rise joiner) and every rejected candidate join
+    gets the probability that the result is right there, and the places
+    most likely wrong are written to ``review.json`` in the results
+    directory, with a suggested fix. On in the default pipeline, off in the
+    classic one; the identities do not depend on it."""
+
+    enabled: bool = False
+    model: str | None = None
+    """Calibrated confidence models (.npz, fitted on benchmark truth by
+    ``benchmarks/dense/review.py fit``; fitted for one pipeline: the default
+    pipeline uses the packaged ``review-assocnet.npz``). None: the stages'
+    own scores (linker probability, mean salience, ...), not calibrated
+    (``review.json`` then says ``"calibration": null``)."""
+    missed_joins: bool = True
+    """Also flag pairs of identities that were candidates for a join but
+    were not joined (action: merge)."""
+    min_missed_prob: float = 0.05
+    """... if the linker gave them at least this probability (rejected rise
+    candidates are always flagged)."""
+    max_confidence: float | None = None
+    """Write only items with a confidence below this (None: all)."""
 
 
 @dataclass
@@ -476,18 +765,81 @@ YAML_HEADER = """\
 """
 
 
+DEFAULT_PIPELINE: dict[str, dict[str, Any]] = {
+    "detector": {"method": "learned"},
+    "harmonic_groups": {
+        "low_thresh_factor": 4.0,
+        "high_thresh_factor": 7.0,
+        "min_group_size": 2,
+    },
+    "tracking": {
+        "method": "learned",
+        "assoc_threshold": 0.7,
+        "assoc_min_detections": 10,
+        "min_identity_salience": 0.75,
+    },
+    "linking": {
+        "threshold": 0.6,
+        "max_parallel": 0.6,
+        "max_shared": 0.3,
+        "model": "linker-assocnet.npz",
+    },
+    "rises": {"enabled": True},
+    "review": {"enabled": True, "model": "review-assocnet.npz"},
+}
+"""The default pipeline: where it differs from the per-key defaults of the
+sections (which are the classic pipeline). The learned detector at threshold
+0.5 (``salience.pt``), the learned association (``assocnet.pt``), the
+fragment linker trained on its fragments, the rise joiner, the identity
+salience filter and calibrated review confidences. On the dense benchmark
+(51 dev mixtures, ``benchmarks/dense/configs/learned-assocnet.yaml``) IDF1
+0.783 / 0.776 (lab / field noise) against 0.635 / 0.598 for the classic
+pipeline (``dense-linked.yaml``); see docs/benchmarks.md."""
+
+SECTIONS: dict[str, type] = {
+    "spectrogram": SpectrogramConfig,
+    "detector": DetectorConfig,
+    "clicks": ClickConfig,
+    "interference": InterferenceConfig,
+    "harmonic_groups": HarmonicGroupsConfig,
+    "tracking": TrackingConfig,
+    "stitching": StitchingConfig,
+    "linking": LinkingConfig,
+    "rises": RisesConfig,
+    "pairs": PairsConfig,
+    "review": ReviewConfig,
+    "output": OutputConfig,
+    "position_merging": PositionMergingConfig,
+}
+
+
+def _default(name: str):
+    return lambda: SECTIONS[name](**DEFAULT_PIPELINE.get(name, {}))
+
+
 @dataclass
 class Config:
-    spectrogram: SpectrogramConfig = field(default_factory=SpectrogramConfig)
-    clicks: ClickConfig = field(default_factory=ClickConfig)
-    interference: InterferenceConfig = field(default_factory=InterferenceConfig)
-    harmonic_groups: HarmonicGroupsConfig = field(default_factory=HarmonicGroupsConfig)
-    tracking: TrackingConfig = field(default_factory=TrackingConfig)
-    stitching: StitchingConfig = field(default_factory=StitchingConfig)
-    linking: LinkingConfig = field(default_factory=LinkingConfig)
-    output: OutputConfig = field(default_factory=OutputConfig)
+    """The whole configuration. ``Config()`` is the default (learned)
+    pipeline, ``Config.classic()`` the classic one; ``from_dict`` / ``load``
+    start from the classic pipeline if ``detector.method`` is "classic" and
+    from the default one otherwise."""
+
+    spectrogram: SpectrogramConfig = field(default_factory=_default("spectrogram"))
+    detector: DetectorConfig = field(default_factory=_default("detector"))
+    clicks: ClickConfig = field(default_factory=_default("clicks"))
+    interference: InterferenceConfig = field(default_factory=_default("interference"))
+    harmonic_groups: HarmonicGroupsConfig = field(
+        default_factory=_default("harmonic_groups")
+    )
+    tracking: TrackingConfig = field(default_factory=_default("tracking"))
+    stitching: StitchingConfig = field(default_factory=_default("stitching"))
+    linking: LinkingConfig = field(default_factory=_default("linking"))
+    rises: RisesConfig = field(default_factory=_default("rises"))
+    pairs: PairsConfig = field(default_factory=_default("pairs"))
+    review: ReviewConfig = field(default_factory=_default("review"))
+    output: OutputConfig = field(default_factory=_default("output"))
     position_merging: PositionMergingConfig = field(
-        default_factory=PositionMergingConfig
+        default_factory=_default("position_merging")
     )
 
     def to_dict(self) -> dict[str, Any]:
@@ -507,21 +859,31 @@ class Config:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> Config:
+        """Build a config from (partial) sections: missing keys come from the
+        classic pipeline if ``detector.method`` is "classic", otherwise from
+        the default pipeline (`DEFAULT_PIPELINE`)."""
         data = data or {}
-        sections = {f.name: f for f in fields(cls)}
-        unknown = set(data) - set(sections)
+        unknown = set(data) - set(SECTIONS)
         if unknown:
             raise ValueError(f"Unknown config section(s): {sorted(unknown)}")
+        classic = (data.get("detector") or {}).get("method") == "classic"
+        base = {} if classic else DEFAULT_PIPELINE
         kwargs = {}
-        for name, f in sections.items():
-            section_cls = f.default_factory  # type: ignore[misc]
+        for name, section_cls in SECTIONS.items():
             values = data.get(name) or {}
             valid = {sf.name for sf in fields(section_cls)}
             bad = set(values) - valid
             if bad:
                 raise ValueError(f"Unknown key(s) in '{name}': {sorted(bad)}")
-            kwargs[name] = section_cls(**values)
+            kwargs[name] = section_cls(**(base.get(name, {}) | values))
         return cls(**kwargs)
+
+    @classmethod
+    def classic(cls) -> Config:
+        """The classic pipeline: rule-based harmonic groups and tracker, the
+        classic fragment linker (the defaults of wavetracker before the
+        learned pipeline)."""
+        return cls.from_dict({"detector": {"method": "classic"}})
 
     @classmethod
     def load(cls, path: str | Path | None = None) -> Config:

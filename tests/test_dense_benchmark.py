@@ -218,3 +218,46 @@ def test_recall_is_split_into_detected_and_completed_frames(tmp_path):
     assert summary["recall_completed"] == pytest.approx(0.2)
     assert summary["completed"] == pytest.approx(0.5)
     assert table["detected"].tolist() == [True] * 5 + [False] * 5
+
+
+def _pair_truth():
+    """Two fish: fish 1 (10 dB below fish 0 on its own) comes within 0.3 Hz
+    of fish 0 from 40 to 60 s, where the mixture's power at its bin is that
+    of both; fish 1 is attenuated by 6 dB from 50 s on."""
+    import own_snr
+
+    t = np.arange(0.0, 100.0, 0.5)
+    tt = np.arange(0.0, 100.0, 0.1)
+    f0 = np.full(len(tt), 600.0)
+    f1 = np.where((tt >= 40) & (tt < 60), 600.3, 610.0)
+    gain = np.zeros((2, len(tt)))
+    gain[1, tt >= 50] = -6.0
+    own = np.stack([np.full(len(t), 20.0), np.where(t >= 50, 4.0, 10.0)])
+    in_pair = (t >= 40) & (t < 60)
+    snr = own.copy()
+    snr[1, in_pair] = 10 * np.log10(
+        10 ** (own[0, in_pair] / 10) + 10 ** (own[1, in_pair] / 10)
+    )
+    truth = {
+        "times": tt,
+        "freqs_filled": np.stack([f0, f1]),
+        "gain_db": gain,
+        "channel_gain_db": np.zeros((2, 3, len(tt)), np.float32),
+        "snr_times": t,
+        "snr_db": snr,
+        "fish_power": (10 ** (snr / 10)).astype(np.float32),
+        "noise_power": np.ones((2, len(t)), np.float32),
+    }
+    return own_snr, truth, own, in_pair
+
+
+def test_own_snr_takes_a_fish_in_a_pair_from_its_clear_frames():
+    own_snr, truth, own, in_pair = _pair_truth()
+    out = own_snr.compute(truth)
+    assert not out["clear"][1, in_pair].any() and out["clear"][1, ~in_pair].all()
+    # the truth's SNR holds both fish there; the own SNR does not
+    assert truth["snr_db"][1, in_pair].min() > 19.0
+    np.testing.assert_allclose(out["own_snr_db"][1], own[1], atol=0.01)
+    np.testing.assert_allclose(out["own_snr_db"][0], own[0], atol=0.01)
+    t = truth["snr_times"]
+    assert out["gap_s"][1, (t >= 49.5) & (t <= 50.5)].min() >= 9.0

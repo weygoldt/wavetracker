@@ -94,10 +94,10 @@ def test_stitching_reduces_fragmentation_without_mixing(tmp_path):
     rec = synthesize(fish, 300.0, channels=6, rng=rng)
     path = tmp_path / "rises.wav"
     save_recording(rec, path)
-    res = detect(path, tmp_path / "out", Config()).results
+    res = detect(path, tmp_path / "out", Config.classic()).results
     scores = {}
     for enabled in (False, True):
-        cfg = Config()
+        cfg = Config.classic()
         cfg.linking.enabled = False  # the rule-based stitching
         cfg.stitching.enabled = enabled
         track_results(res, cfg)

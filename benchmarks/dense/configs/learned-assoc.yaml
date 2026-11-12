@@ -1,0 +1,36 @@
+# learned-relinked.yaml with the association of step B (association_notes.md):
+# - the tracker's motion model (2 s slopes), which keeps crossing fish apart;
+# - a linker retrained on that tracker's fragments of ltrain, threshold 0.6
+#   ($WT_BENCHMARK_DATA/assoc/linker-learned-v1-motion2.npz, not packaged;
+#   recipe in association_notes.md);
+# - looser association rules: identities may share 30 % of their frames and
+#   run at different frequencies for 60 % of their joint frames before a join
+#   is refused (both refused mostly true joins at rises);
+# - identities whose mean salience is below 0.75 are dropped after linking
+#   (mostly harmonics and clutter).
+# ldev / ldev-field IDF1 0.750 / 0.737 (learned-relinked.yaml: 0.739 / 0.723).
+detector:
+  model: /home/weygoldt/wrk/data/wavetracker_benchmark/salience/v1/last.pt
+  method: learned
+  threshold: 0.6
+harmonic_groups:
+  low_thresh_factor: 4.0
+  high_thresh_factor: 7.0
+  min_group_size: 2
+tracking:
+  method: classic
+  min_support: 3
+  gap_tolerance: 0.5
+  gap_tolerance_rate: 0.1
+  motion_window: 2.0
+  min_identity_salience: 0.75
+linking:
+  enabled: true
+  model: /home/weygoldt/wrk/data/wavetracker_benchmark/assoc/linker-learned-v1-motion2.npz
+  threshold: 0.6
+  max_shared: 0.3
+  max_parallel: 0.6
+rises:
+  enabled: false
+review:
+  enabled: false

@@ -58,7 +58,7 @@ def _run(tmp_path, name, data, device="cpu"):
     """Detect and track `data`, written the way a logger would."""
     wav = tmp_path / f"{name}.wav"
     write_audio(str(wav), 0.9 * data / np.abs(data).max(), RATE)
-    cfg = Config()
+    cfg = Config.classic()
     out = detect(wav, tmp_path / name, cfg, device=device)
     track_results(out.results, cfg)
     return out.results
@@ -111,7 +111,7 @@ def test_fish_are_found_as_without_the_fish_free_start(
 @pytest.mark.parametrize("device", DEVICES)
 def test_hours_of_nothing_do_not_matter(device, fish_recording, clean_run, tmp_path):
     """Hours are many blocks of the same: long enough to fill every history."""
-    seconds = 7 * Config().spectrogram.block_duration
+    seconds = 7 * Config.classic().spectrogram.block_duration
     start = seconds
     data = np.concatenate([_segment("quiet water", seconds, 5), fish_recording.data])
     res = _run(tmp_path, "rec", data, device)
@@ -302,7 +302,7 @@ def test_common_mode_noise_makes_no_false_fish(tmp_path):
     wav = tmp_path / "rec.wav"
     data = _common_mode_recording(60.0)
     write_audio(str(wav), 0.9 * data / np.abs(data).max(), RATE)
-    cfg = Config()
+    cfg = Config.classic()
     cfg.harmonic_groups.min_good_peak_power = None
     cfg.harmonic_groups.threshold_band = None
     without = detect(wav, tmp_path / "a", cfg, device="cpu").results

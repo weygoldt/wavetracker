@@ -12,11 +12,16 @@ post-processing tools and audian's wavetracker plugin):
                     interference gating). The phase difference between
                     electrodes gives their relative sign:
                     ``np.angle(cplx_v[:, 1] * np.conj(cplx_v[:, 0]))``.
+``sal_v.npy``       salience (0-1) of each detection: the learned detector's,
+                    or a stand-in from the level over the noise (classic)
 ``ident_v.npy``     identity of each detection (NaN = unassigned)
 ``times.npy``       time of each frame relative to recording start [s]
 ``sparse_*.npy``    downsampled overview spectrogram (freq x time, power)
 ``fine_*.npy``      optional full-resolution spectrogram (time x freq, power)
 ``wavetracker.json`` metadata: input, config, thresholds, timings, version
+``review.json``     optional: confidences and review flags (wavetracker.review)
+``frag_v.npy``      optional: the tracker's fragment of every detection (with
+                    ``review.json``; its splits name fragments)
 =================== ==========================================================
 """
 
@@ -30,6 +35,7 @@ from typing import Any
 import numpy as np
 
 META_FILE = "wavetracker.json"
+REVIEW_FILE = "review.json"
 
 
 @dataclass
@@ -42,6 +48,18 @@ class Results:
     meta: dict[str, Any] = field(default_factory=dict)
     cplx_v: np.ndarray | None = None
     """Complex spectrum per detection and electrode (optional)."""
+    sal_v: np.ndarray | None = None
+    """Salience (0-1) per detection (optional; older results have none), see
+    `pipeline.detect`."""
+    split_v: np.ndarray | None = None
+    """Per detection: the second fish of a peak the learned detector's pair
+    head split in two (optional; only from models with a pair head)."""
+    frag_v: np.ndarray | None = None
+    """Tracker identity (fragment) of every detection before linking
+    (optional; only with ``review.enabled``, see `wavetracker.review`)."""
+    review: dict | None = None
+    """Confidences and review flags (`wavetracker.review`), written to
+    ``review.json`` (optional; only with ``review.enabled``)."""
 
     @property
     def n_ids(self) -> int:
@@ -57,7 +75,15 @@ class Results:
             np.save(folder / f"{name}.npy", getattr(self, name))
         if self.cplx_v is not None:
             np.save(folder / "cplx_v.npy", self.cplx_v)
+        if self.sal_v is not None:
+            np.save(folder / "sal_v.npy", self.sal_v)
+        if self.split_v is not None:
+            np.save(folder / "split_v.npy", self.split_v)
+        if self.frag_v is not None:
+            np.save(folder / "frag_v.npy", self.frag_v)
         (folder / META_FILE).write_text(json.dumps(self.meta, indent=2, default=str))
+        if self.review is not None:
+            (folder / REVIEW_FILE).write_text(json.dumps(self.review, indent=1))
 
     @classmethod
     def load(cls, folder: str | Path) -> Results:
@@ -74,6 +100,12 @@ class Results:
         )
         cplx = folder / "cplx_v.npy"
         arrays["cplx_v"] = np.load(cplx) if cplx.exists() else None
+        sal = folder / "sal_v.npy"
+        arrays["sal_v"] = np.load(sal) if sal.exists() else None
+        split = folder / "split_v.npy"
+        arrays["split_v"] = np.load(split) if split.exists() else None
+        frag = folder / "frag_v.npy"
+        arrays["frag_v"] = np.load(frag) if frag.exists() else None
         meta_file = folder / META_FILE
         meta = json.loads(meta_file.read_text()) if meta_file.exists() else {}
         return cls(**arrays, meta=meta)

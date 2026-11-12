@@ -1,0 +1,28 @@
+# learned-linked.yaml with the linker retrained on learned v1 fragments of
+# ltrain (step A: $WT_BENCHMARK_DATA/salience/linker-learned-v1.npz, best
+# link threshold 0.7; not packaged). The step-A baseline A-v1m-relinked
+# (learned v1 with mirrored edges): IDF1 0.739 / 0.723 on ldev / ldev-field.
+detector:
+  model: /home/weygoldt/wrk/data/wavetracker_benchmark/salience/v1/last.pt
+  method: learned
+  threshold: 0.6
+harmonic_groups:
+  low_thresh_factor: 4.0
+  high_thresh_factor: 7.0
+  min_group_size: 2
+tracking:
+  method: classic
+  min_identity_salience: null
+  min_support: 3
+  gap_tolerance: 0.5
+  gap_tolerance_rate: 0.1
+linking:
+  max_parallel: 0.3
+  max_shared: 0.05
+  model: /home/weygoldt/wrk/data/wavetracker_benchmark/salience/linker-learned-v1.npz
+  threshold: 0.7
+  enabled: true
+rises:
+  enabled: false
+review:
+  enabled: false

@@ -187,13 +187,15 @@ def main() -> None:
     if args.old:
         settings["old"] = {"clicks": False, "window": None, "band": None}
     for label, change in settings.items():
-        cfg = Config.load(args.config)
+        cfg = Config.load(args.config) if args.config else Config.classic()
         if change:
             cfg.clicks.enabled = change["clicks"]
             cfg.harmonic_groups.threshold_window = change["window"]
             cfg.harmonic_groups.threshold_band = change["band"]
         rate = probe(fish[0][0])[0]
-        step = step_size(cfg.spectrogram.resolve_nfft(rate), cfg.spectrogram.overlap_frac)
+        step = step_size(
+            cfg.spectrogram.resolve_nfft(rate), cfg.spectrogram.overlap_frac
+        )
         reference = run(fish, cfg, args.output / label / "alone")
         for spec in args.prefix:
             name, rest = spec.split("=", 1)

@@ -5,7 +5,9 @@ fish have 40-60 dB. Here every lab mixture gets real fish-free field noise
 added: 10 min of an empty day of a 16-electrode logger grid in the Iriri
 (iriri01-grid01-dev03, fish arrive at dusk), resampled to 20 kHz, on a 3x3
 block of the 4x4 grid (the noise is correlated across electrodes, as it is
-in the water), dev and test from different hours of the day.
+in the water), dev and test from different hours of the day. The training
+mixtures of the learned detector (ltrain) take theirs from the next day,
+which is empty too.
 
 Calibration: the noise is scaled by the ratio of the EOD amplitudes of a fish
 next to an electrode in both systems, so that a lab fish at 0 dB gain is as
@@ -19,6 +21,8 @@ Usage::
 
     python benchmarks/dense/noise.py calibrate    # -> noise/calibration.json, figure
     python benchmarks/dense/noise.py derive        # every lab mixture -> <split>-field/
+    python benchmarks/dense/noise.py derive --splits ldev ltrain   # only these
+    python benchmarks/dense/noise.py derive --splits ldev2
 """
 
 from __future__ import annotations
@@ -38,13 +42,22 @@ from scipy.signal import resample_poly
 
 sys.path.insert(0, str(Path(__file__).parent))
 from common import DATA, MIX_CHANNELS, RATE
-from mixture import MIXTURES, SNR_NFFT, TRAIN_SUITE, _device, expand_suite
+from mixture import (
+    LEARNED_DEV2_SUITE,
+    LEARNED_DEV_SUITE,
+    LEARNED_TRAIN_SUITE,
+    MIXTURES,
+    SNR_NFFT,
+    TRAIN_SUITE,
+    _device,
+    expand_suite,
+)
 
 FIELD = Path(
     os.environ.get(
         "WT_FIELD_NOISE",
         "/run/media/weygoldt/data1/efish/fielddata/iriri2026/iriri2026_recordings/"
-        "iriri01/grid01/iriri01-grid01-dev03-20260905T1118",
+        "iriri01_lago-de-pedro/grid01/iriri01-grid01-dev03-20260905T1118",
     )
 )
 FIELD_RATE = 48000.0
@@ -55,6 +68,14 @@ NOISE = DATA / "noise"
 DAY_DEV = (8, 46)  # 11:58-15:08
 DAY_TEST = (46, 84)  # 15:08-18:18
 DAY_TRAIN = (1, 47)  # 11:23-15:13, the dev hours shifted by one file (see noise_plan)
+# The recording runs on to 2026-09-07 10:23 (566 files, 288 a day), and the
+# next day is empty again: in every other file from 09:38 to 16:18 no line
+# stands more than 0.4 dB above the +-10 Hz floor of the 5-min mean spectrum
+# (electrode sum), as in the dev hours, while the fish of the night stand
+# 7-12 dB above it; before 10:30 the floor is up to 30 dB higher. The learned
+# detector trains on these hours, which no other split uses; ldev and ldev2
+# use the dev hours, as dev does.
+DAY_LTRAIN = (282, 340)  # 2026-09-06 10:48-15:38, 29 segments
 NIGHT = (96, 4)  # first file, number of files: 19:18-19:38, fish
 # 3x3 blocks of the 4x4 grid (row-major channel order assumed)
 BLOCKS = [
@@ -145,6 +166,7 @@ def calibrate(args):
         _write_grid(night, load(*NIGHT), grid_cfg)
         cfg = Config.from_dict(
             {
+                "detector": {"method": "classic"},
                 "harmonic_groups": {
                     "min_freq": 300.0,
                     "max_freq": 1500.0,
@@ -281,21 +303,48 @@ def plot_calibration(cal, res, fish_ids):
     print(p)
 
 
+def segment_starts(split: str, f0: int, f1: int) -> list[int]:
+    """First files of the 10-min segments (2 files) of a split's hours
+    [f0, f1): disjoint segments. ldev2 (34 mixtures) needs more than the 19
+    of the dev hours, so it takes the 18 segments shifted by one file (5 min)
+    first, then the disjoint ones: each file is in at most two ldev2 mixtures
+    (the second half of one, the first half of the other), and consecutive
+    mixtures of a scenario get disjoint noise."""
+    starts = list(range(f0, f1 - 1, 2))
+    if split == "ldev2":
+        starts = list(range(f0 + 1, f1 - 1, 2)) + starts
+    return starts
+
+
 def noise_plan() -> dict[str, dict]:
     """Field-noise segment (2 files) and electrode block for every mixture;
-    dev and test from their own hours, no segment used twice in a split."""
+    dev and test from their own hours, no segment used twice in a split
+    (ldev2: no file in more than two mixtures, see segment_starts)."""
     plan = {}
     # The training mixtures (train.yaml) reuse the dev hours, shifted by one
     # file: the noise is a condition there, not what is evaluated, and the
     # test hours stay unseen.
     suites = {"dev": expand_suite(), "test": expand_suite()}
-    if TRAIN_SUITE.exists():
-        suites["train"] = expand_suite(TRAIN_SUITE)
-    for split, (f0, f1) in (("dev", DAY_DEV), ("test", DAY_TEST), ("train", DAY_TRAIN)):
+    for split, path in (
+        ("train", TRAIN_SUITE),
+        ("ldev", LEARNED_DEV_SUITE),
+        ("ldev2", LEARNED_DEV2_SUITE),
+        ("ltrain", LEARNED_TRAIN_SUITE),
+    ):
+        if path.exists():
+            suites[split] = expand_suite(path)
+    for split, (f0, f1) in (
+        ("dev", DAY_DEV),
+        ("test", DAY_TEST),
+        ("train", DAY_TRAIN),
+        ("ldev", DAY_DEV),
+        ("ldev2", DAY_DEV),
+        ("ltrain", DAY_LTRAIN),
+    ):
         if split not in suites:
             continue
         names = sorted(n for n in suites[split] if n.startswith(split + "/"))
-        starts = list(range(f0, f1 - 1, 2))
+        starts = segment_starts(split, f0, f1)
         if len(names) > len(starts):
             raise ValueError(f"{len(names)} mixtures, {len(starts)} noise segments")
         for i, n in enumerate(names):
@@ -385,6 +434,8 @@ def derive(args):
     plan = noise_plan()
     dev = _device(args.device)
     for name in plan:
+        if args.splits and name.split("/")[0] not in args.splits:
+            continue
         if (MIXTURES / name / "band.yaml").exists():
             derive_one(name, plan, gain, dev)
 
@@ -397,6 +448,7 @@ def main(argv=None):
     b = sub.add_parser("derive")
     b.add_argument("--device", default="auto")
     b.add_argument("--extra-db", type=float, default=0.0, help="raise the noise")
+    b.add_argument("--splits", nargs="+", help="lab splits to derive (default: all)")
     b.set_defaults(func=derive)
     args = p.parse_args(argv)
     args.func(args)

@@ -129,7 +129,7 @@ def test_main_reports_monotonic_progress_to_completion(synthetic_wav, tmp_path):
     from wavetracker.postprocessing import cleanup
 
     path, _ = synthetic_wav
-    cfg = Config()
+    cfg = Config.classic()
     out = detect(path, tmp_path / "res", cfg, device="cpu")
     track_results(out.results, cfg)
     out.results.save(tmp_path / "res")

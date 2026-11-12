@@ -34,6 +34,49 @@ linear in recording length. Deliberate changes:
   above the old hand-calibrated scale, which does not affect the
   noise-relative thresholds.
 
+## Learned detector
+
+`detector.method: learned` (the default) finds fundamentals with a neural
+network instead of spectral peaks and harmonic rules
+(`wavetracker/salience.py`). Each frame
+of the electrode-summed log spectrogram is normalised by its median and
+spread in 100 Hz bands, then read as a *harmonic stack*: on a linear axis
+starting at 0 Hz, harmonic h of bin k is bin h*k, so channel h at candidate k
+holds the feature at bin h*k (with a max over the bins an off-centre
+harmonic can move to), for h = 1/3, 1/2, 1, ..., 5. A true fundamental is
+bright from f upward and dark at f/2 and f/3; a harmonic of a lower fish has
+its fundamental there. A fully convolutional network without frequency
+pooling (time dilations give it seconds of context) outputs a salience per
+bin and a sub-bin offset; peaks above `detector.threshold` become
+detections, with their electrode powers read from the spectrogram as for
+classic detections, and the salience is stored as `sal_v`. Blocks are
+evaluated with their neighbours as context, so block boundaries leave no
+trace. The model stores the spectrogram resolution and frame step it was
+trained on; a different resolution is refused. Training and benchmark:
+docs/benchmarks.md, "Learned detector (v1)" and "Detector and association
+together (step B)"; the shipped model (`models/salience.pt`) is the step-B
+detector (`B-det-tcn64aug-s0`), used at threshold 0.5.
+
+**Two fish in one peak (optional; not in the packaged model).** Two
+fundamentals closer than about 1.2 Hz make one peak in the 1.64 s window,
+and peak picking gives one detection for both. A model can carry a *pair
+head* (`SalienceSpec.pair_head`): a second output per bin, the probability
+that two fish are there, with the offsets of both. A salience peak without
+another peak within 2 bins whose pair probability reaches
+`detector.pair_threshold` (default: `detector.threshold`) gets a second
+detection at the pair offset farther from its own, with the pair probability
+as its salience; with `tracking.start_salience` such detections can extend an
+identity but not start one. A model can also read the electrodes
+(`SalienceSpec.electrode_channels`): for every electrode, its share of the
+summed power at the candidate bins and its phase relative to the strongest
+electrode (one fish: fixed shares and phases near 0 or pi, as the field is
+quasi-static; two fish in one bin: both move with their beat). One encoder
+with shared weights reads every electrode; the mean and maximum over the
+electrodes (any number, in any order) join the network through a gate that
+starts at zero, either into the pair head's branch or into the trunk. Both
+are exact block by block like the rest of the detector. Whether they help:
+docs/benchmarks.md, "Two fish in one peak".
+
 ## Interference removal
 
 Electrical interference often forms a *comb* of persistent lines at
@@ -89,6 +132,73 @@ equal to its fundamental, combs are only searched below
 (72 Hz for the default range, 300 Hz for 400–1200 Hz). A comb spaced wider
 than the lowest fish frequency cannot be told apart from a resting fish and
 is kept; restrict the fish range to remove it.
+
+## Starting identities from confident detections
+
+A detector that finds faint fish also finds more doubtful peaks. If the
+tracker treats all detections alike, a high detection threshold misses faint
+fish and a low one builds false identities out of clutter. With
+`tracking.start_salience` (off by default) the tracker splits the two roles,
+as ByteTrack does (Zhang et al., ECCV 2022): only confident detections may
+start an identity, but any detection may extend one.
+
+Every detection has a salience between 0 and 1 (`sal_v`). The learned
+detector (`detector.method: learned`) gives its network's. The classic
+detector gives a stand-in from the fundamental's level over the local noise
+floor (the median of the frame's spectrum in the detection's threshold band,
+or over the fish range without bands), in units of the high threshold:
+`1 - 2^(-snr / high_threshold)`. It is 0.5 for a fundamental one high
+threshold above the floor, the prominence a "good" peak needs, and 0.75 at
+twice that.
+
+The tracker forms temporary identities in windows of `3 * max_dt` and
+attaches them to the identities it has. A temporary identity that attaches to
+none starts a new identity only if it holds confident detections (salience at
+least `start_salience`) in `start_evidence` seconds of frames (0.5 s: 3
+detections at the default frame step). Weak detections still link into
+temporary identities, so a faint fish is followed throughout once a few
+confident detections have started it, from up to about `2 * max_dt` before
+them. Clutter that is never confident makes no identities. The detections of a
+temporary identity that may not start stay unassigned, even if the identity
+starts in a later window. Links are scored as before, without the salience:
+a weak detection that fits an identity better than a confident one takes the
+link. With `start_salience: null` the tracker is the same as before, also in
+compatibility mode.
+
+A related filter acts at the end: with `tracking.min_identity_salience`,
+identities whose mean detection salience is below it are dropped after
+linking (or stitching). Lines of harmonics and clutter that no confident
+detection supports go; weak detections inside a confident identity stay. On
+the dense benchmark, identities of the learned detector with a mean salience
+below 0.75 are 79 % harmonic or false detections. Dropping them before
+linking would also drop weak fragments of real fish that the linker joins to
+their identities.
+
+## Following the frequency slope (motion model)
+
+The tracker scores links between pairs of detections, not between tracks and
+detections: the link error is 2/3 the rank of the electrode-pattern distance
+among all pairs and 1/3 a sigmoid of the frequency difference. Where two
+fish cross, their patterns can be alike and their frequencies are equal for a
+while, and the tracker may swap them. Object trackers for look-alike objects
+(DanceTrack, OC-SORT) found that motion is then the better cue.
+
+With `tracking.motion_window` (off by default) the tracker runs twice. The
+first pass tracks as before; every detection then gets the slope of its
+identity over `motion_window` seconds *before* it and over as many *after*
+it. In the second pass, a link from an earlier detection a to a later
+detection b compares b with the frequency predicted from a along a's past
+slope, and a with the frequency predicted back from b along b's future
+slope; the mean of the two errors replaces the frequency difference in the
+link error and in the tolerances. One-sided slopes keep the two fish of a
+crossing apart even where the first pass swapped them: before the crossing
+each detection's past belongs to its own fish, after it each detection's
+future does (OC-SORT keeps the motion estimate from before an occlusion for
+the same reason). Two guards keep noisy slopes from doing harm: each slope is
+shrunk towards 0 by its own uncertainty, `s * s^2 / (s^2 + var(s))`, so the
+scatter of a flat, faint track is not taken for a slope, and a prediction
+reaches at most `motion_window` ahead. Slopes are clipped to
+`motion_max_slope` (2 Hz/s); rise onsets are jumps, not slopes.
 
 ## Stitching
 
@@ -153,6 +263,191 @@ frames or detections, and the model was trained on 9 and 2 electrodes and on
 0.61 and 1.22 Hz resolution, on fish that move (their electrode patterns
 change by about 4.5 dB rms within a minute, see
 [benchmarks](benchmarks.md#learned-fragment-linking)).
+
+## Joining across rises
+
+At a rise a fish's frequency jumps up by a few to about 60 Hz within about a
+second and decays back over 10-60 s. The jump is far beyond the tracker's
+tolerances and beyond the linker's candidates (`linking.max_df`, 5 Hz), so
+the fish goes on as a new identity, or the linker leaves it on two
+identities that take turns at its rises. With `rises.enabled` (off by
+default), `wavetracker.rises` joins such identities after linking (or
+stitching) and before `tracking.min_identity_salience`:
+
+1. **Stops and starts**: an identity *stops* where it has no detection for
+   `stop_gap` (2 s) after a detection, and *starts* where it has none for as
+   long before one. A start must be followed by at least `min_duration`
+   (1 s) of the identity.
+2. **Candidates**: a stop of A and a start of B (another identity) that
+   begins at most `max_gap` (5 s) after it, or up to `max_overlap` (4 s)
+   before it, between `min_jump` and `max_jump` (1.5-35 Hz) higher
+   (medians over `edge_window`, 1 s, at the two edges).
+3. **One fish?** The electrode patterns (mean power per electrode in dB,
+   relative to their mean) over `pattern_window` (5 s) before the stop and
+   after the start agree: rms difference at most `max_pattern_rms` (7 dB)
+   and correlation at least `min_pattern_corr` (0.5). A fish hardly moves
+   during a rise, while another fish that starts there usually sits
+   elsewhere on the grid. Near the noise a pattern is noise and two faint
+   fish look alike, so both sides need a mean detection salience of
+   `min_salience` (0.4).
+4. **Joins**: best pattern first, unless the two identities would share
+   more than `max_shared` (30 %) of the smaller one's frames.
+
+Detectors with temporal context report the old frequency for a few seconds
+after the onset (a ghost tail), and sometimes the new one a little before
+it, hence the overlap: when such a pair is joined, A's detections after B's
+start are dropped. The decay after the rise is not used: many rise pieces
+end, or the next rise starts, before they decay, and requiring a falling
+frequency lost more true joins than false ones. On the dense benchmark this
+raises IDF1 by 0.02 with the learned detector; about 1 in 11 of its joins
+puts two different fish together (see
+[benchmarks](benchmarks.md#rises-step-b)).
+
+## Learned association
+
+The rule-based tracker scores links by a fixed error (two thirds the rank of
+the electrode-pattern distance, one third a sigmoid of the frequency
+difference). Where two fish cross or run within about a hertz of each other
+the two terms tie, and it swaps them. With `tracking.method: learned`
+(`wavetracker.assocnet`) a trained network scores the links instead, in the
+manner of tracking-by-detection with a learned association (Brasó &
+Leal-Taixé, CVPR 2020; Trackastra, Gallusser & Weigert, ECCV 2024):
+
+1. **Candidate graph**: every detection is linked to the detections of the
+   next 2 s whose frequency is within 2.5 Hz (the model's horizon, fixed at
+   training; frames are counted from the frame step, so any resolution
+   works).
+2. **Edge scores**: a message-passing network gives each link the
+   probability that both detections are one fish. Detections carry their
+   salience, the distance to the next lower and higher detection of their
+   frame, how many others are within 1.2 and 3 Hz, and their level over the
+   frame's median. Links carry the time and frequency step, the level change,
+   both saliences, and the two electrode patterns compared electrode by
+   electrode: power relative to the mean over electrodes, each electrode's
+   share, and the phase difference after removing the common phase (the
+   relative sign, from `cplx_v`). One small network encodes every electrode
+   and the results are pooled (mean and max), so any number of electrodes in
+   any order works. Three rounds of messages between detections and links,
+   with a detection's earlier and later links kept apart, let each link see
+   its competitors and the slopes of the lines around it over a few seconds.
+3. **Tracks**, by `tracking.assoc_mode`:
+   * `link` (default): frame by frame, the detections of a frame are
+     attached to tracks that end within the horizon before it, most probable
+     link first, down to `assoc_threshold`; each detection has at most one
+     successor. Tracks shorter than `assoc_min_detections` stay unassigned.
+   * `cost`: the rule-based tracker runs as configured (windows,
+     temporary identities, its frequency tolerances, gaps up to `max_dt`, `min_support`,
+     `motion_window`), but the error of a link within the horizon is 1 − its
+     learned probability, and links below `assoc_threshold` are dropped.
+     Longer links keep the rule-based error and come after all learned ones.
+
+Recordings of any length are scored in chunks of 3000 frames with the
+network's receptive field as context on both sides, so the scores do not
+depend on the chunking, and the tracks are built once over the whole
+recording, so identities do not change between chunks. The fragment linker,
+the rise joiner and `min_identity_salience` follow as with the rule-based
+tracker.
+
+The shipped weights (`models/assocnet.pt`, run tag `C-an-v0`, with the
+fragment linker retrained on its fragments, `models/linker-assocnet.npz`) are
+the default; `benchmarks/dense/assocnet.py` trains them on
+the benchmark's `ltrain` mixtures: the detections of the learned detector are
+matched to the truth, a link is "same fish" when both ends are on one fish,
+and half of the training crops can also hold the hidden fish of close pairs
+(two detections of one peak with the same spectra), so that the network
+learns to keep them apart. On the dense benchmark (threshold 0.7, tracks
+of fewer than 10 detections unassigned, a fragment linker retrained on its
+fragments) it raises IDF1 by 0.006 over the rule-based tracker with a linker
+retrained the same way (mean of two network seeds: 0.009 and 0.003), most in
+crowded scenes, with 41 % fewer identity switches (see [benchmarks](benchmarks.md#learned-association-step-c)).
+`assoc_mode: cost` was worse than the rule-based tracker there.
+
+## Two fish in one peak: the pair head's detections
+
+A pair head (see [Learned detector](#learned-detector)) adds a second
+detection to a peak that hides two fish. Tracked like any detection, the two
+detections of one peak hurt: they carry the electrode spectra of the same
+peak, so two thirds of the tracker's link error cannot tell them apart, and
+below about 0.2 Hz the frequency term cannot either. Within a pair episode
+the tracker hands the two fish back and forth, and the fish often leave the
+episode on each other's identity, or on new ones, and stay there. On the
+dense benchmark even a perfect pair head lowered IDF1, through the frames
+*after* the episodes (see
+[benchmarks](benchmarks.md#keeping-two-close-fish-apart-step-c)).
+
+The detector flags its second detections (`Results.split_v`, saved as
+`split_v.npy`). With `pairs.enabled` and `pairs.partners: fill`
+(`wavetracker.pairs`), they come last, as in ByteTrack's second association:
+
+1. Tracking, linking, the rise joiner and `tracking.min_identity_salience`
+   run without them, so every other detection gets exactly the identity it
+   would get from a detector without the pair head.
+2. Identities then grow into their gaps: in one sweep forward in time and
+   one backward, a second detection goes to an identity that has no
+   detection in its frame and whose latest detection (or a second detection
+   it already took) lies at most `fill_gap` (2 s) and `fill_df` (0.4 Hz)
+   away, the closest first. A fish whose own detection is missing while it
+   shares its neighbour's peak keeps its identity through those frames.
+3. With `pairs.partner_tracks` (seconds), the second detections no identity
+   took are tracked on their own; their tracks of at least that duration
+   become identities (they pass `tracking.min_identity_salience` like any
+   identity). These are fish hidden in another's peak for minutes, which
+   the confident detections alone never start.
+
+Results without flags (older runs, detectors without a pair head) are
+tracked as before. Any two detections closer than 1.2 Hz are *not* taken
+for a split: the learned detector also resolves neighbours that close, and
+holding them back cost IDF1.
+
+`pairs.resolve` (with `pairs.enabled`; off in the recommended configs) is a
+second, pattern-based tool: for every episode of two identities closer than
+`max_df` (2 Hz) in a frame, it compares their electrode patterns from
+detections clear of other lines (`clear_df`) just before and just after it,
+and if the fish fit better exchanged (by `margin`), the identities swap
+everything after the closest approach; `order` also orders the detections
+inside the episode by frequency. It helped a little when every split was
+tracked, but too few episodes have clean patterns on both sides (fish that
+weave among several neighbours have none), and on detections without a pair
+head it decided no better than the tracker and linker.
+
+## Confidence and review flags
+
+A tracked result is never all right, and checking all of it by hand is what
+the tracker should save. With `review.enabled` (off by default;
+`wavetracker.review`, format in [review flags](review-flags.md)) every join,
+every identity and every rejected candidate join gets a *confidence*: the
+probability that the result is right there. The lowest ones, with a
+suggested fix (split, delete, merge), are where a user should look first.
+
+1. **Evidence**: each stage keeps what it decided with (`review.Trace`):
+   the tracker's fragments, the learned association's link probabilities,
+   the linker's candidates with their features and probabilities, the rise
+   joiner's candidates with their pattern differences. The identities do
+   not change.
+2. **Items**: a join of the linker or the rise joiner is an edge of its
+   identity's join tree over fragments (no cycles: every join connected two
+   identities that were apart), so removing it splits the identity into
+   exactly two parts, which `review.json` names by their fragments
+   (`frag_v.npy`). Only a third of the joins on the dense benchmark could be
+   undone by a cut in time: identities interleave overlapping fragments.
+   Every identity is an item (is it a fish?), and so is the best rejected
+   candidate between two identities (are they one fish?).
+3. **Features**, per item: the stage's own score and features, both parts'
+   sizes, saliences, electrode patterns and frequencies, shared and parallel
+   frames; for identities their salience profile, harmonic relations to
+   other identities (detections at f / h or h f of another identity in the
+   same frame), crowding, pattern drift and link probabilities.
+4. **Calibration**: one model per kind and source (logistic regression or a
+   16-unit MLP, or an isotonic map of the raw score, whichever has the
+   lowest out-of-fold log loss), fitted on benchmark truth for one pipeline
+   and stored as a small `.npz` (`review.model`). Without a model the raw
+   scores are written, uncalibrated.
+
+On the 51 dev mixtures of the dense benchmark, ordering the items by this
+confidence finds half of what review can fix after a median of 4 items per
+10-minute mixture and 90 % after 9-10; in time order it takes 58-73 and
+76-99 (see
+[benchmarks](benchmarks.md#review-confidence-step-e)).
 
 ## Recordings without fish
 

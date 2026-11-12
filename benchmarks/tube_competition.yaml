@@ -1,3 +1,5 @@
 harmonic_groups:
   min_freq: 400.0
   max_freq: 1200.0
+detector:
+  method: classic

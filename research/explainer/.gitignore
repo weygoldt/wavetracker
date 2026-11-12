@@ -1,0 +1,5 @@
+# regenerable from the benchmark data (crop.py, elec.py, build.py)
+*.npy
+*.png
+cropA.*
+learned-detector.html

@@ -61,7 +61,7 @@ def test_hum_removed_resting_fish_on_single_electrode_kept(tmp_path):
     path = tmp_path / "hum.wav"
     save_recording(rec, path)
 
-    cfg = Config()
+    cfg = Config.classic()
     # species range: lets the filter remove combs up to 300 Hz spacing
     cfg.harmonic_groups.min_freq, cfg.harmonic_groups.max_freq = 400.0, 1200.0
     results = {}
@@ -146,7 +146,7 @@ def test_resting_low_frequency_fish_is_not_a_comb_by_default(tmp_path):
     save_recording(rec, path)
     recall = {}
     for max_spacing in (None, 300.0):
-        cfg = Config()
+        cfg = Config.classic()
         cfg.interference.max_spacing = max_spacing
         r = detect(path, tmp_path / str(max_spacing), cfg).results
         recall[max_spacing] = (

@@ -36,7 +36,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .config import LinkingConfig
+from .config import LinkingConfig, model_file
 
 EPS = 1e-30
 DEFAULT_MODEL = Path(__file__).with_name("models") / "linker.npz"
@@ -493,7 +493,7 @@ class LinkModel:
     @classmethod
     def load(cls, path: str | Path | None = None) -> LinkModel:
         """Load weights; the model shipped with wavetracker if path is None."""
-        path = Path(path) if path is not None else DEFAULT_MODEL
+        path = model_file(path, DEFAULT_MODEL.name)
         with np.load(path) as z:
             n = sum(1 for k in z.files if k.startswith("w"))
             return cls(
@@ -590,11 +590,27 @@ def link(
     times: np.ndarray,
     cfg: LinkingConfig | None = None,
     model: LinkModel | None = None,
+    trace: dict | None = None,
 ) -> np.ndarray:
-    """Identities with the tracker's fragments joined (see module doc)."""
+    """Identities with the tracker's fragments joined (see module doc).
+
+    `trace` (optional, for `wavetracker.review`): filled with the candidate
+    pairs as tracker identities (``a``, ``b``), their features (``X``),
+    probabilities (``prob``) and whether they were joined (``accepted``);
+    the result does not depend on it."""
     from .stitching import resolve_duplicates
 
     cfg = cfg or LinkingConfig()
+    if trace is not None:
+        trace.update(
+            a=np.zeros(0),
+            b=np.zeros(0),
+            X=np.zeros((0, len(FEATURES))),
+            prob=np.zeros(0),
+            accepted=np.zeros(0, bool),
+            features=list(FEATURES),
+            threshold=cfg.threshold,
+        )
     if np.all(np.isnan(ident_v)):
         return ident_v.copy()
     model = model or LinkModel.load(cfg.model)
@@ -612,7 +628,25 @@ def link(
         prob = model.prob(X, pairs)
     else:
         prob = model.prob(X)
-    roots = associate(fr, pairs, prob, lambda i: np.unique(idx_v[fr.members[i]]), cfg)
+    accepted = [] if trace is not None else None
+    roots = associate(
+        fr,
+        pairs,
+        prob,
+        lambda i: np.unique(idx_v[fr.members[i]]),
+        cfg,
+        accepted=accepted,
+    )
+    if trace is not None:
+        acc = np.zeros(len(pairs), bool)
+        acc[np.asarray(accepted, dtype=np.int64)] = True
+        trace.update(
+            a=fr.ident[pairs[:, 0]],
+            b=fr.ident[pairs[:, 1]],
+            X=X,
+            prob=np.asarray(prob, dtype=float),
+            accepted=acc,
+        )
     out = ident_v.copy()
     for i, r in enumerate(roots):
         if r != i:
