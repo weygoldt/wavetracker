@@ -21,6 +21,7 @@ from .io import FrameLayout, iter_blocks, open_recording, resolve_input
 from .linking import link
 from .pairs import fill_partners, resolve_pairs
 from .results import Results
+from .review import Trace, review
 from .rises import join_rises
 from .salience import StreamingSalience
 from .spectrogram import (
@@ -575,10 +576,13 @@ def _subset(results: Results, keep: np.ndarray) -> Results:
 
 
 def track_results(results: Results, cfg: Config) -> float:
-    """Assign identities in place; returns the time it took."""
+    """Assign identities in place; returns the time it took. With
+    ``review.enabled`` also the confidences and review flags
+    (`results.review`, written to ``review.json`` by `Results.save`)."""
     t0 = time.perf_counter()
     if cfg.tracking.min_identity_salience is not None and results.sal_v is None:
         raise ValueError(_no_salience("min_identity_salience"))
+    trace = Trace() if cfg.review.enabled else None
     if cfg.pairs.enabled and cfg.pairs.partners == "fill":
         # the pair head's second detections last: the others are tracked
         # without them (none without a pair head)
@@ -588,7 +592,9 @@ def track_results(results: Results, cfg: Config) -> float:
             else np.asarray(results.split_v, bool)
         )
         sub = _subset(results, ~partner)
-        _identities(sub, cfg)
+        _identities(sub, cfg, trace)
+        if trace is not None:
+            trace = trace.expand(~partner)
         ident = np.full(len(results.fund_v), np.nan)
         ident[~partner] = sub.ident_v
         ident = fill_partners(
@@ -598,9 +604,14 @@ def track_results(results: Results, cfg: Config) -> float:
             ident = _partner_tracks(results, ident, partner, cfg)
         results.ident_v = ident
     else:
-        _identities(results, cfg)
+        _identities(results, cfg, trace)
     dt = time.perf_counter() - t0
     results.meta.setdefault("timings", {})["tracking"] = dt
+    if trace is not None:
+        t1 = time.perf_counter()
+        results.review = review(results, trace, cfg)[0]
+        results.meta["timings"]["review"] = time.perf_counter() - t1
+        results.meta["review_config"] = vars(cfg.review)
     results.meta["tracking_config"] = vars(cfg.tracking)
     results.meta["stitching_config"] = vars(cfg.stitching)
     results.meta["linking_config"] = vars(cfg.linking)
@@ -648,9 +659,10 @@ def _partner_tracks(results: Results, ident, partner, cfg: Config):
     return out
 
 
-def _identities(results: Results, cfg: Config) -> None:
+def _identities(results: Results, cfg: Config, trace: Trace | None = None) -> None:
     """Tracking, linking (or stitching), the rise joiner, the pair resolver
-    and the identity salience filter, in place."""
+    and the identity salience filter, in place. `trace` (optional) collects
+    the evidence of each stage for `wavetracker.review`."""
     results.ident_v = track(
         results.fund_v,
         results.idx_v,
@@ -661,7 +673,10 @@ def _identities(results: Results, cfg: Config) -> None:
         max_freq=cfg.harmonic_groups.max_freq,
         sal_v=results.sal_v,
         cplx_v=results.cplx_v,
+        trace=None if trace is None else trace.track,
     )
+    if trace is not None:
+        trace.frag_v = results.ident_v.copy()
 
     def pairs(stage):
         if cfg.pairs.enabled and cfg.pairs.resolve and cfg.pairs.stage == stage:
@@ -684,6 +699,7 @@ def _identities(results: Results, cfg: Config) -> None:
             results.ident_v,
             results.times,
             cfg.linking,
+            trace=None if trace is None else trace.link,
         )
     else:
         results.ident_v = stitch(
@@ -694,6 +710,8 @@ def _identities(results: Results, cfg: Config) -> None:
             results.times,
             cfg.stitching,
         )
+    if trace is not None:
+        trace.linked_v = results.ident_v.copy()
     if cfg.rises.enabled:
         results.ident_v = join_rises(
             results.fund_v,
@@ -703,7 +721,10 @@ def _identities(results: Results, cfg: Config) -> None:
             results.times,
             cfg.rises,
             sal_v=results.sal_v,
+            trace=None if trace is None else trace.rises,
         )
+    if trace is not None:
+        trace.joined_v = results.ident_v.copy()
     pairs("linking")
     if cfg.tracking.min_identity_salience is not None:
         results.ident_v = drop_weak_identities(

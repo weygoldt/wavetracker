@@ -19,6 +19,7 @@ post-processing tools and audian's wavetracker plugin):
 ``sparse_*.npy``    downsampled overview spectrogram (freq x time, power)
 ``fine_*.npy``      optional full-resolution spectrogram (time x freq, power)
 ``wavetracker.json`` metadata: input, config, thresholds, timings, version
+``review.json``     optional: confidences and review flags (wavetracker.review)
 =================== ==========================================================
 """
 
@@ -32,6 +33,7 @@ from typing import Any
 import numpy as np
 
 META_FILE = "wavetracker.json"
+REVIEW_FILE = "review.json"
 
 
 @dataclass
@@ -50,6 +52,9 @@ class Results:
     split_v: np.ndarray | None = None
     """Per detection: the second fish of a peak the learned detector's pair
     head split in two (optional; only from models with a pair head)."""
+    review: dict | None = None
+    """Confidences and review flags (`wavetracker.review`), written to
+    ``review.json`` (optional; only with ``review.enabled``)."""
 
     @property
     def n_ids(self) -> int:
@@ -70,6 +75,8 @@ class Results:
         if self.split_v is not None:
             np.save(folder / "split_v.npy", self.split_v)
         (folder / META_FILE).write_text(json.dumps(self.meta, indent=2, default=str))
+        if self.review is not None:
+            (folder / REVIEW_FILE).write_text(json.dumps(self.review, indent=1))
 
     @classmethod
     def load(cls, folder: str | Path) -> Results:

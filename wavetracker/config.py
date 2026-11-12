@@ -571,6 +571,32 @@ class PairsConfig:
 
 
 @dataclass
+class ReviewConfig:
+    """Confidence of the tracked result and review flags (see
+    wavetracker.review): after tracking, every identity, every join (of the
+    fragment linker and the rise joiner) and every rejected candidate join
+    gets the probability that the result is right there, and the places
+    most likely wrong are written to ``review.json`` in the results
+    directory, with a suggested fix. Off by default; the identities do not
+    depend on it."""
+
+    enabled: bool = False
+    model: str | None = None
+    """Calibrated confidence models (.npz, fitted on benchmark truth by
+    ``benchmarks/dense/review.py fit``; fitted for one pipeline). None: the
+    stages' own scores (linker probability, mean salience, ...), not
+    calibrated (``review.json`` then says ``"calibration": null``)."""
+    missed_joins: bool = True
+    """Also flag pairs of identities that were candidates for a join but
+    were not joined (action: merge)."""
+    min_missed_prob: float = 0.05
+    """... if the linker gave them at least this probability (rejected rise
+    candidates are always flagged)."""
+    max_confidence: float | None = None
+    """Write only items with a confidence below this (None: all)."""
+
+
+@dataclass
 class OutputConfig:
     save_fine_spec: bool = False
     """Store the full-resolution summed spectrogram (large!)."""
@@ -720,6 +746,7 @@ class Config:
     linking: LinkingConfig = field(default_factory=LinkingConfig)
     rises: RisesConfig = field(default_factory=RisesConfig)
     pairs: PairsConfig = field(default_factory=PairsConfig)
+    review: ReviewConfig = field(default_factory=ReviewConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     position_merging: PositionMergingConfig = field(
         default_factory=PositionMergingConfig
