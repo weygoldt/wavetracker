@@ -164,11 +164,13 @@ traces and `wavetracker.evaluation.evaluate` scores results against them
 
 ## Correcting tracks interactively
 
-No tracker is right everywhere: rises split a fish into fragments, crossing
-fish swap identities, harmonics get tracked as fish. The fix is to look and
-correct, in [audian](https://github.com/weygoldt/audian), a recording viewer
-whose wavetracker plugin runs the pipeline and edits its output on the
-spectrogram.
+No tracker is right everywhere: a fish that leaves and comes back can end up
+in two tracks, crossing fish swap identities, harmonics get tracked as fish.
+The fix is to look and correct, in [audian](https://github.com/weygoldt/audian),
+a recording viewer whose wavetracker plugin runs the pipeline and edits its
+output on the spectrogram. Its <kbd>G</kbd> key visits the places
+`review.json` is least sure of first, and <kbd>Enter</kbd> applies the
+suggested fix.
 
 ![audian with the wavetracker plugin](docs/images/audian-wavetracker.png)
 
